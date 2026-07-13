@@ -83,6 +83,38 @@ const PRESETS = {
     Vdc: 270, Imax: 8, freq: 200, J: 6, seq: "ABC", endMode: "auto",
     statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
   },
+  'NEMA 23 · 28 V · trapezoidal 6-step': {
+    slots: 12, poles: 4, statorOD: 57, statorID: 30, rotorOD: 29, yoke: 7.6, toothW: 5.0,
+    slotOpen: 2.0, tipH: 1.0, stackL: 45, liner: 0.25, slotR: 0.5, shaftD: 8,
+    pattern: "lap", layers: 2, span: 0, turns: 8, awg: 22, strands: 1, paths: 1, conn: "wye",
+    motorType: "pm", ctrl: "six", sense: "hall", mag: "N45SH", magT: 2, poleArc: 95, Top: 60,
+    Vdc: 28, Imax: 6, freq: 200, J: 6, seq: "ABC", endMode: "auto",
+    statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)", loadMode: "J",
+  },
+  'NEMA 34 · 28 V · sinusoidal FOC': {
+    slots: 12, poles: 10, statorOD: 86, statorID: 52, rotorOD: 51, yoke: 5.6, toothW: 9.2,
+    slotOpen: 2.2, tipH: 1.0, stackL: 60, liner: 0.25, slotR: 0.5, shaftD: 12,
+    pattern: "concentrated", layers: 2, span: 0, turns: 4, awg: 13, strands: 1, paths: 1, conn: "wye",
+    motorType: "pm", ctrl: "foc", sense: "hall", mag: "N45SH", magT: 3, poleArc: 85, Top: 60,
+    Vdc: 28, Imax: 25, freq: 250, J: 6, seq: "ABC", endMode: "auto",
+    statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)", loadMode: "J",
+  },
+  'ACIM 115 V · 400 Hz · 4-pole aero': {
+    slots: 24, poles: 4, statorOD: 86, statorID: 54, rotorOD: 53.4, yoke: 10.4, toothW: 3.5,
+    slotOpen: 1.8, tipH: 1.0, stackL: 50, liner: 0.2, slotR: 0.3, shaftD: 10,
+    pattern: "lap", layers: 2, span: 0, turns: 5, awg: 21, strands: 1, paths: 1, conn: "wye",
+    motorType: "induction", Vll: 115, freq: 400, Bg: 0.7, J: 6, seq: "ABC", endMode: "auto",
+    rotorBars: 19, barA: 25, ringA: 50, barMat: "Cast aluminum", loadMode: "J",
+    statorMat: "M19 (29 ga)", rotorMat: "M19 (29 ga)", Rext: 0,
+  },
+  'ACIM 460 V · 60 Hz · 6-pole industrial': {
+    slots: 36, poles: 6, statorOD: 150, statorID: 95, rotorOD: 94.4, yoke: 13.9, toothW: 4.65,
+    slotOpen: 2.5, tipH: 1.5, stackL: 90, liner: 0.25, slotR: 0.5, shaftD: 24,
+    pattern: "lap", layers: 2, span: 0, turns: 37, awg: 24, strands: 1, paths: 1, conn: "wye",
+    motorType: "induction", Vll: 460, freq: 60, Bg: 0.8, J: 5, seq: "ABC", endMode: "auto",
+    rotorBars: 29, barA: 40, ringA: 80, barMat: "Cast aluminum", loadMode: "J",
+    statorMat: "M19 (29 ga)", rotorMat: "M19 (29 ga)", Rext: 0,
+  },
   '4" high-temp · 270 V · Hiperco/SmCo': {
     slots: 36, poles: 12, statorOD: 102, statorID: 64, rotorOD: 63, yoke: 4.5, toothW: 3.0,
     slotOpen: 2.2, tipH: 1.2, stackL: 50, liner: 0.3, shaftD: 12,
@@ -323,10 +355,13 @@ function computeDesign(p) {
 
   if (p.motorType === "pm") {
     // inverter fundamental phase voltage (rms), from DC bus
-    VphAvail = p.ctrl === "foc"
-      ? p.Vdc / (Math.sqrt(3) * Math.SQRT2)          // SVM linear limit
-      : (Math.SQRT2 / Math.PI) * p.Vdc;              // six-step fundamental
-    Kt = (p.ctrl === "foc" ? 1.0 : 0.955) * 3 * Ke;  // N·m per A_rms
+    const tapDrive = p.conn === "wye" && p.vref === "ln"; // line-to-neutral (center-tap) excitation
+    VphAvail = tapDrive
+      ? (p.ctrl === "foc" ? p.Vdc / (2 * Math.SQRT2)              // phase swings ±Vdc/2 about the tap
+        : (Math.SQRT2 / Math.PI) * (p.Vdc / 2))
+      : (p.ctrl === "foc" ? p.Vdc / (Math.sqrt(3) * Math.SQRT2)   // SVM linear limit, L-L bridge
+        : (Math.SQRT2 / Math.PI) * p.Vdc);                        // six-step fundamental
+    Kt = (p.ctrl === "foc" ? 1.0 : 0.955) * 3 * Ke * (tapDrive ? 0.5 : 1); // half-winding drive halves torque/amp
     if (Ke > 0 && Rhot > 0) {
       const wNL = VphAvail / Ke;
       noLoad = (wNL * 60) / (2 * Math.PI);
@@ -698,9 +733,9 @@ function analyzeLam(parsed) {
 }
 
 
-function CrossSection({ p, r, anim }) {
+function CrossSection({ p, r, anim, phaseSel }) {
   const S = 380, cx = S / 2, cy = S / 2;
-  const k = (S * 0.43) / (p.statorOD / 2);
+  const k = (S * 0.355) / (p.statorOD / 2);
   const rOD = (p.statorOD / 2) * k, rID = (p.statorID / 2) * k;
   const rRot = (p.rotorOD / 2) * k, rTip = rID + p.tipH * k, rSlotTop = rTip + Math.max(r.hs, 0) * k;
 
@@ -722,13 +757,34 @@ function CrossSection({ p, r, anim }) {
         <line x1={cx + rID * Math.cos(a0)} y1={cy + rID * Math.sin(a0)}
           x2={cx + rTip * Math.cos(a0)} y2={cy + rTip * Math.sin(a0)}
           stroke={INK} strokeWidth={Math.max((p.slotOpen * k) / 1.4, 1)} opacity="0.85" />
-        <text x={cx + (rOD + 9) * Math.cos(a0)} y={cy + (rOD + 9) * Math.sin(a0) + 2.5}
-          textAnchor="middle" className="wnum">{i + 1}</text>
+        <text x={cx + ((rSlotTop + rOD) / 2) * Math.cos(a0)} y={cy + ((rSlotTop + rOD) / 2) * Math.sin(a0) + 2.5}
+          textAnchor="middle" className="wnum" style={{ fill: "#1E293B" }}>{i + 1}</text>
       </g>
     );
   }
 
-  const arrow = r.rotation === "CCW" ? "M 60 190 A 130 130 0 0 1 190 60" : "M 190 60 A 130 130 0 0 1 320 190";
+  // coil end-turns viewed axially: arcs from in-slot to out-slot, bulging past the OD
+  const coilArcs = [];
+  const Pp = (rad, a) => `${(cx + rad * Math.cos(a)).toFixed(1)} ${(cy + rad * Math.sin(a)).toFixed(1)}`;
+  for (let i = 0; i < r.Ns; i++) {
+    if (r.layers === 1 && i % 2 === 1) continue;
+    const t = r.topLayer[i];
+    if (phaseSel !== undefined && phaseSel !== "all" && phaseSel !== t.phase) continue;
+    const aIn = (i / r.Ns) * 2 * Math.PI - Math.PI / 2;
+    const aOut = ((i + r.span) / r.Ns) * 2 * Math.PI - Math.PI / 2;
+    const aMid = (aIn + aOut) / 2;
+    const spanAng = (r.span / r.Ns) * 2 * Math.PI;
+    const rB = rOD + 3, rCtl = rOD + 12 + Math.min(spanAng, Math.PI) * (S * 0.115);
+    const op = anim && anim.on ? 0.15 + 0.85 * Math.abs(phCur(anim.th, t.phase)) : (t.sign > 0 ? 0.95 : 0.45);
+    coilArcs.push(
+      <g key={"ca" + i} opacity={op}>
+        <path d={`M ${Pp(rB, aIn)} Q ${Pp(rCtl, aMid)} ${Pp(rB, aOut)}`}
+          fill="none" stroke={PHASE[t.phase].c} strokeWidth="2.2" strokeLinecap="round" />
+        <circle cx={cx + rB * Math.cos(aIn)} cy={cy + rB * Math.sin(aIn)} r="2" fill={PHASE[t.phase].c} />
+      </g>
+    );
+  }
+
   const dir = r.rotation === "CCW" ? -1 : 1;
   const mechA = anim && anim.on ? dir * anim.th * (2 / r.poles) : 0;
   const rotDeg = (mechA * 180) / Math.PI;
@@ -755,6 +811,7 @@ function CrossSection({ p, r, anim }) {
   return (
     <svg id="svg-xsec" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${S} ${S}`} className="xsec">
       <style>{SVGCSS}</style>
+      {coilArcs}
       <circle cx={cx} cy={cy} r={rOD} fill={STEEL} stroke={INK} strokeWidth="1.5" />
       <circle cx={cx} cy={cy} r={rSlotTop} fill="#C7CFD8" />
       {slots}
@@ -769,7 +826,6 @@ function CrossSection({ p, r, anim }) {
         <line x1={cx} y1={cy} x2={cx + rID * 0.82 * Math.cos(fA)} y2={cy + rID * 0.82 * Math.sin(fA)}
           stroke={COPPER} strokeWidth="4" markerEnd="url(#ah)" opacity="0.9" />
       )}
-      <path d={arrow} fill="none" stroke={COPPER} strokeWidth="3" strokeDasharray="6 5" markerEnd="url(#ah)" className="spin" />
       <defs>
         <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
           <path d="M0,0 L7,3 L0,6 Z" fill={COPPER} />
@@ -979,31 +1035,103 @@ function CogScope({ r, us }) {
 
 function SlotDetail({ p, r, us }) {
   const L = (mm, d = 3) => (us === "in" ? (mm / INCH).toFixed(d) : mm.toFixed(2));
-  const A = (mm2) => (us === "in" ? (mm2 / 645.16).toFixed(3) + " in²" : mm2.toFixed(1) + " mm²");
-  const W = 260, H = 220, pad = 46;
-  const maxW = Math.max(r.w2, r.w1, 1), sc = Math.min((W - 2 * pad) / maxW, (H - 70) / Math.max(r.hs, 1));
-  const cxm = W / 2, yBot = H - 34, yTop = yBot - r.hs * sc;
-  const x1a = cxm - (r.w1 * sc) / 2, x1b = cxm + (r.w1 * sc) / 2;
-  const x2a = cxm - (r.w2 * sc) / 2, x2b = cxm + (r.w2 * sc) / 2;
-  const op = Math.max(p.slotOpen * sc, 2), tip = Math.max(p.tipH * sc, 3);
+  if (!(r.hs > 0) || !(r.w1 > 0.2))
+    return <div className="warn errb">Slot geometry invalid — no room between bore, yoke and tooth tips. Reduce yoke/tooth or grow the OD.</div>;
+  const W = 360, H = 290, Ns = r.Ns;
+  const r0 = p.statorID / 2, r1 = r0 + p.tipH, r2 = r1 + r.hs, r3 = r2 + p.yoke, rRt = p.rotorOD / 2;
+  const rc = r.rcFil || 0, pitch = (2 * Math.PI) / Ns;
+  const dAng = 1.5 * pitch;                                   // ±1.5 slot pitches: center slot + neighbors
+  const rIn = Math.max(rRt - Math.max(p.magT, 0) - Math.min(5, rRt * 0.3), 1);
+  const k = Math.min((W - 84) / (2 * r3 * Math.sin(dAng)), (H - 66) / (r3 - rIn * Math.cos(dAng)));
+  const Cx = W / 2, Cy = 26 + r3 * k;                          // motor center below the canvas
+  const P = (rad, a) => `${(Cx + rad * k * Math.sin(a)).toFixed(2)} ${(Cy - rad * k * Math.cos(a)).toFixed(2)}`;
+  const arc = (rad, a0, a1) => `A ${(rad * k).toFixed(2)} ${(rad * k).toFixed(2)} 0 0 ${a1 > a0 ? 1 : 0} ${P(rad, a1)}`;
+  const hwA = (y) => (Math.PI / Ns) - p.toothW / 2 / y;        // slot angular half-width at radius y
+  const soA = (y) => p.slotOpen / 2 / y;                       // opening angular half-width
+
+  // one slot's copper region (tip shelf → walls → filleted yoke-side corners)
+  const slotPath = (sA) => {
+    const h1 = hwA(r1), h2 = hwA(r2);
+    if (rc * k < 1.5)
+      return `M ${P(r1, sA - h1)} ${arc(r1, sA - h1, sA + h1)} L ${P(r2, sA + h2)} ${arc(r2, sA + h2, sA - h2)} Z`;
+    const rcA2 = rc / r2, hMid = hwA(r2 - rc);
+    return `M ${P(r1, sA - h1)} ${arc(r1, sA - h1, sA + h1)} L ${P(r2 - rc, sA + hMid)} ` +
+      `Q ${P(r2, sA + h2)} ${P(r2, sA + h2 - rcA2)} ${arc(r2, sA + h2 - rcA2, sA - h2 + rcA2)} ` +
+      `Q ${P(r2, sA - h2)} ${P(r2 - rc, sA - hMid)} Z`;
+  };
+  const notchPath = (sA) => {
+    const a0 = soA(r0), a1 = soA(r1);
+    return `M ${P(r0, sA - a0)} ${arc(r0, sA - a0, sA + a0)} L ${P(r1, sA + a1)} ${arc(r1, sA + a1, sA - a1)} Z`;
+  };
+  // wire strands packed in the slot (hex lay), mapped through polar per slot
+  const strands = [];
+  if (r.condPerSlot > 0 && r.condPerSlot <= 160 && r.dIns * k > 2.2) {
+    const rw = r.dIns, pos = [];
+    let y = r1 + p.liner + rw / 2, row = 0;
+    while (y < r2 - p.liner - rw / 2 - (rc > 0 ? rc * 0.3 : 0) && pos.length < r.condPerSlot) {
+      const half = (hwA(y) * y) - p.liner - rw / 2;
+      const nfit = Math.max(0, Math.floor((2 * half) / rw));
+      const off = row % 2 ? rw / 2 : 0;
+      for (let c = 0; c < nfit && pos.length < r.condPerSlot; c++) {
+        const x = -half + rw / 2 + c * rw + off;
+        if (x <= half) pos.push([x, y]);
+      }
+      y += rw * 0.87; row++;
+    }
+    [-pitch, 0, pitch].forEach((sA, si) => {
+      pos.forEach(([x, yy], i2) => {
+        const a = sA + x / yy;
+        strands.push(<circle key={si + "-" + i2} cx={Cx + yy * k * Math.sin(a)} cy={Cy - yy * k * Math.cos(a)}
+          r={(r.dIns * k) / 2 - 0.3} fill="#E3B341" stroke="#94701C" strokeWidth="0.7" />);
+      });
+    });
+  }
+  // rotor magnets intersecting the window
+  const mags = [];
+  if (p.motorType === "pm") {
+    const arcHalf = ((p.poleArc / 100) * Math.PI) / r.poles;
+    for (let m = -r.poles; m <= r.poles; m++) {
+      const c = (2 * Math.PI * m) / r.poles;
+      const a0 = Math.max(c - arcHalf, -dAng), a1 = Math.min(c + arcHalf, dAng);
+      if (a1 <= a0) continue;
+      mags.push(<path key={"m" + m}
+        d={`M ${P(rRt, a0)} ${arc(rRt, a0, a1)} L ${P(rRt - p.magT, a1)} ${arc(rRt - p.magT, a1, a0)} Z`}
+        fill={((m % 2) + 2) % 2 ? "#4A76B8" : "#C14B3E"} stroke={INK} strokeWidth="0.8" />);
+    }
+  }
+  const dimA = dAng * 0.88;
   return (
     <svg id="svg-slot" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="slotSvg">
       <style>{SVGCSS}</style>
-      <polygon points={`${x1a},${yBot} ${x1b},${yBot} ${x2b},${yTop} ${x2a},${yTop}`} fill="#E4C089" stroke={INK} strokeWidth="1.2" />
-      <rect x={cxm - op / 2} y={yBot} width={op} height={tip} fill={BG} stroke={AXIS} strokeWidth="1" />
-      <line x1={x2a - 16} y1={yTop} x2={x2a - 16} y2={yBot} stroke={AXIS} strokeWidth="1" />
-      <text x={x2a - 20} y={(yTop + yBot) / 2} textAnchor="end" className="dim">{L(r.hs)}</text>
-      <line x1={x2a} y1={yTop - 12} x2={x2b} y2={yTop - 12} stroke={AXIS} strokeWidth="1" />
-      <text x={cxm} y={yTop - 17} textAnchor="middle" className="dim">{L(r.w2)}</text>
-      <line x1={x1a} y1={yBot + tip + 14} x2={x1b} y2={yBot + tip + 14} stroke={AXIS} strokeWidth="1" />
-      <text x={cxm} y={yBot + tip + 27} textAnchor="middle" className="dim">{L(r.w1)} · open {L(p.slotOpen)}</text>
-      <text x={cxm} y={(yTop + yBot) / 2 + 4} textAnchor="middle" className="dimBig">{A(r.slotArea)}</text>
+      {/* rotor core + magnets + airgap */}
+      <path d={`M ${P(rRt, -dAng)} ${arc(rRt, -dAng, dAng)} L ${P(rIn, dAng)} ${arc(rIn, dAng, -dAng)} Z`}
+        fill={STEEL_DK} stroke={INK} strokeWidth="0.8" />
+      {mags}
+      {/* stator sector */}
+      <path d={`M ${P(r3, -dAng)} ${arc(r3, -dAng, dAng)} L ${P(r0, dAng)} ${arc(r0, dAng, -dAng)} Z`}
+        fill={STEEL} stroke={INK} strokeWidth="1" />
+      <path d={`M ${P(r2, -dAng)} ${arc(r2, -dAng, dAng)}`} fill="none" stroke={INK} strokeWidth="0.6" opacity="0.35" />
+      {[-pitch, 0, pitch].map((sA) => <path key={"s" + sA} d={slotPath(sA)} fill="#F1E8D8" stroke={INK} strokeWidth="1" />)}
+      {[-pitch, 0, pitch].map((sA) => <path key={"o" + sA} d={notchPath(sA)} fill={BG} stroke={INK} strokeWidth="0.8" />)}
+      {strands}
+      {/* dimensions */}
+      <line x1={Cx + r2 * k * Math.sin(dimA)} y1={Cy - r2 * k * Math.cos(dimA)}
+        x2={Cx + r3 * k * Math.sin(dimA)} y2={Cy - r3 * k * Math.cos(dimA)} stroke={AXIS} strokeWidth="1.2" />
+      <text x={Cx + (r3 + 2) * k * Math.sin(dimA) + 4} y={Cy - ((r2 + r3) / 2) * k * Math.cos(dimA)} className="dim">yoke {L(p.yoke)}</text>
+      <line x1={Cx + r1 * k * Math.sin(-dimA)} y1={Cy - r1 * k * Math.cos(-dimA)}
+        x2={Cx + r2 * k * Math.sin(-dimA)} y2={Cy - r2 * k * Math.cos(-dimA)} stroke={AXIS} strokeWidth="1.2" />
+      <text x={Cx + (r2 + 2) * k * Math.sin(-dimA) - 4} y={Cy - ((r1 + r2) / 2) * k * Math.cos(-dimA)} textAnchor="end" className="dim">{L(r.hs)}</text>
+      <text x={Cx + ((r1 + r2) / 2) * k * Math.sin(pitch / 2)} y={Cy - ((r1 + r2) / 2) * k * Math.cos(pitch / 2) + 3}
+        textAnchor="middle" className="dim" transform={`rotate(${(pitch / 2) * 57.3} ${Cx + ((r1 + r2) / 2) * k * Math.sin(pitch / 2)} ${Cy - ((r1 + r2) / 2) * k * Math.cos(pitch / 2)})`}>
+        {L(p.toothW)}</text>
+      <text x={Cx} y={Cy - r0 * k + 14} textAnchor="middle" className="dim">open {L(p.slotOpen)}</text>
+      <text x={Cx + rRt * k * Math.sin(dimA) + 6} y={Cy - ((r0 + rRt) / 2) * k * Math.cos(dimA) + 2} className="dim">gap {L(r.airgap)}</text>
+      {rc > 0.05 && <text x={Cx} y={Cy - (r2 - rc) * k + 2} textAnchor="middle" className="dim">R {L(rc)}</text>}
+      <text x={10} y={14} className="wnum">lamination sector · {r.condPerSlot} conductors/slot{r.condPerSlot > 160 || r.dIns * k <= 2.2 ? " (strands not drawn)" : ""}</text>
+      <text x={Cx} y={H - 8} textAnchor="middle" className="wnum">rotor · magnets N (red) / S (blue)</text>
     </svg>
   );
 }
-
-
-/* ---- winding development diagram: coil in/out, jumpers, energization ---- */
 function WindingDiagram({ r, phaseSel, anim }) {
   const Ns = r.Ns, W = 760, H = 258, x0 = 34, pitch = (W - 68) / Ns, yAx = 132;
   const X = (i) => x0 + (((i % Ns) + Ns) % Ns) * pitch + pitch / 2;
@@ -1092,7 +1220,8 @@ function AxialCutaway({ p, r, us }) {
   hEnd = Math.max(hEnd, 2);
   const OAL = p.stackL + 2 * hEnd;
   const rOD = p.statorOD / 2, rBore = p.statorID / 2, rRot = p.rotorOD / 2;
-  const rSlotTop = rBore + p.tipH + Math.max(r.hs, 0);
+  const rTip = rBore + p.tipH;                     // coil ID/2 = bore/2 + tooth-tip height
+  const rSlotTop = rTip + Math.max(r.hs, 0);
   const rShaft = Math.max(p.shaftD / 2, 2);
   const k = Math.min((W - 150) / OAL, (H - 120) / (2 * rOD));
   const yC = H / 2 + 4, xC = W / 2 - 8;
@@ -1107,8 +1236,8 @@ function AxialCutaway({ p, r, us }) {
   );
   const ends = (x) => (
     <g key={"e" + x}>
-      <rect x={x} y={Y(rSlotTop)} width={he} height={(rSlotTop - rBore) * k} rx={Math.min(he / 2, 7)} fill="#D9A05B" stroke="#92400E" strokeWidth="1" />
-      <rect x={x} y={yC + rBore * k} width={he} height={(rSlotTop - rBore) * k} rx={Math.min(he / 2, 7)} fill="#D9A05B" stroke="#92400E" strokeWidth="1" />
+      <rect x={x} y={Y(rSlotTop)} width={he} height={(rSlotTop - rTip) * k} rx={Math.min(he / 2, 7)} fill="#D9A05B" stroke="#92400E" strokeWidth="1" />
+      <rect x={x} y={yC + rTip * k} width={he} height={(rSlotTop - rTip) * k} rx={Math.min(he / 2, 7)} fill="#D9A05B" stroke="#92400E" strokeWidth="1" />
     </g>
   );
   const vdim = (x, r1, r2, label, anchor) => (
@@ -1134,7 +1263,8 @@ function AxialCutaway({ p, r, us }) {
         </g>
       )}
       {/* stator bands: winding region + yoke, both halves */}
-      {band(rBore, rSlotTop, "#E8C9A0", "wind")}
+      {band(rBore, rTip, "#94A3B8", "tip")}
+      {band(rTip, rSlotTop, "#E8C9A0", "wind")}
       {band(rSlotTop, rOD, "#94A3B8", "yoke")}
       {ends(xs - he)}
       {ends(xe)}
@@ -1147,8 +1277,8 @@ function AxialCutaway({ p, r, us }) {
       <text x={xC} y={yC + rOD * k + 29} textAnchor="middle" className="dim">OAL {L(OAL)} {un}</text>
       {vdim(xe + he + 16, 0, rOD, "Ø " + L(p.statorOD), "start")}
       {vdim(xs - he - 16, 0, rRot, "Ø " + L(p.rotorOD), "end")}
-      <line x1={xe} y1={Y(rBore) - 7} x2={xe + he} y2={Y(rBore) - 7} stroke="#92400E" strokeWidth="1" />
-      <text x={xe + he / 2} y={Y(rBore) - 11} textAnchor="middle" className="dim">{L(hEnd)}</text>
+      <line x1={xe} y1={Y(rTip) - 7} x2={xe + he} y2={Y(rTip) - 7} stroke="#92400E" strokeWidth="1" />
+      <text x={xe + he / 2} y={Y(rTip) - 11} textAnchor="middle" className="dim">{L(hEnd)}</text>
       <text x={14} y={16} className="wnum">full section through centerline · magnets N (red) / S (blue)</text>
     </svg>
   );
@@ -1197,7 +1327,7 @@ export default function MotorDesigner() {
     slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
     yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0,
     pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1,
-    conn: "wye", motorType: "pm", ctrl: "foc", sense: "hall",
+    conn: "wye", vref: "ll", motorType: "pm", ctrl: "foc", sense: "hall",
     mag: "N45SH", magT: 4, poleArc: 85, Top: 60,
     endMode: "auto", headH: 15, bobShape: "race", bobD: 30, bobWall: 1, bobWin: 16,
     statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)", shaftD: 15,
@@ -1295,14 +1425,24 @@ export default function MotorDesigner() {
     const kwG = wiz.shape === "trap" ? 0.98 : topo.pattern === "concentrated" ? 0.933 : 0.945;
     const KeNL = (Vdc / Math.sqrt(6)) / ((nl * 2 * Math.PI) / 60);
     const KeST = Tst / (3 * Imax);
-    const feasible = KeST <= KeNL * 1.0001;
-    const KeSel = Math.sqrt(KeNL * KeST);
+    const feasible = KeST <= KeNL * 1.001;
+    // feasible: hit the no-load target exactly (stall then comes out >= requirement).
+    // infeasible: split the difference and flag it.
+    const KeTarget = feasible ? KeNL : Math.sqrt(KeNL * KeST);
     const perTurn = 0.7066 * kwG * B1w * (rot / 1000) * (stk / 1000);
     const cpp = topo.slots / 3;
-    const turns = Math.max(1, Math.round(KeSel / (perTurn * cpp)));
+    const tIdeal = KeTarget / (perTurn * cpp);
+    let turns = Math.max(1, Math.round(tIdeal)), bestE = 1e9;
+    [Math.max(1, Math.floor(tIdeal)), Math.max(1, Math.ceil(tIdeal))].forEach((t2) => {
+      const KeC = perTurn * cpp * t2;
+      const nlC = ((Vdc / Math.sqrt(6)) / KeC) * (60 / (2 * Math.PI));
+      let e2 = Math.abs(Math.log(nlC / nl));
+      if (feasible && 3 * KeC * Imax < Tst * 0.98) e2 += 1; // don't sacrifice a feasible stall target
+      if (e2 < bestE) { bestE = e2; turns = t2; }
+    });
     const KeAch = perTurn * cpp * turns;
     const Irate = Math.max(Trt / (3 * KeAch), 0.3);
-    const AcuNeed = Irate / 6; // mm² of copper at J = 6
+    const AcuNeed = Irate / 6;
     const hs2 = (od - ID) / 2 - yoke - tipH;
     const d1w = ID + 2 * tipH, d2w = ID + 2 * (tipH + Math.max(hs2, 0));
     const w1w = (Math.PI * d1w) / topo.slots - toothW, w2w = (Math.PI * d2w) / topo.slots - toothW;
@@ -1320,22 +1460,37 @@ export default function MotorDesigner() {
       if (!best || score < best.score) best = { st, awg, fill, score };
     }
     const ctrlMap = wiz.ctrl === "foc" ? { ctrl: "foc", sense: "hall" } : { ctrl: "six", sense: wiz.ctrl === "hall" ? "hall" : "sless" };
-    setP((o) => ({ ...o, motorType: "pm", ...ctrlMap, conn: "wye", pattern: topo.pattern, layers: 2, span: 0, paths: 1,
+    const newP = { motorType: "pm", ...ctrlMap, conn: "wye", pattern: topo.pattern, layers: 2, span: 0, paths: 1,
       slots: topo.slots, poles: topo.poles, statorOD: od, statorID: ID, rotorOD: rot, yoke, toothW, slotOpen, tipH,
       stackL: stk, liner: 0.2, slotR: 0, shaftD: +Math.max(od / 8, 3).toFixed(1),
       mag: "N45SH", magT, poleArc: arcW, Top: 60, Vdc, Imax, loadMode: "I", Irate: +Irate.toFixed(2),
       turns, awg: best.awg, strands: best.st, endMode: "auto", seq: "ABC",
       freq: Math.max(50, Math.round((nl * topo.poles) / 120 / 50) * 50),
-      statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)", Tcu: 100, Rext: 20 }));
+      statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)", Tcu: 100, Rext: 20 };
+    const merged = { ...p, ...newP };
+    setP(merged);
+    // ---- validate the generated design and suggest envelope changes ----
+    const chk = computeDesign(merged);
+    const dL = (mm) => (us === "in" ? (mm / INCH).toFixed(2) + " in" : Math.round(mm) + " mm");
+    const sugg = [];
+    if (chk.err.length) sugg.push(chk.err[0]);
+    if (!Number.isFinite(chk.fillGross) || chk.fillGross > 0.45) {
+      const sc2 = Math.sqrt(Math.min(chk.fillGross, 3) / 0.35);
+      sugg.push(`Copper doesn't fit (fill ${Number.isFinite(chk.fillGross) ? (chk.fillGross * 100).toFixed(0) + "%" : "∞"}): increase stator OD to ~${dL(od * sc2)} or stack to ~${dL(stk * (chk.fillGross / 0.35))}, or reduce rated torque ~${((1 - 0.35 / Math.min(chk.fillGross, 3)) * 100).toFixed(0)}%.`);
+    }
+    if (chk.Bt > chk.stM.Bmax) sugg.push(`Teeth saturate (${chk.Bt.toFixed(2)} T): larger OD, more slots, or Hiperco 50 laminations.`);
+    if (chk.By > chk.stM.Bmax) sugg.push(`Yoke saturates (${chk.By.toFixed(2)} T): larger OD or Hiperco 50.`);
+    if (!feasible) sugg.push(`Stall + no-load conflict: needs ~${Math.ceil(KeST * ((nl * 2 * Math.PI) / 60) * Math.sqrt(6))} V bus or ~${Math.ceil(Tst / (3 * KeNL))} A budget to hit both.`);
     const nlA = ((Vdc / Math.sqrt(6)) / KeAch) * (60 / (2 * Math.PI));
+    if (feasible && Math.abs(nlA / nl - 1) > 0.12)
+      sugg.push(`Integer-turn quantization lands no-load at ${Math.round(nlA)} rpm; set bus to ~${(Vdc * (nl / nlA)).toFixed(1)} V to hit ${Math.round(nl)} exactly.`);
     const tstA = 3 * KeAch * Imax;
     const tq2 = (nm) => (us === "in" ? (nm * IN2).toFixed(1) + " oz·in" : nm.toFixed(2) + " N·m");
     setWizMsg(
       `${topo.slots}s/${topo.poles}p ${topo.pattern === "lap" ? "distributed lap" : "tooth-wound"}, ${turns}t of AWG ${best.awg} ×${best.st} (fill ~${(best.fill * 100).toFixed(0)}%). ` +
       `Predicted no-load ≈ ${Math.round(nlA)} rpm (asked ${Math.round(nl)}); stall @ ${Imax} A ≈ ${tq2(tstA)} (asked ${tq2(Tst)}). ` +
-      `Targeting ${wiz.shape === "trap" ? "trapezoidal" : "sinusoidal"} BEMF (${wiz.shape === "trap" ? "q=1 full pitch, 95% arc" : "harmonic-cancelling winding, 85% arc"} — verify THD on the scope card). ` +
-      (feasible ? "Both targets bracketed — verify the rated point on the curves and tune." :
-        "⚠ Stall and no-load targets conflict on this bus & current budget — the design splits the difference; raise Vdc or the current budget to hit both.")
+      `Targeting ${wiz.shape === "trap" ? "trapezoidal" : "sinusoidal"} BEMF — verify THD on the scope card. ` +
+      (sugg.length ? "⚠ " + sugg.join(" ") : "✓ Passes rotation, fill, and saturation checks.")
     );
   };
   const applyPreset = (name) => {
@@ -1346,7 +1501,7 @@ export default function MotorDesigner() {
     setIoMsg("Loaded preset: " + name + ". All values are starting points — tune and verify.");
   };
   const [phaseSel, setPhaseSel] = useState("all");
-  const [bemfView, setBemfView] = useState("ll");
+  const bemfView = p.conn === "delta" ? "ll" : (p.vref === "ln" ? "ph" : "ll");
   useEffect(() => {
     if (!anim.on) return;
     const id = setInterval(() => setAnim((a) => ({ ...a, th: a.th + 0.09 })), 40);
@@ -1357,7 +1512,7 @@ export default function MotorDesigner() {
   const pm = p.motorType === "pm";
 
   const exportDesign = () => {
-    const payload = { tool: "motrsynth", version: 8, saved: new Date().toISOString(), design: p };
+    const payload = { tool: "motrsynth", version: 9, saved: new Date().toISOString(), units: us, design: p };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const el = document.createElement("a");
@@ -1374,6 +1529,7 @@ export default function MotorDesigner() {
     rd.onload = () => {
       try {
         const j = JSON.parse(rd.result);
+        if (j && (j.units === "in" || j.units === "mm")) setUs(j.units);
         const src = j && j.design ? j.design : j; // accept bare or wrapped JSON
         setP((o) => {
           const n = { ...o };
@@ -1457,7 +1613,7 @@ export default function MotorDesigner() {
         @media(prefers-reduced-motion:reduce){.spin{animation:none}}
         .svgLabel{font:600 15px 'Inter',sans-serif;fill:#fff}
         .dim{font:10px 'IBM Plex Mono';fill:${CREAM_DIM}} .dimBig{font:600 12px 'IBM Plex Mono';fill:#92400E}
-        .slotSvg{width:100%;max-width:270px;display:block;margin:0 auto}
+        .slotSvg{width:100%;max-width:420px;display:block;margin:0 auto}
         .tbl{background:${TBL};border:1px solid ${TBLLINE};border-radius:10px;padding:6px 12px;margin-top:10px}
         .kv{display:flex;justify-content:space-between;font-size:.74rem;padding:5px 0;border-bottom:1px dashed ${TBLLINE};color:${CREAM_DIM}}
         .kv:last-child{border-bottom:0}
@@ -1713,6 +1869,10 @@ export default function MotorDesigner() {
               ? <Num label="Rated phase current" unit="A" v={p.Irate} set={s("Irate")} step={0.5} min={0} />
               : <Num label="Current density J" unit="A/mm²" v={p.J} set={s("J")} step={0.5} />}
             {!pm && <Num label="Airgap flux B̂g" unit="T" v={p.Bg} set={s("Bg")} step={0.05} />}
+            {pm && p.conn === "wye" && (
+              <Pick label="Voltage reference" v={p.vref} set={s("vref")}
+                opts={[{ v: "ll", t: "Line-line" }, { v: "ln", t: "L-N (center tap)" }]} />
+            )}
             <Pick label="Phase sequence" v={p.seq} set={s("seq")} opts={[{ v: "ABC", t: "A-B-C" }, { v: "ACB", t: "A-C-B" }]} />
           </div>
           {pm && (
@@ -1744,15 +1904,23 @@ export default function MotorDesigner() {
           <div className="card paper">
             <div className="cardhead">
               <h2>Cross-section</h2>
-              <button className="btn mini ghost" onClick={() => exportPng("svg-xsec", "stator-cross-section.png")}>PNG ⤓</button>
+              <div className="iobar">
+                <button className="btn mini" onClick={() => setAnim((a) => ({ ...a, on: !a.on }))}>
+                  {anim.on ? "⏸ Pause" : "▶ Play"}
+                </button>
+                <button className="btn mini ghost" onClick={() => exportPng("svg-xsec", "stator-cross-section.png")}>PNG ⤓</button>
+              </div>
             </div>
-            {r.err.length ? r.err.map((e, i) => <div className="warn errb" key={i}>{e}</div>) : <CrossSection p={p} r={r} anim={anim} />}
+            {r.err.length ? r.err.map((e, i) => <div className="warn errb" key={i}>{e}</div>) : <CrossSection p={p} r={r} anim={anim} phaseSel={phaseSel} />}
             <div className="legend">
               {PHASE.map((ph) => (<span key={ph.name}><i className="dot" style={{ background: ph.c }} />Phase {ph.name}</span>))}
-              <span><i className="dot" style={{ background: PHASE[0].c, opacity: 0.55 }} />faded = return (−)</span>
+              <span><i className="dot" style={{ background: PHASE[0].c, opacity: 0.55 }} />faded = − side of the same phase's coil</span>
             </div>
             <div className="note">
-              Inner slot half = airgap-side layer; outer half = return layer (span {r.span} slots).
+              Outer loops = coil end-turns (throw {r.span} slots) — filter with the phase buttons below, ▶ animates
+              the rotor and energization. There are only three phases: each coil fills two slots — solid where
+              current goes in (⊗), faded where the same conductor comes back (⊙). The wye neutral is a junction
+              inside the machine, not a slot conductor. Inner slot half = airgap-side layer; outer half = return layer.
               Rotation shown for sequence {p.seq}{pm && p.ctrl === "six" ? ` · six-step, ${p.sense === "hall" ? "hall-commutated" : "sensorless (back-EMF)"}` : ""}, viewed from the drive end.
             </div>
           </div>
@@ -1786,7 +1954,9 @@ export default function MotorDesigner() {
             </div>
             <div className="note">
               {pm
-                ? "Flat region = drive current limit; droop = R-limited voltage line to no-load speed. No field weakening modeled."
+                ? (p.conn === "wye" && p.vref === "ln"
+                  ? "Center-tap (L-N) excitation: each phase limited to ±Vdc/2 about the tap and torque-per-amp halved — half the winding pair works at a time. Flat region = drive current limit."
+                  : "Flat region = drive current limit; droop = R-limited voltage line to no-load speed. No field weakening modeled.")
                 : "Single-cage equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Deep-bar effects (higher apparent R at start) not modeled."}
               {" "}Marker = thermally-rated operating point from J.
             </div>
@@ -1816,8 +1986,8 @@ export default function MotorDesigner() {
               <div className="field">
                 <span className="fl">View</span>
                 <div className="seg">
-                  <button className={bemfView === "ll" ? "on" : ""} onClick={() => setBemfView("ll")}>Line-line</button>
-                  <button className={bemfView === "ph" ? "on" : ""} onClick={() => setBemfView("ph")}>Phase (L-N)</button>
+                  <button className={bemfView === "ll" ? "on" : ""} onClick={() => s("vref")("ll")}>Line-line</button>
+                  <button className={bemfView === "ph" ? "on" : ""} onClick={() => s("vref")("ln")} disabled={p.conn === "delta"}>L-N (center tap)</button>
                 </div>
               </div>
               <BemfScope r={r} view={bemfView} />
@@ -1877,9 +2047,16 @@ export default function MotorDesigner() {
                 <button className="btn mini ghost" onClick={() => exportPng("svg-winding", "winding-diagram.png")}>Winding PNG ⤓</button>
               </div>
             </div>
-            <div className="two">
+            <div>
               <SlotDetail p={p} r={r} us={us} />
-              <div className="tbl" style={{ marginTop: 0 }}>
+              <div className="fillbar" style={{ height: 8, marginTop: 10 }}>
+                <i style={{ width: Math.min(r.fillGross * 100, 100) + "%", background: r.fillGross > 0.45 ? "#DC2626" : r.fillGross > 0.4 ? "#F59E0B" : "#10B981" }} />
+              </div>
+              <div className="tbl" style={{ marginTop: 6 }}>
+                <div className="kv"><span>Fill factor (insulated wire)</span>
+                  <b style={{ color: r.fillGross > 0.45 ? "#DC2626" : r.fillGross > 0.4 ? "#D97706" : "#059669" }}>
+                    {Number.isFinite(r.fillGross) ? (r.fillGross * 100).toFixed(1) + "%" : "—"}</b></div>
+                <div className="kv"><span>Bare-copper fill</span><b>{fmt(r.fillCu * 100, 1)}%</b></div>
                 <div className="kv"><span>Slot depth</span><b>{lenS(r.hs)} {lu}</b></div>
                 <div className="kv"><span>Width bore / yoke</span><b>{lenS(r.w1)} / {lenS(r.w2)} {lu}</b></div>
                 <div className="kv"><span>Slot area</span><b>{areaS(r.slotArea)} {au}</b></div>
@@ -1934,19 +2111,7 @@ export default function MotorDesigner() {
 
         {/* ============ results ============ */}
         <div>
-          <div className="card paper">
-            <h2>Fill factor</h2>
-            <div className="big" style={{ color: r.fillGross > 0.45 ? "#DC2626" : r.fillGross > 0.4 ? "#D97706" : "#059669" }}>
-              {Number.isFinite(r.fillGross) ? (r.fillGross * 100).toFixed(1) + "%" : "—"}
-            </div>
-            <div className="fillbar">
-              <i style={{ width: Math.min(r.fillGross * 100, 100) + "%", background: r.fillGross > 0.45 ? "#DC2626" : r.fillGross > 0.4 ? "#D97706" : "#059669" }} />
-            </div>
-            <div className="kv"><span>Bare-copper fill</span><b>{fmt(r.fillCu * 100, 1)}%</b></div>
-            <div className="note">Insulated-wire area ÷ liner-adjusted slot area. Hand-insertable ≲ 40%, machine limit ≈ 45%.</div>
-          </div>
-
-          <div className="card paper" style={{ marginTop: 14 }}>
+                    <div className="card paper" style={{ marginTop: 14 }}>
             <h2>Rated point</h2>
             <div className="tbl">
             <div className="kv"><span>Shaft speed</span><b>{fmt(r.nShaft, 0)} rpm</b></div>
