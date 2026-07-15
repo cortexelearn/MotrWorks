@@ -4038,8 +4038,8 @@ export default function MotorDesigner() {
         input[type=number]{width:86px;padding:6px 8px;border:1px solid #CBD5E1;border-radius:8px;font-family:'IBM Plex Mono',monospace;font-size:.8rem;background:${BG};color:${DKINK};text-align:right}
         select{padding:6px 8px;border:1px solid #CBD5E1;border-radius:8px;font:inherit;font-size:.76rem;background:${BG};color:${DKINK}}
         input:focus,select:focus{outline:2px solid ${COPPER};outline-offset:1px}
-        .seg{display:flex;border:1px solid #CBD5E1;border-radius:8px;overflow:hidden}
-        .seg button{font:inherit;font-size:.7rem;padding:6px 9px;border:0;background:${BG};color:${CREAM_DIM};cursor:pointer;font-weight:500}
+        .seg{display:flex;flex-wrap:wrap;border:1px solid #CBD5E1;border-radius:8px;overflow:hidden}
+        .seg button{font:inherit;font-size:.66rem;padding:6px 7px;border:0;background:${BG};color:${CREAM_DIM};cursor:pointer;font-weight:500;flex:1 1 auto;white-space:nowrap}
         .seg button.on{background:${PEACH};color:#fff;font-weight:600}
         .xsec{width:100%;max-width:440px;display:block;margin:0 auto}
         .chart{width:100%;max-width:360px;display:block;margin:0 auto}

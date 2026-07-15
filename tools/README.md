@@ -5,7 +5,7 @@ Session-portable gates and e2e tests. All run from the repo root (they read `ind
     cp tools/_base.json /tmp/_base.json     # default-parameter base; gates read it from /tmp
     cp tools/*.mjs /tmp/                    # (scripts also work run from tools/ if _base path is edited)
     node /tmp/ssr-gate.mjs                  # server-side render sanity — REQUIRED before any deploy
-                                            # healthy default render: 150,033 chars
+                                            # healthy default render: 150,082 chars
 
 Build:  export PATH=$PATH:/home/claude/.npm-global/bin && python3 build.py
         (regenerate src/motor-designer.concat.jsx from the numbered src modules first)
