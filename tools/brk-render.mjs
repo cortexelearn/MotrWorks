@@ -1,0 +1,25 @@
+import { readFileSync, writeFileSync } from 'fs';
+import { createRequire } from 'module';
+const require = createRequire('/home/claude/.npm-global/lib/node_modules/react/');
+const React = require('react');
+const { renderToStaticMarkup } = require('react-dom/server');
+globalThis.React = React;
+globalThis.document = { getElementById: () => null, createElement: () => ({ style:{}, getContext: () => null }) };
+globalThis.window = { addEventListener: () => {} };
+const html = readFileSync('index.html', 'utf8');
+const i0 = html.indexOf('<script>/*APP*/') + '<script>/*APP*/'.length;
+const i1 = html.indexOf('</script>\n<script>/*BOOT*/');
+const app = html.slice(i0, i1).replace(/<\\\/script/g, '</script');
+const M = new Function('React', app + '\nreturn { computeDesign, PRESETS, BrakeSection, AxialCutaway };')(React);
+const base = JSON.parse(readFileSync('/tmp/_base.json','utf8'));
+const p0 = { ...base, ...M.PRESETS['Brake 24 V · 60 mm · spring-applied'] };
+const r0 = M.computeDesign(p0);
+const dump = (name, el) => {
+  let s = renderToStaticMarkup(el);
+  s = s.includes('<svg style=') ? s.replace(/<svg style="([^"]*)" /, '<svg style="background:#F8FAFC;$1" ') : s.replace('<svg ', '<svg style="background:#F8FAFC" ');
+  writeFileSync('/tmp/' + name + '.svg', s);
+};
+dump('brk-face', React.createElement(M.BrakeSection, { p: p0, r: r0 }));
+dump('brk-axial-off', React.createElement(M.AxialCutaway, { p: p0, r: r0, us: 'in', anim: { on: false, th: 0 } }));
+dump('brk-axial-on', React.createElement(M.AxialCutaway, { p: p0, r: r0, us: 'in', anim: { on: true, th: 3.2 } }));
+console.log('rendered, err:', r0.err.length);

@@ -1,21 +1,36 @@
 # MotrSynth — CortexEdge Engineering Tools
 
-Interactive three-phase motor design tool (BLDC/PMSM + squirrel-cage ACIM).
-Inch (default) or metric units. Fully self-contained index.html — React and the
-app are bundled in; no CDN, no build step, works on locked-down networks.
+Motor design tool: BLDC/PMSM, brushed PM DC, limited-angle torquers, 2-phase
+hybrid steppers, power-off spring-applied brakes, and squirrel-cage ACIM with
+saturation-aware physics, reactance/field-weakening drive model, thermal and
+efficiency estimates, DXF lamination import/export, bench-calibration tracking,
+an envelope wizard for every machine type (BLDC/PMSM, brushed, LATM, stepper,
+brake, ACIM) that scores real engine builds against per-type targets, and a
+gearbox / actuator output stage. Magnet wire in half-AWG sizes throughout.
+Inch (default) or metric.
 
-- Start panel: file import/export, ten presets (28 V / 270 V aero BLDC incl.
-  trapezoidal & sinusoidal profiles, 115 V/400 Hz and 460 V/60 Hz ACIMs), or an
-  envelope wizard (architecture, control, target BEMF shape, OD, stack, bus,
-  current budget, no-load, stall, rated point) with post-generation feasibility
-  checks and concrete envelope-change suggestions.
-- DXF lamination import & export (with slot corner radii); slot-in-context
-  preview showing yoke, teeth, tips, opening, and airgap.
-- Materials with saturation checks & iron loss; rotating-field validity check;
-  cogging profile with RMS torque deduction; BEMF scope with L-L / L-N
-  (center-tap) reference toggle; inductance rotor-in/out; torque-speed and
-  current-torque curves. Every drawing exports to PNG.
+Fully self-contained index.html — React and the app are bundled in; no CDN,
+no server, works on locked-down networks.
 
-All first-order estimates — verify against FEA and datasheets before cutting steel.
+## Source layout (modular)
 
-## Deploy: put index.html at the repo root, Pages -> main / root.
+    src/01-shared.jsx     materials, wire tables, magnets, presets, theme, DXF export
+    src/02-engine.js      computeDesign — the physics engine (pure function)
+    src/03-dxf-import.js  DXF parser + lamination geometry analyzer
+    src/04-views.jsx      charts, drawings, SVG components, input controls
+    src/05-app.jsx        app shell: state, layout, wizard, cards
+
+Modules concatenate in numeric order into one script — no bundler needed.
+All six machine types are live. Brushed PM DC uses true armature semantics:
+slots on the rotating lamination opening outward, magnet ring on the housing
+ID, lap/wave paths (a = poles x plex / 2 x plex), commutator + brush model,
+armature DXF export. Parameter keys are shared with BLDC (statorOD = housing
+OD, statorID = magnet ring ID, rotorOD = armature OD, yoke = core depth) so
+design JSON stays lossless across types.
+
+## Building after editing source
+
+    npm i -g typescript          # once
+    python3 build.py             # rebuilds index.html in place
+
+## Deploy: push index.html (and src/) to the repo root; Pages -> main / root.
