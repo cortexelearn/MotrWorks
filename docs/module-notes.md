@@ -33,10 +33,12 @@ follow-on modifications each one opens up.
 - Cold ferrite demag currently only a qualitative warning → quantified by **[#4]**.
 
 ### Stepper
-- Statics complete (holding, detent, f0, L/R). Missing the headline deliverable: **pull-out torque vs step rate** curve (L/R + BEMF rolloff) with mid-band resonance flagging around f0. — future, high value
+- **Pull-out curve (2026-07-14): DONE.** Quasi-static upper bound anchored at 2-on holding: I_ach = (0.9V − kφω)/√(Rs² + (kE·ω·Ls)²) clamped to Imax, T = √2·kφ·I_ach; kφ back-solved from Th. Mid-band resonance rpm (step rate = f0) reported and flagged as avoid-sustained. Shown in the stepper tab and consumed by the Actuator module (advisory carried through ÷N). Real pull-out dips near resonance — noted as a derate.
 - Carter not applied to the salient-pole PM branch (pole-face geometry differs); 1.05 retained, disclosed.
 
 ### Brake
+- **Spring model (2026-07-15):** clamp force is no longer a direct input — springs are specified catalog-style by free height and engaged height (force = k·ΔL), with the engaged height physically tied to the coil pocket: springs seat on the pocket floor and bear on the armature, so engaged height should equal pocket depth + air gap (checked, with a warning naming dedicated seats as the exception). Also checks no-preload (free ≤ engaged) and coil-bind risk (released height < 40% of free). Presets, wizard, tuner, and importer migrated losslessly; legacy design files with brkSpring auto-derive the heights on import.
+- **Friction architecture (2026-07-14):** face-count-aware — 1 face: static lining bonded to the armature working the bare rotating disc (no pressure plate); 2 faces: lining bonded to both sides of the rotating disc, pinched between the static pressure plate and the moveable non-rotating armature. Energized animation overlays the flux path (rim leg → working gap → armature → boss gap → back web) as nested loops around the coil. Bobbin drawn seated at the pocket bottom. Backiron (statorMat) and armature (rotorMat) materials now independent: split-μr iron path, saturation cap = min(backiron pole faces, armature ring section at the boss radius), armature B reported with a warning — this immediately caught the 90 mm preset's armature at 2.00 T (thickened 8 → 9 mm).
 - **Semantics change (2026-07-14):** bobbin fields now describe the winding window — `brkBobID` = winding start Ø (wire begins here), `brkBobOD` = max winding finish Ø (flange cap; build also still respects pocket − 0.5 mm clearance). Presets migrated losslessly (start unchanged, cap = pocket − 1 mm ≡ old limit); legacy design files auto-migrate on import when the old bore/barrel pair is detected. Engine warns if the wound coil overruns the flange.
 - Static pull-in inversion is good; no **engage/release time** (integrate force vs armature motion with the existing L and stroke). Aero brake specs call this out. — future
 - Economizer (reduced hold voltage) mentioned in a warning but not modeled → modeled by **[#3]**.
@@ -60,12 +62,40 @@ follow-on modifications each one opens up.
 ## 04-views.jsx — visualization
 - Cross-section, scope, envelope curves all render SSR-clean. Future: efficiency map over the n-T plane; sensitivity tornado (finite-difference on the pure engine is nearly free).
 
+## Actuator module (new, 2026-07-14)
+- Composes the live motor design (BLDC or Brushed tab) and optionally the Brake-tab design through a
+  multi-stage gearhead (corrected 2026-07-15 against Maxon/Faulhaber-class catalog data: planetary 90%/stage — GP32-class runs 80–90% single, ~70% three-stage; spur 93%/stage — a 141:1 multi-stage head lands ~66% overall; harmonic 80% at rated & warm, catalog band 60–90%; η = η_stage^stages,
+  even ratio split with per-train practical windows: planetary 3–10, spur 1.5–6, harmonic 30–160 per stage).
+- Output-shaft composite: torque–speed and motor-current-vs-output-torque charts (motor curve mapped ÷N, ×N·η
+  with the motor's saturation bend preserved on the current axis), rated/peak/continuous rows, static holding
+  = brake × ratio (no η — friction aids holding), back-drive η ≈ 2 − 1/η with self-locking detection,
+  reflected inertia ÷ N². Pure `composeActuator(mr, br, cfg)` in the engine; `act-gate` covers the math and
+  SSRs the view. The old per-motor Gearbox card was removed — this module replaces it.
+- Gearhead OD & length accept specified values (0 = representative shell). Stepper drives supported via the new pull-out curve. Follow-ons: gearhead torque rating & inertia; brake on the
+  output side option; combined power budget (motor + brake coil) row.
+
 ## 05-app.jsx — app shell & wizard
 - **Envelope architecture lock (2026-07-14):** the wizard's architecture now follows the globally selected machine type (no cross-module plug/play); the Pick was replaced with a read-only line. `synthEnvelope` keeps its arch parameter for gate-testability.
 - Envelope wizard: **DONE [#5].** One-level restore (toggling snapshot) after Generate or an alternate apply; top-5 alternates surfaced for BLDC, brushed, LATM, and brake (deduped by construction key, each showing its headline numbers, applied with its own snapshot). Stepper/ACIM are single-construction synths — no alternates by design. *Follow-on:* multi-slot design compare (A/B diff view of two snapshots); persist the alternate list into the design file so a saved trade study survives reload.
 - Consolidated warnings strip with jump-to-card links. — future
 - Printable one-page design summary (params + curves + warnings) for design reviews. — future
+- **Raw BEMF entry (2026-07-15):** the pre-converted V/krpm Ke field is replaced with what the bench instruments actually read — BLDC: back-driven pk-pk, RMS, and electrical frequency (speed derives from pole count; RMS falls back to pk-pk/2√2 sine estimate); brushed: DC volts at rig speed. The card derives Ke and implied Kt live, and when both amplitudes are entered the crest ratio (pk-pk/RMS, sine 2.83) flags the waveform shape. Compare rows consume the derived value; legacy mKe files still work.
+- **Active bench calibration (2026-07-14):** pm & brushed. Measured R/L/no-load plus rated point (T @ n) and stall torque; "Capture factors" freezes measured-vs-model multipliers against the as-built geometry (kR, kL, kKe from no-load, kKt from stall — their ratio is the real saturation droop — and a fitted drag torque from the rated point). With the toggle Active, the engine applies them multiplicatively through R, L, BEMF, torque production, and subtracts the drag from the delivered curve — so ±turn tweaks predict the real motor's response (verified: −1 turn gives an identical relative shift on calibrated vs raw models). Factors serialize with the design; re-capture after a physical change. Follow-on: thermal-resistance and iron-loss capture from a coast-down.
 - Per-quantity confidence tags (R ±5%, L ±25%, cogging shape-only) to formalize the honest-disclosure principle. — future
+
+## QA sweep (2026-07-15)
+- Automated audit added to the workflow: state-key usage scan, duplicate-binding scan, all-presets × all-views
+  SSR render checked for NaN/undefined/negative dims, and a 400-case parameter fuzz (computeDesign must return
+  err[], never throw — passes 400/400).
+- Removed dead parameters: `brkPole`, `brkRf` (never read), `sb`, `slip` (ACIM leftovers from before the
+  equivalent circuit computed slip itself). Old design files remain loadable — unknown keys are ignored.
+- Fixed: SlotDetail rendered NaN coordinates when magT was absent, and subtracted a magnet band from the
+  induction rotor sketch — now PM-only.
+- Gated dumb fields: "Rated loading by" + Irate/J hidden for brake/LATM/stepper (they don't consume Iph);
+  "Airgap flux B̂g" is induction-only.
+- Inverse fix: steppers USE magnet grade & thickness in the engine but had no UI — the magnet card now renders
+  for steppers (grade, thickness, temperatures; arc coverage stays PM/LATM-only, flux/demag rows hidden where
+  the stepper branch doesn't compute them).
 
 ## Tooling / process
 - Gate suite is strong (11 gates + e2e). Wire into GitHub Actions on push to protect the Pages deploy. — future

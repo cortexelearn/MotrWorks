@@ -26,7 +26,7 @@ const p = {
   loadMode: "J", Irate: 5, bdRpm: 1800, Tcu: 80, Rext: 20,
   Tamb: 25, cooling: "Open air", TcuMax: 130, mR: 0, mL: 0, mKe: 0, mNl: 0,
   gbType: "None", gbRatio: 10, gbStages: 1, gbEff: 0,
-  brushV: 1.4, latmWind: 2, brkSpring: 200, brkRf: 20, brkMu: 0.35, brkMuD: 0.25, brkFaces: 2, brkStroke: 0.3,
+  brushV: 1.4, latmWind: 2, brkSprFree: 23.3, brkSprEng: 18.3, brkMu: 0.35, brkMuD: 0.25, brkFaces: 2, brkStroke: 0.3,
   stpNr: 50, stpKind: "hybrid", stpPP: 12, latmSect: 4, latmSpan: 60,
   rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
   Vll: 400, Vdc: 12, Imax: 8, freq: 100, slip: 3, sb: 18, J: 6, Bg: 0.85, seq: "ABC",

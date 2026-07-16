@@ -11,13 +11,13 @@ const base = JSON.parse(readFileSync('/tmp/_base.json','utf8'));
 const p60 = { ...base, ...M.PRESETS['Brake 24 V · 60 mm · spring-applied'] };
 const targets = [
   { name: '28V 38mm aero', p: { ...p60, Vdc: 28, statorOD: 38, stackL: 18, shaftD: 8, brkBore: 16,
-      brkRo: 17, brkRi: 11, brkSpring: 70, brkK: 15, brkStroke: 0.2, brkArm: 4, brkSpringN: 4, brkPktD: 12 },
+      brkRo: 17, brkRi: 11, brkSprFree: 16.9, brkSprEng: 12.2, brkK: 15, brkStroke: 0.2, brkArm: 4, brkSpringN: 4, brkPktD: 12 },
     boss: [24, 22], pkt: [32, 33], pktD: [13, 14], turnsList: [700, 800, 900, 1000, 1100, 1250] },
   { name: '24V 90mm 10Nm', p: { ...p60, statorOD: 90, stackL: 32, shaftD: 15, brkBore: 34,
-      brkRo: 40, brkRi: 26, brkSpring: 380, brkK: 60, brkStroke: 0.4, brkArm: 8, brkSpringN: 6, brkPktD: 24 },
+      brkRo: 40, brkRi: 26, brkSprFree: 30.7, brkSprEng: 24.4, brkK: 60, brkStroke: 0.4, brkArm: 8, brkSpringN: 6, brkPktD: 24 },
     boss: [54, 50, 46], pkt: [74, 78], pktD: [24, 26] },
   { name: '12V 40mm light', p: { ...p60, Vdc: 12, statorOD: 40, stackL: 16, shaftD: 6, brkBore: 13,
-      brkRo: 18, brkRi: 12, brkSpring: 75, brkK: 20, brkStroke: 0.25, brkArm: 4, brkSpringN: 4, brkPktD: 11 },
+      brkRo: 18, brkRi: 12, brkSprFree: 15.0, brkSprEng: 11.25, brkK: 20, brkStroke: 0.25, brkArm: 4, brkSpringN: 4, brkPktD: 11 },
     boss: [26, 24, 22], pkt: [33, 34, 35], pktD: [12, 13], turnsList: [300, 340, 380, 420, 460, 500, 540, 580, 620, 660] },
 ];
 for (const tg of targets) {

@@ -52,7 +52,7 @@ for (const [k, v] of Object.entries(M.BRAKE_MATS)) {
 console.log('  ✓ material table sane (µs > µd, limits present)');
 const wcase = [
   ['weak coil (low bus)', { Vdc: 10 }, 'Release margin'],
-  ['overpressure', { brkSpring: 3000, brkK: 0 }, 'exceeds'],
+  ['overpressure', { brkSprFree: 300, brkSprEng: 20, brkK: 12 }, 'exceeds'],
   ['hot coil', { awg: 24 }, '°C class'],
   ['no wear allowance', { brkStroke: 0.1 }, 'wear allowance'],
   ['thin armature', { brkArm: 1 }, 'too thin'],

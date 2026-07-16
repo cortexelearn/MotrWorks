@@ -832,6 +832,96 @@ function CrossSection({ p, r, anim, phaseSel }) {
   );
 }
 
+/* ---- Actuator composite outline: gearhead > motor > brake on one axial section ---- */
+function ActuatorOutline({ motorP, brakeP, act, withBrk, us, gbOD, gbLen }) {
+  const dl = (mm) => (us === "in" ? (mm / 25.4).toFixed(2) + "\u2033" : Math.round(mm) + " mm");
+  // component envelopes (mm) — first-order typical proportions, disclosed below
+  const modOD = motorP.statorOD, stk = motorP.stackL;
+  const ovh = motorP.headH > 0 ? motorP.headH : Math.max(0.16 * modOD, 5); // coil head axial overhang / side
+  const Lm = stk + 2 * (ovh + 3);                                          // stack + heads + endbells
+  const gODa = modOD * (act.type === "Harmonic" ? 1.0 : 1.1);
+  const gOD = gbOD > 0 ? gbOD : gODa;                                      // specified envelope wins
+  const perStage = act.type === "Harmonic" ? 0.55 : act.type === "Planetary" ? 0.42 : 0.34;
+  const Lg = gbLen > 0 ? gbLen : gODa * (perStage * act.st + 0.22);        // stages + output bearing block
+  const hasB = withBrk && brakeP;
+  const bOD = hasB ? brakeP.statorOD : 0;
+  const Lb = hasB ? brakeP.stackL + (brakeP.brkArm || 4) + 4 : 0;          // backiron + armature/disc pack
+  const shD = Math.max(motorP.shaftD || 5, 3);
+  const oShD = Math.max(gOD * 0.16, shD);
+  const Ltot = Lg + Lm + Lb, stub = 12;
+  const W = 430, H = 250, yC = 118, mLx = 56;
+  const k = Math.min((W - mLx - 44) / (Ltot + stub), (H - 96) / Math.max(gOD, modOD, bOD || 1));
+  const X0 = mLx + stub * k;
+  const R = (od) => (od / 2) * k;
+  const blk = (x, L, od, fill, key) => (
+    <rect key={key} x={X0 + x * k} y={yC - R(od)} width={L * k} height={2 * R(od)} fill={fill} stroke="#334155" strokeWidth="1" />
+  );
+  const dimSeg = (x, L, label, row) => {
+    const y9 = yC + R(Math.max(gOD, modOD, bOD || 1)) + 14 + row * 15;
+    return (
+      <g key={"d" + label}>
+        <line x1={X0 + x * k} y1={y9} x2={X0 + (x + L) * k} y2={y9} stroke="#64748B" strokeWidth="0.8" />
+        <line x1={X0 + x * k} y1={y9 - 3} x2={X0 + x * k} y2={y9 + 3} stroke="#64748B" strokeWidth="0.8" />
+        <line x1={X0 + (x + L) * k} y1={y9 - 3} x2={X0 + (x + L) * k} y2={y9 + 3} stroke="#64748B" strokeWidth="0.8" />
+        <text x={X0 + (x + L / 2) * k} y={y9 - 3} textAnchor="middle" className="dim">{label}</text>
+      </g>
+    );
+  };
+  const odLbl = (x, od, txt) => (
+    <g key={"o" + txt}>
+      <line x1={X0 + x * k} y1={yC - R(od)} x2={X0 + x * k} y2={yC - R(od) - 8} stroke="#94A3B8" strokeWidth="0.6" strokeDasharray="2 2" />
+      <text x={X0 + x * k} y={yC - R(od) - 11} textAnchor="middle" className="dim">{txt}</text>
+    </g>
+  );
+  const xm = Lg, xb = Lg + Lm;                                             // block start coordinates (mm)
+  return (
+    <svg id="svg-actline" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      <text x={W / 2} y={14} textAnchor="middle" className="dim">
+        {`output \u2039 ${act.type.toLowerCase()} ${act.st}-stage ${act.N}:1 \u203a motor${hasB ? " \u203a brake" : ""} — typical proportions`}</text>
+      {/* centerline + through shaft */}
+      <line x1={16} y1={yC} x2={W - 12} y2={yC} stroke="#94A3B8" strokeWidth="0.7" strokeDasharray="9 3 2 3" />
+      <rect x={X0} y={yC - (shD / 2) * k} width={(Ltot) * k} height={shD * k} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
+      {/* output shaft stub */}
+      <rect x={X0 - stub * k} y={yC - (oShD / 2) * k} width={stub * k} height={oShD * k} fill="#8A97A8" stroke="#334155" strokeWidth="0.9" />
+      {/* gearhead: housing, stage dividers, ring band */}
+      {blk(0, Lg, gOD, "#B9C2CE", "g")}
+      <rect x={X0} y={yC - R(gOD)} width={Lg * k} height={5} fill="#8A97A8" />
+      <rect x={X0} y={yC + R(gOD) - 5} width={Lg * k} height={5} fill="#8A97A8" />
+      {Array.from({ length: act.st - 1 }, (_, i9) => {
+        const xd = X0 + (Lg * 0.22 + ((Lg * 0.78) / act.st) * (i9 + 1)) * k;
+        return <line key={"st" + i9} x1={xd} y1={yC - R(gOD) + 5} x2={xd} y2={yC + R(gOD) - 5} stroke="#64748B" strokeWidth="0.8" strokeDasharray="4 3" />;
+      })}
+      <text x={X0 + (Lg / 2) * k} y={yC - R(gOD) * 0.45} textAnchor="middle" className="wnum">{act.type.toLowerCase()}</text>
+      {/* motor: housing, lam stack, copper coil heads */}
+      {blk(xm, Lm, modOD, "#C7CFDA", "m")}
+      <rect x={X0 + (xm + (Lm - stk) / 2) * k} y={yC - R(modOD * 0.94)} width={stk * k} height={2 * R(modOD * 0.94)} fill="#9AA7B8" stroke="#334155" strokeWidth="0.7" />
+      <rect x={X0 + (xm + (Lm - stk) / 2 - ovh) * k} y={yC - R(modOD * 0.8)} width={ovh * k} height={2 * R(modOD * 0.8)} fill="#C87F3D" opacity="0.9" />
+      <rect x={X0 + (xm + (Lm + stk) / 2) * k} y={yC - R(modOD * 0.8)} width={ovh * k} height={2 * R(modOD * 0.8)} fill="#C87F3D" opacity="0.9" />
+      <text x={X0 + (xm + Lm / 2) * k} y={yC - R(modOD) * 0.45} textAnchor="middle" className="wnum">
+        {motorP.motorType === "brushed" ? "brushed DC" : "BLDC"}</text>
+      {/* brake: backiron, armature + disc pack */}
+      {hasB && (
+        <g>
+          {blk(xb, brakeP.stackL, bOD, "#B9C2CE", "b")}
+          <rect x={X0 + (xb + brakeP.stackL) * k} y={yC - R(bOD * 0.96)} width={Math.max((brakeP.brkArm || 4) * k, 2.5)} height={2 * R(bOD * 0.96)} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
+          <rect x={X0 + (xb + brakeP.stackL + (brakeP.brkArm || 4)) * k} y={yC - R(bOD * 0.9)} width={Math.max(3 * k, 2)} height={2 * R(bOD * 0.9)} fill="#7B8494" stroke="#334155" strokeWidth="0.7" />
+          <text x={X0 + (xb + Lb / 2) * k} y={yC - R(bOD) - 22} textAnchor="middle" className="wnum">brake</text>
+          <line x1={X0 + (xb + Lb / 2) * k} y1={yC - R(bOD) - 18} x2={X0 + (xb + Lb / 2) * k} y2={yC - R(bOD) + 2} stroke="#94A3B8" strokeWidth="0.6" strokeDasharray="2 2" />
+        </g>
+      )}
+      {/* Ø labels above, lengths below */}
+      {odLbl(Lg * 0.5, gOD, `\u00d8${dl(gOD)}`)}
+      {odLbl(xm + Lm * 0.5, modOD, `\u00d8${dl(modOD)}`)}
+      {hasB && odLbl(xb + Lb * 0.72, bOD, `\u00d8${dl(bOD)}`)}
+      {dimSeg(0, Lg, dl(Lg), 0)}
+      {dimSeg(xm, Lm, dl(Lm), 0)}
+      {hasB && dimSeg(xb, Lb, dl(Lb), 0)}
+      {dimSeg(0, Ltot, `overall ${dl(Ltot)}`, 1)}
+    </svg>
+  );
+}
+
 function TorqueSpeedChart({ r, us }) {
   const W = 330, H = 240, mL = 50, mB = 36, mT = 14, mR = 14;
   if (!r.curve.length) return null;
@@ -1198,7 +1288,8 @@ function SlotDetail({ p, r, us }) {
   const r0 = p.statorID / 2, r1 = r0 + p.tipH, r2 = r1 + r.hs, r3 = r2 + p.yoke, rRt = p.rotorOD / 2;
   const rc = r.rcFil || 0, pitch = (2 * Math.PI) / Ns;
   const dAng = 1.5 * pitch;                                   // ±1.5 slot pitches: center slot + neighbors
-  const rIn = Math.max(rRt - Math.max(p.magT, 0) - Math.min(5, rRt * 0.3), 1);
+  const magT9 = p.motorType === "pm" ? Math.max(p.magT || 0, 0) : 0;   // induction rotor has no magnet band
+  const rIn = Math.max(rRt - magT9 - Math.min(5, rRt * 0.3), 1);
   const k = Math.min((W - 84) / (2 * r3 * Math.sin(dAng)), (H - 66) / (r3 - rIn * Math.cos(dAng)));
   const Cx = W / 2, Cy = 26 + r3 * k;                          // motor center below the canvas
   const P = (rad, a) => `${(Cx + rad * k * Math.sin(a)).toFixed(2)} ${(Cy - rad * k * Math.cos(a)).toFixed(2)}`;
@@ -1423,9 +1514,10 @@ function AxialCutaway({ p, r, us, anim }) {
       {brkA ? (
         <g>
           {/* Working drawing of the spring-applied brake: mounting wall right, pot-core backiron with
-              bobbin-wound coil in the pocket, springs, sliding armature, friction disc on a splined hub,
-              pressure plate. Disc/hub/pressure plate are axially anchored; only the armature slides.
-              ▶ toggles power: OFF = springs clamp; ON = armature pulled in, SEPARATING from the disc. */}
+              bobbin-wound coil seated at the pocket bottom, springs, sliding (non-rotating) armature.
+              1 face: static lining on the armature works the bare rotating disc. 2 faces: lining bonded to
+              both sides of the rotating disc, pinched between the static pressure plate and the armature.
+              ▶ toggles power: OFF = springs clamp; ON = armature pulled in — flux loops shown. */}
           {(() => {
             const rODm = p.statorOD / 2, rPktm = Math.max(p.brkPktID, 4) / 2;
             const rBossm = Math.max(p.brkBossOD, 2) / 2, rThrum = Math.max(p.brkBore, p.shaftD + 2) / 2;
@@ -1464,7 +1556,7 @@ function AxialCutaway({ p, r, us, anim }) {
             );
             const rSprM = (rBossm + rPktm) / 2;
             const xPkt0 = xBody0, xPkt1 = xBody0 + pktDpx;             // pocket opens toward the armature
-            const xBob0 = xPkt0 + 1.5, xBob1 = Math.min(xBob0 + bobLpx, xPkt1 - 1);
+            const xBob1 = xPkt1 - 1, xBob0 = Math.max(xBob1 - bobLpx, xPkt0 + 1); // bobbin seats at the pocket bottom
             const rBobm = p.brkBobID / 2, rCoilm = ((r.brake && r.brake.coilOD) || p.brkBobID + 2) / 2;
             const rFlgm = Math.min(p.brkBobOD / 2, rPktm - 0.3);       // flange to the max-finish Ø, inside the pocket
             return (
@@ -1486,18 +1578,59 @@ function AxialCutaway({ p, r, us, anim }) {
                 {/* springs from armature to the back web */}
                 {zig(xArm + tArm, xPkt1, Y(rSprM), "sprT")}
                 {zig(xArm + tArm, xPkt1, yC + rSprM * k, "sprB")}
-                {/* armature (only moving part) */}
-                {bandV(xArm, xArm + tArm, rThrum, rODm, "#7C9885", "arm")}
-                {/* friction disc + hub + pressure plate: FIXED */}
-                {bandV(xDisc, xDisc + tD, riLm, roLm, "#3F3F46", "disc")}
-                {bandV(xPP, xDisc, rThrum * 0.8, rODm, "#5B7B9A", "pp")}
-                <rect x={xPP - 6} y={Y(riLm)} width={(xDisc + tD - xPP) + 12} height={riLm * 2 * k} fill="#B5C9A5" stroke="#334155" strokeWidth="0.9" />
+                {/* armature (only moving, non-rotating part): annular, clears the hub */}
+                {(() => {
+                  const rHubm = Math.max(riLm * 0.8, rThrum + 1.5);   // hub OD — the disk splines onto it
+                  return (
+                    <g>
+                      {bandV(xArm, xArm + tArm, rHubm + 0.8, rODm, "#7C9885", "arm")}
+                      {/* friction architecture: 1 face = static lining on the armature working a bare disk;
+                          2 faces (SEPAC style) = lined rotating friction disk on the hub, pinched between the
+                          outboard static pressure plate (on standoffs to the magnet body) and the armature */}
+                      {p.brkFaces >= 2 ? (
+                        <g>
+                          {bandV(xDisc + 1.4, xDisc + tD - 1.4, rHubm, roLm, "#8A97A8", "discCore")}
+                          {bandV(xDisc, xDisc + 1.4, riLm, roLm, "#3F3F46", "linA")}
+                          {bandV(xDisc + tD - 1.4, xDisc + tD, riLm, roLm, "#3F3F46", "linB")}
+                          {bandV(xPP, xDisc, rHubm + 0.8, rODm * 0.98, "#5B7B9A", "pp")}
+                          {/* standoffs: pressure plate fixed back to the magnet body through armature clearance */}
+                          <rect x={xPP} y={Y(rODm * 0.9) - 1.6} width={xBody0 - xPP} height={3.2} fill="#52525B" stroke="#334155" strokeWidth="0.5" />
+                          <rect x={xPP} y={yC + rODm * 0.9 * k - 1.6} width={xBody0 - xPP} height={3.2} fill="#52525B" stroke="#334155" strokeWidth="0.5" />
+                        </g>
+                      ) : (
+                        <g>
+                          {bandV(xDisc, xDisc + tD, rHubm, roLm, "#8A97A8", "discSteel")}
+                          {bandV(xArm - 1.6, xArm, riLm, roLm, "#3F3F46", "linArm")}
+                        </g>
+                      )}
+                      {/* hub on the shaft: the friction disk rides its spline */}
+                      {bandV((p.brkFaces >= 2 ? xPP : xDisc) - 7, xDisc + tD + 5, Math.max((p.shaftD / 2) + 0.3, 1.5), rHubm, "#B5C9A5", "hub")}
+                    </g>
+                  );
+                })()}
                 <rect x={xPP - 26} y={yC - Math.max((p.shaftD / 2) * k, 3.5)} width={xWall + 20 - (xPP - 26)}
                   height={Math.max((p.shaftD / 2) * k, 3.5) * 2} fill="#9AA3AE" stroke="#334155" />
                 {/* separation: engaged = armature face on disc; released = gap opens armature↔disc */}
                 {on && <g>
                   <line x1={xDisc + tD} y1={yC - roLm * k * 0.7} x2={xArm} y2={yC - roLm * k * 0.7} stroke="#059669" strokeWidth="1.6" />
                   <text x={(xDisc + tD + xArm) / 2} y={yC - roLm * k * 0.7 - 4} textAnchor="middle" className="dim">disc free</text>
+                  {/* flux path: rim leg → working gap → armature → boss gap → boss → back web, looping the coil */}
+                  {(() => {
+                    const xA9 = xArm + tArm / 2, xW9 = (xPkt1 + xWall - 4) / 2;
+                    const loop = (rIn9, rOut9, half, kq) => {
+                      const y1 = half * (rOut9 * k), y2 = half * (rIn9 * k);
+                      return <path key={kq} d={`M ${xA9} ${yC + y1} L ${xW9} ${yC + y1} L ${xW9} ${yC + y2} L ${xA9} ${yC + y2} Z`}
+                        fill="none" stroke="#2563EB" strokeWidth="1.1" strokeDasharray="5 3" opacity="0.75" strokeLinejoin="round" />;
+                    };
+                    const rRim1 = (rPktm * 0.35 + rODm * 0.65), rRim2 = (rPktm * 0.7 + rODm * 0.3);
+                    const rBos1 = (rThrum * 0.3 + rBossm * 0.7), rBos2 = (rThrum * 0.65 + rBossm * 0.35);
+                    return <g>
+                      {loop(rBos1, rRim1, -1, "fxU1")}{loop(rBos2, rRim2, -1, "fxU2")}
+                      {loop(rBos1, rRim1, 1, "fxL1")}{loop(rBos2, rRim2, 1, "fxL2")}
+                      <text x={(xA9 + xW9) / 2} y={Y((rBossm + rPktm) / 2) + 4} textAnchor="middle"
+                        style={{ fontSize: 9, fill: "#2563EB", fontStyle: "italic" }}>Φ</text>
+                    </g>;
+                  })()}
                 </g>}
                 {!on && <g>
                   <line x1={xArm + tArm} y1={Y(rODm) - 8} x2={xBody0} y2={Y(rODm) - 8} stroke={PEACH} strokeWidth="1.6" />
@@ -1533,8 +1666,8 @@ function AxialCutaway({ p, r, us, anim }) {
                 <text x={14} y={50} className="dim" style={{ fill: "#7C4A1E" }}>{`coil \u00d8${dl((r.brake && r.brake.coilOD) || 0)}`}</text>
                 <text x={14} y={61} className="dim" style={{ fill: "#7C4A1E" }}>{`clr ${r.brake ? r.brake.clr.toFixed(2) : "\u2014"} mm in pocket`}</text>
                 {/* component labels: staggered, collision-free */}
-                <text x={xPP + tPP / 2 + 3} y={yC} textAnchor="middle" className="wnum"
-                  transform={`rotate(-90 ${xPP + tPP / 2 + 3} ${yC})`}>pressure plate</text>
+                {p.brkFaces >= 2 && <text x={xPP + tPP / 2 + 3} y={yC} textAnchor="middle" className="wnum"
+                  transform={`rotate(-90 ${xPP + tPP / 2 + 3} ${yC})`}>pressure plate</text>}
                 <text x={xDisc + tD / 2} y={yC + roLm * k + 11} textAnchor="middle" className="wnum">disc</text>
                 <text x={xArm + tArm / 2} y={yC + 4} textAnchor="middle" className="wnum"
                   transform={`rotate(-90 ${xArm + tArm / 2} ${yC + 4})`}>armature</text>

@@ -1,7 +1,47 @@
 /* MotrSynth module 02 — physics engine: computeDesign (pure function, mm-canonical) */
+/* ---- actuator composition: motor result × gear train (+ brake), pure & gate-testable.
+   Per-stage efficiencies for the miniature/precision gearhead class this tool targets
+   (Maxon/Faulhaber scale catalog data): planetary 90% (GP32-class runs 80–90% single-stage,
+   ~70% three-stage; premium needle-bearing versions reach 95%+ — use the override),
+   spur 93% (single mesh per stage; e.g. a 141:1 multi-stage spur head lands ~66% overall),
+   harmonic 80% at rated load & temperature (catalog band 60–90%; drops at partial load,
+   cold, and the highest ratios). Compounded per stage: η_total = η_stage^stages. ---- */
+function composeActuator(mr, br, cfg) {
+  const w = [];
+  const type9 = ["Planetary", "Harmonic", "Spur"].includes(cfg.type) ? cfg.type : "Planetary";
+  const N = Math.max(cfg.ratio, 1), st = Math.max(Math.round(cfg.stages) || 1, 1);
+  const ETA_STAGE = { Planetary: 0.90, Spur: 0.93, Harmonic: 0.80 };
+  const etaStage = ETA_STAGE[type9];
+  const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : Math.pow(etaStage, st);
+  const spr = Math.pow(N, 1 / st);
+  const win = { Planetary: [3, 10], Spur: [1.5, 6], Harmonic: [30, 160] }[type9];
+  if (type9 === "Harmonic" && st > 1) w.push("Harmonic stages are almost always single — cascading flexsplines is unusual; check availability.");
+  if (spr < win[0] * 0.999 || spr > win[1] * 1.001)
+    w.push(`Per-stage ratio ${spr.toFixed(1)}:1 is outside the typical ${type9.toLowerCase()} window (${win[0]}\u2013${win[1]}:1) — ${spr > win[1] ? "add a stage" : "drop a stage"} or change type.`);
+  if (!mr || mr.err.length) return { fail: "The source motor design has errors — fix it in its tab first.", warn: w };
+  if (!mr.curve || !mr.curve.length || !(mr.Kt > 0)) return { fail: "The source motor has no torque-speed curve to compose — fix the design in its tab.", warn: w };
+  const curve = mr.curve.map((c) => ({ n: c.n / N, T: c.T * N * eta }));
+  if (mr.step && Number.isFinite(mr.step.nRes))
+    w.push(`Stepper source: quasi-static pull-out bound — avoid sustained output speeds near ${(mr.step.nRes / N).toFixed(1)} rpm (mid-band resonance at the motor).`);
+  const iAtOut = (Tout) => Tout / (N * eta) / mr.Kt;                 // motor amps for an output torque (pre-saturation)
+  const hold = br && br.brake && Number.isFinite(br.brake.Thold) ? br.brake.Thold * N : null; // static: ratio only (friction aids holding)
+  if (br && br.err && br.err.length) w.push("The brake design in its tab has errors — holding torque not composed.");
+  const etaBack = Math.max(2 - 1 / eta, 0);                          // first-order back-drive efficiency
+  const selfLock = etaBack <= 0.02 || type9 === "Harmonic" && N >= 80;
+  return { N, st, spr, eta, etaStage, type: type9, curve,
+    noLoad: mr.noLoad / N,
+    op: mr.op ? { n: mr.op.n / N, T: mr.op.T * N * eta } : null,
+    peakT: (mr.peakT || 0) * N * eta,
+    Tcont: mr.therm && Number.isFinite(mr.therm.Tcont) ? mr.therm.Tcont * N * eta : null,
+    hold: hold !== null && br && br.err && br.err.length ? null : hold,
+    iAtOut, etaBack, selfLock, warn: w };
+}
+
 function computeDesign(p) {
   const w = []; // warnings
   const err = [];
+  if (p.motorType === "actuator")                                    // composition module — no machine of its own
+    return { err, warn: w, curve: [], actuator: true, noLoad: 0, Kt: 0 };
 
   const Ns = Math.max(3, Math.round(p.slots));
   const poles = Math.max(2, Math.round(p.poles / 2) * 2);
@@ -145,8 +185,16 @@ function computeDesign(p) {
   const MLT = MLTmm / 1000; // m per turn
   const coilDia = MLTmm / Math.PI;                            // equivalent round-coil Ø
   const bobSuggest = Math.max(coilDia - tb, 0);               // core Ø that yields this MLT
+  // bench calibration (pm & brushed): captured multiplicative factors ride every downstream
+  // calculation, so design tweaks (±turns, wire, geometry) predict the REAL motor's response
+  const calAct = p.calOn === "yes" && (p.motorType === "pm" || brushedM);
+  const cKR = calAct ? Math.max(p.calKR || 1, 0.05) : 1;
+  const cKL = calAct ? Math.max(p.calKL || 1, 0.05) : 1;
+  const cKe = calAct ? Math.max(p.calKKe || 1, 0.05) : 1;
+  const cKt = calAct ? Math.max(p.calKKt || 1, 0.05) : 1;
+  const cTd = calAct ? Math.max(p.calTd || 0, 0) : 0;
   const Rphase =
-    (RHO_CU * MLT * coilsPerPhase * p.turns * 1e6) / (aBare * p.strands * a * a); // ohm
+    cKR * (RHO_CU * MLT * coilsPerPhase * p.turns * 1e6) / (aBare * p.strands * a * a); // ohm
   const Rll = p.conn === "wye" ? 2 * Rphase : (2 / 3) * Rphase;
   // operating resistance: copper at winding temp + drive FETs / leads per phase
   const Rhot = Rphase * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
@@ -270,7 +318,7 @@ function computeDesign(p) {
   // back-EMF constant at the working airgap flux
   const fluxPole = (2 * BgEff * D * L) / poles; // Wb
   const Eph = 4.44 * p.freq * kw * Nser * fluxPole; // rms @ f
-  const Ke = wSync > 0 ? Eph / wSync : 0; // V_rms per mech rad/s
+  const Ke = (calAct ? cKe : 1) * (wSync > 0 ? Eph / wSync : 0); // V_rms per mech rad/s
 
   // first-order demagnetization check at the drive current limit
   let Hdemag = 0, demagMargin = 1;
@@ -291,7 +339,7 @@ function computeDesign(p) {
   const lamSlot = bAvgSlot > 0 ? Math.max(hs, 0) / (3 * bAvgSlot) + p.tipH / Math.max(p.slotOpen, 0.1) : 1.5;
   const Lslot = ((4 * 3) / Ns) * MU0 * (p.stackL / 1000) * lamSlot * Nser * Nser;
   const Lend = 0.3 * Lslot; // end-winding leakage, rule-of-thumb fraction
-  const Lph = Lmag + Lslot + Lend;                 // rotor installed
+  const Lph = cKL * (Lmag + Lslot + Lend);         // rotor installed
   const LmagNR = (3 / Math.PI) * MU0 * ((D * L) / (p.statorID / 2000)) * Math.pow(kw * Nser, 2) / (poles * poles);
   const LphNR = LmagNR + Lslot + Lend;             // rotor removed: flux must cross the open bore
   const Lll = p.conn === "wye" ? 2 * Lph : (2 / 3) * Lph;
@@ -317,6 +365,7 @@ function computeDesign(p) {
       : (p.ctrl === "foc" ? p.Vdc / (Math.sqrt(3) * Math.SQRT2)   // SVM linear limit, L-L bridge
         : (Math.SQRT2 / Math.PI) * p.Vdc);                        // six-step fundamental
     Kt = (p.ctrl === "foc" ? 1.0 : 0.955) * 3 * Ke * (tapDrive ? 0.5 : 1); // half-winding drive halves torque/amp
+    if (calAct) Kt *= cKt / cKe;                                    // measured stall vs no-load = real Kt droop
     if (Ke > 0 && Rhot > 0) {
       // steady-state phasor limit: Vph² = (R·I + Ke·ω)² + (pp·ω·L·I)²  (Id = 0 below base speed)
       const pp3 = poles / 2, lamF = Ke / pp3, Lq2 = Math.max(Lph, 1e-7);
@@ -394,21 +443,37 @@ function computeDesign(p) {
     const Ib = p.Vdc / Math.max(Rb, 1e-6);
     const NI = Ntot * Ib;
     const mu0b = 4e-7 * Math.PI;
-    const bodyM = STEELS[p.statorMat] || { Bmax: 1.6, mur: 700 };
+    const bodyM = STEELS[p.statorMat] || { Bmax: 1.6, mur: 700 };   // backiron (pot core)
+    const armM = STEELS[p.rotorMat] || bodyM;                        // sliding armature plate
     const Bsat = Math.min(bodyM.Bmax || 1.6, 2.1);
-    // iron path as equivalent extra gap: down the boss, across the back web, up the rim, through the armature
-    const lFe = (2 * pktD + (rOD - rThru) + p.brkArm) / 1000;
-    const gFe = lFe / Math.max(bodyM.mur || 700, 100);
+    const BsatA = Math.min(armM.Bmax || 1.6, 2.1);
+    // iron path as equivalent extra gap, split by material: boss + web + rim in the backiron,
+    // the radial run across the armature in its own steel
+    const lFeB = (2 * pktD + (rOD - rThru) / 2) / 1000;
+    const lFeA = ((rOD - rThru) / 2 + p.brkArm) / 1000;
+    const gFe = lFeB / Math.max(bodyM.mur || 700, 100) + lFeA / Math.max(armM.mur || 700, 100);
+    const AarmMin = 2 * Math.PI * (rBoss / 1000) * (Math.max(p.brkArm, 0.5) / 1000); // tightest armature ring section
     const pullAt = (g) => {
       const Rtot = (g / (mu0b * Ain)) + (g / (mu0b * Aout)) + (gFe / (mu0b * Amin));
       let Phi = NI / Rtot;
-      Phi = Math.min(Phi, Bsat * Amin);                               // saturation cap
+      Phi = Math.min(Phi, Bsat * Amin, BsatA * AarmMin);              // saturation cap: backiron OR armature
       const F = (Phi * Phi / (2 * mu0b)) * (1 / Ain + 1 / Aout);
-      return { F, Phi, Bin: Phi / Ain, Bout: Phi / Aout, satLim: Phi >= Bsat * Amin * 0.999 };
+      return { F, Phi, Bin: Phi / Ain, Bout: Phi / Aout, Barm: Phi / AarmMin,
+        satLim: Phi >= Math.min(Bsat * Amin, BsatA * AarmMin) * 0.999 };
     };
     const atGap = pullAt(g0), atSeat = pullAt(gRes);
-    const Fclamp = Math.max(p.brkSpring, 1);
-    const Fcompr = Fclamp + Math.max(p.brkK, 0) * Math.max(p.brkStroke, 0.05);
+    // spring pack from catalog-style heights: free length L0, engaged height L1 (springs seat on
+    // the pocket floor and bear on the armature, so L1 physically = pocket depth + air gap);
+    // pulling in compresses them a further stroke.
+    const sprL0 = Math.max(Number.isFinite(p.brkSprFree) ? p.brkSprFree : 0, 0.1);
+    const sprL1 = Math.max(Number.isFinite(p.brkSprEng) ? p.brkSprEng : 0, 0.1);
+    const strk9 = Math.max(p.brkStroke, 0.05);
+    const Fclamp = Math.max(Math.max(p.brkK, 0) * Math.max(sprL0 - sprL1, 0), 1);
+    const Fcompr = Fclamp + Math.max(p.brkK, 0) * strk9;
+    const sprCav = pktD + strk9;                                    // the spring's working cavity
+    if (sprL0 <= sprL1) w.push(`Spring free length ${sprL0} mm ≤ engaged height ${sprL1} mm — no preload; the brake cannot clamp.`);
+    if (Math.abs(sprL1 - sprCav) > 1.5) w.push(`Engaged spring height ${sprL1} mm vs pocket depth + air gap = ${sprCav.toFixed(1)} mm — springs seat on the pocket floor and bear on the armature, so these should agree (or call out dedicated spring seats).`);
+    if (sprL1 - strk9 < 0.4 * sprL0) w.push(`Released spring height ${(sprL1 - strk9).toFixed(1)} mm is under 40% of the ${sprL0} mm free length — coil-bind (solid) risk at pull-in; deepen the pocket or pick a shorter-travel spring.`);
     const marginRel = atGap.F / Fcompr;
     const marginHold = atSeat.F / Fcompr;
     const ro = Math.max(p.brkRo, 2) / 1000, ri = Math.max(Math.min(p.brkRi, p.brkRo - 1), 1) / 1000;
@@ -450,7 +515,8 @@ function computeDesign(p) {
     brake = { Thold, Tdyn, re: re * 1000, reUP: reUP * 1000, faces, Fclamp, Fcompr, padP,
       pMax: matB ? matB.pMax : NaN, Tmax: matB ? matB.Tmax : NaN,
       Fpull: atGap.F, Fseat: atSeat.F, marginRel, marginHold, satLim: atGap.satLim,
-      Bin: atGap.Bin, Bout: atGap.Bout, Bback, NI, Rb, Ib, Pb, Ihold, Phold, eco, TcuB, RthB, Lb, tau: Lb / Math.max(Rb, 1e-6),
+      Bin: atGap.Bin, Bout: atGap.Bout, Barm: atSeat.Barm, Bback, NI, Rb, Ib, Pb, Ihold, Phold, eco, TcuB, RthB, Lb, tau: Lb / Math.max(Rb, 1e-6),
+      Fclamp, Fcompr, sprL0, sprL1, sprCav,
       Vrel: Math.min(Vrel, 10 * p.Vdc), capT: capB, Ain: Ain * 1e6, Aout: Aout * 1e6,
       hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, wireLen };
     op = { n: 0, T: Thold }; peakT = Thold; noLoad = 0;
@@ -467,6 +533,8 @@ function computeDesign(p) {
     if (bobL + 2 > pktD) w.push(`Bobbin ${bobL} mm + flanges won't seat in the ${pktD} mm pocket depth.`);
     if (Ntot > capB) w.push(`Coil won't fit: ${Ntot} turns vs ≈ ${Math.floor(capB)} at this wire on a ${bobL} mm bobbin before the pocket ID (85% winding efficiency).`);
     if (Number.isFinite(brake.Ipull) && brake.Ipull > Ib) w.push(`Pull-in needs ${brake.Ipull.toFixed(2)} A but the bus only pushes ${Ib.toFixed(2)} A — the brake will not release at ${p.Vdc} V.`);
+    if (Number.isFinite(atSeat.Barm) && atSeat.Barm > BsatA * 0.95)
+      w.push(`Armature ring section runs ${atSeat.Barm.toFixed(2)} T vs ~${BsatA.toFixed(1)} T for ${p.rotorMat} — thicken the armature or pick a higher-Bsat plate.`);
     if (eco < 1 && Number.isFinite(Idrop) && Ihold < 1.3 * Idrop) w.push(`Economizer hold ${(eco * 100).toFixed(0)}% gives ${Ihold.toFixed(2)} A vs drop-out ${Idrop.toFixed(3)} A — under a ×1.3 hold margin; the brake may re-engage. Raise the hold voltage.`);
     if (marginRel < 1.3) w.push(`Release margin ×${marginRel.toFixed(2)}: pull at the full ${p.brkStroke} mm gap must beat the springs compressed to ${Fcompr.toFixed(0)} N by ≥ ×1.3 — more turns/voltage, less stroke, or wider poles.`);
     if (atGap.satLim) w.push(`Pole iron saturates at the working gap (${Bsat.toFixed(1)} T cap) — more ampere-turns won't add pull; widen the boss/rim.`);
@@ -552,8 +620,25 @@ function computeDesign(p) {
     step = { angle: stepA, stepsRev: 4 * kE, kind: hyb ? "hybrid" : "PM", wire, leads,
       Th, Th1, Th2, detent: Td, Kt: KtPh, Rs, Ls, tau: tauS, rpmC: Math.max(rpmC2, 0), kE,
       teethPP, tPitch, BtBias, stiff: stiffS, f0, J: Jr, on2, thArr: thArr6, tArr: tArr6, tNxt: tNxt6, tDet: tDet6 };
-    op = { n: 0, T: Th }; peakT = Th; noLoad = 0;
+    op = { n: 0, T: Th }; peakT = Th;
     Kt = KtPh;
+    // pull-out torque vs speed: per-phase flux constant back-solved from holding torque so the
+    // curve anchors at Th; achievable current rolls off with BEMF and phase impedance —
+    // T(ω) = √2·kφ·I_ach, I_ach = (0.9·V − kφ·ω)/√(Rs² + (kE·ω·Ls)²), clamped to Imax.
+    // Quasi-static upper bound (no mid-band resonance dip) — chopper-drive assumed above V/R.
+    {
+      const kphi = Th / Math.max(Math.SQRT2 * p.Imax, 1e-9);        // N·m/A ≡ V·s/rad per phase
+      const wMax = (0.9 * p.Vdc) / Math.max(kphi, 1e-9);            // BEMF eats the bus
+      for (let i6 = 0; i6 <= 80; i6++) {
+        const wm = (wMax * i6) / 80.5;
+        const Zp = Math.sqrt(Rs * Rs + Math.pow(kE * wm * Ls, 2));
+        const Ia = Math.min(Math.max((0.9 * p.Vdc - kphi * wm) / Math.max(Zp, 1e-9), 0), p.Imax);
+        curve.push({ n: (wm * 60) / (2 * Math.PI), T: Math.SQRT2 * kphi * Ia });
+      }
+      noLoad = (wMax * 60) / (2 * Math.PI);
+      step.kphi = kphi;
+      step.nRes = (60 * f0) / step.stepsRev;                        // rpm where step rate ≈ f0 (mid-band resonance)
+    }
     if (hyb && stepA > 15) w.push(`Hybrid at ${stepA.toFixed(1)}°/step is unusual — coarse steps (15–30°) are normally a PM-rotor stepper; switch the type or raise tooth count.`);
     if (!hyb && stepA < 15) w.push(`PM stepper at ${stepA.toFixed(1)}°/step needs ${kE} pole pairs — fine steps are normally a hybrid (toothed) rotor; switch the type.`);
     if (hyb && tPitch < 1.2) w.push(`Rotor tooth pitch ${tPitch.toFixed(2)} mm is under ~1.2 mm — hard to cut; fewer teeth or a larger rotor.`);
@@ -567,7 +652,8 @@ function computeDesign(p) {
     const PhiP = (BgAvg * Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000)) / poles; // flux per pole at the armature surface
     const Z = condPerSlot * Ns;                                     // total armature conductors
     const A2 = pathsEff;                                            // parallel paths (lap = poles × plex, wave = 2 × plex)
-    Kt = (poles * Z * PhiP) / (2 * Math.PI * A2);                   // = Ke in SI
+    Kt = (calAct ? cKe : 1) * (poles * Z * PhiP) / (2 * Math.PI * A2); // = Ke in SI (BEMF, bench-scaled)
+    const KtT9 = calAct ? Kt * (cKt / cKe) : Kt;                    // torque production with measured stall droop
     const Ra = ((RHO_CU * ((MLT / 2) * Z)) / (A2 * A2 * aBare * 1e-6)) * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
     // armature inductance seen at the brushes: airgap term (magnets ≈ air) + slot-leakage adder
     const geB = Math.max((airgap * kcGap + p.magT / mag.mur) / 1000, 1e-5);
@@ -577,14 +663,14 @@ function computeDesign(p) {
     if (Kt > 0 && Ra > 0) {
       const wNL = VphAvail / Kt;
       noLoad = (wNL * 60) / (2 * Math.PI);
-      peakT = Kt * Math.min(p.Imax, VphAvail / Ra);
-      TstallW = Kt * (VphAvail / Ra);
+      peakT = KtT9 * Math.min(p.Imax, VphAvail / Ra);
+      TstallW = KtT9 * (VphAvail / Ra);
       baseN = ((Math.max(VphAvail - p.Imax * Ra, 0) / Kt) * 60) / (2 * Math.PI);
       for (let i = 0; i <= 80; i++) {
         const wm = (wNL * i) / 80;
-        curve.push({ n: (wm * 60) / (2 * Math.PI), T: Kt * Math.min(Math.max((VphAvail - Kt * wm) / Ra, 0), p.Imax) });
+        curve.push({ n: (wm * 60) / (2 * Math.PI), T: KtT9 * Math.min(Math.max((VphAvail - Kt * wm) / Ra, 0), p.Imax) });
       }
-      op = { n: ((Math.max(VphAvail - Iph * Ra, 0) / Kt) * 60) / (2 * Math.PI), T: Kt * Math.min(Iph, p.Imax) };
+      op = { n: ((Math.max(VphAvail - Iph * Ra, 0) / Kt) * 60) / (2 * Math.PI), T: KtT9 * Math.min(Iph, p.Imax) };
     }
     // armature-reaction demag at the current limit: cross-field A·t per pole across magnet + gap
     if (airgap > 0 && p.magT > 0) {
@@ -772,6 +858,16 @@ function computeDesign(p) {
     : p.motorType === "brake" && brake
     ? brake.Pb                                                      // coil across the bus while released
     : 3 * Iph * Iph * Rhot;
+  if (calAct && cTd > 0 && curve.length) {
+    // measured rated point implies friction/windage drag the geometry model doesn't see
+    curve = curve.map((c9) => ({ ...c9, T: Math.max(c9.T - cTd, 0) }));
+    let nz9 = 0;
+    for (const c9 of curve) if (c9.T > 0) nz9 = Math.max(nz9, c9.n);
+    if (nz9 > 0) noLoad = Math.min(noLoad, nz9);
+    peakT = Math.max(peakT - cTd, 0);
+    if (op) op = { ...op, T: Math.max(op.T - cTd, 0) };
+  }
+
   // iron loss estimate (Steinmetz-style scaling from 1.5 T / 60 Hz specific loss)
   const fe = nShaft > 0 ? (nShaft * poles) / 120 : p.freq;
   // lam body radii: stator = bore→OD; brushed armature = shaft→armature OD (yoke band = core over the shaft)
@@ -916,6 +1012,7 @@ function computeDesign(p) {
     // stationary toroid: winding heat leaves through both ring faces over the covered arc
     const RextO = Math.max(p.Rext, 0) / 1000;
     const Ra20 = Math.max((latm.Ra - RextO) / (1 + 0.00393 * (p.Tcu - 20)), 1e-6);
+    latm.Ra20 = Ra20 + RextO;                                        // terminal resistance at ambient
     const kcov2 = Math.min((Math.max(p.latmSect, 1) * Math.max(p.latmSpan, 5)) / 360, 1);
     const AtorW = 2 * (Math.PI * ((p.statorID + p.statorOD) / 2 / 1000) * (p.stackL / 1000)) * kcov2; // ID + OD faces
     const RthCuT = AtorW > 0 ? 1 / (400 * AtorW) : 99;
@@ -1010,6 +1107,7 @@ function computeDesign(p) {
     Trated, nSync, nShaft, Pout, Pcu, eta, Eph, Ke, Kt, VphAvail,
     rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
     mag, BrT, HcJT, HcJmin, demagT, kcGap, BgAvg, B1, BgEff, Hdemag, demagMargin,
+    cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
     MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
     stM, rtM, Bt, By, Byr, hyr, coreMass, Bavg, TstallW, Jimp, bemf, Rhot, cog,
     Lph, LphNR, Lll, LllNR, acim, therm, acFr, Pwind, Pfe, feOp, brush, latm, brake, step,

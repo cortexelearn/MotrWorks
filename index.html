@@ -17345,7 +17345,7 @@ const PRESETS = {
         tipH: 0.8, stackL: 18, liner: 0.2, slotR: 0, shaftD: 8,
         pattern: "concentrated", layers: 2, span: 0, turns: 900, awg: 34, strands: 1, paths: 1, conn: "wye",
         motorType: "brake", Vdc: 28, Imax: 1, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
-        brkBore: 16, brkPole: 6, brkArm: 4, brkStroke: 0.2, brkSpring: 70, brkK: 15, brkSpringN: 4,
+        brkBore: 16, brkArm: 4, brkStroke: 0.2, brkSprFree: 18.9, brkSprEng: 14.2, brkK: 15, brkSpringN: 4,
         brkPktID: 33, brkBossOD: 22, brkPktD: 14, brkBobID: 24.2, brkBobOD: 32, brkBobL: 11.5,
         brkRo: 17, brkRi: 11, brkFaces: 2, brkMat: "Organic (resin-bonded)", brkMu: 0.40, brkMuD: 0.32,
         statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85, Top: 60,
@@ -17355,7 +17355,7 @@ const PRESETS = {
         tipH: 0.8, stackL: 25, liner: 0.2, slotR: 0, shaftD: 10,
         pattern: "concentrated", layers: 2, span: 0, turns: 650, awg: 29, strands: 1, paths: 1, conn: "wye",
         motorType: "brake", Vdc: 24, Imax: 1, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
-        brkBore: 26, brkPole: 6, brkArm: 6, brkStroke: 0.3, brkSpring: 200, brkK: 40, brkSpringN: 6,
+        brkBore: 26, brkArm: 6, brkStroke: 0.3, brkSprFree: 23.3, brkSprEng: 18.3, brkK: 40, brkSpringN: 6,
         brkPktID: 50, brkBossOD: 34, brkPktD: 18, brkBobID: 36.2, brkBobOD: 49, brkBobL: 15,
         brkRo: 27, brkRi: 18, brkFaces: 2, brkMat: "Organic (resin-bonded)", brkMu: 0.40, brkMuD: 0.32,
         statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85, Top: 60,
@@ -17364,7 +17364,7 @@ const PRESETS = {
         tipH: 1, stackL: 32, liner: 0.2, slotR: 0, shaftD: 15,
         pattern: "concentrated", layers: 2, span: 0, turns: 450, awg: 26, strands: 1, paths: 1, conn: "wye",
         motorType: "brake", Vdc: 24, Imax: 1, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
-        brkBore: 34, brkPole: 6, brkArm: 8, brkStroke: 0.4, brkSpring: 380, brkK: 60, brkSpringN: 6,
+        brkBore: 34, brkArm: 9, brkStroke: 0.4, brkSprFree: 30.7, brkSprEng: 24.4, brkK: 60, brkSpringN: 6,
         brkPktID: 74, brkBossOD: 54, brkPktD: 24, brkBobID: 56.2, brkBobOD: 73, brkBobL: 21.5,
         brkRo: 40, brkRi: 26, brkFaces: 2, brkMat: "Organic (resin-bonded)", brkMu: 0.40, brkMuD: 0.32,
         statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85, Top: 60,
@@ -17374,7 +17374,7 @@ const PRESETS = {
         tipH: 0.8, stackL: 16, liner: 0.2, slotR: 0, shaftD: 6,
         pattern: "concentrated", layers: 2, span: 0, turns: 420, awg: 30, strands: 1, paths: 1, conn: "wye",
         motorType: "brake", Vdc: 12, Imax: 1, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
-        brkBore: 13, brkPole: 6, brkArm: 4, brkStroke: 0.25, brkSpring: 75, brkK: 20, brkSpringN: 4,
+        brkBore: 13, brkArm: 4, brkStroke: 0.25, brkSprFree: 17.0, brkSprEng: 13.25, brkK: 20, brkSpringN: 4,
         brkPktID: 34, brkBossOD: 22, brkPktD: 13, brkBobID: 24.2, brkBobOD: 33, brkBobL: 10.5,
         brkRo: 18, brkRi: 12, brkFaces: 2, brkMat: "Organic (resin-bonded)", brkMu: 0.40, brkMuD: 0.32,
         statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85, Top: 60,
@@ -17462,9 +17462,52 @@ const INS_BUILD = {
     "Triple": (d) => d * 1.078 + 0.048,
 };
 const awgInsDia = (d, b) => (INS_BUILD[b] || INS_BUILD["Heavy"])(d);
+/* ---- actuator composition: motor result × gear train (+ brake), pure & gate-testable.
+   Per-stage efficiencies for the miniature/precision gearhead class this tool targets
+   (Maxon/Faulhaber scale catalog data): planetary 90% (GP32-class runs 80–90% single-stage,
+   ~70% three-stage; premium needle-bearing versions reach 95%+ — use the override),
+   spur 93% (single mesh per stage; e.g. a 141:1 multi-stage spur head lands ~66% overall),
+   harmonic 80% at rated load & temperature (catalog band 60–90%; drops at partial load,
+   cold, and the highest ratios). Compounded per stage: η_total = η_stage^stages. ---- */
+function composeActuator(mr, br, cfg) {
+    const w = [];
+    const type9 = ["Planetary", "Harmonic", "Spur"].includes(cfg.type) ? cfg.type : "Planetary";
+    const N = Math.max(cfg.ratio, 1), st = Math.max(Math.round(cfg.stages) || 1, 1);
+    const ETA_STAGE = { Planetary: 0.90, Spur: 0.93, Harmonic: 0.80 };
+    const etaStage = ETA_STAGE[type9];
+    const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : Math.pow(etaStage, st);
+    const spr = Math.pow(N, 1 / st);
+    const win = { Planetary: [3, 10], Spur: [1.5, 6], Harmonic: [30, 160] }[type9];
+    if (type9 === "Harmonic" && st > 1)
+        w.push("Harmonic stages are almost always single — cascading flexsplines is unusual; check availability.");
+    if (spr < win[0] * 0.999 || spr > win[1] * 1.001)
+        w.push(`Per-stage ratio ${spr.toFixed(1)}:1 is outside the typical ${type9.toLowerCase()} window (${win[0]}\u2013${win[1]}:1) — ${spr > win[1] ? "add a stage" : "drop a stage"} or change type.`);
+    if (!mr || mr.err.length)
+        return { fail: "The source motor design has errors — fix it in its tab first.", warn: w };
+    if (!mr.curve || !mr.curve.length || !(mr.Kt > 0))
+        return { fail: "The source motor has no torque-speed curve to compose — fix the design in its tab.", warn: w };
+    const curve = mr.curve.map((c) => ({ n: c.n / N, T: c.T * N * eta }));
+    if (mr.step && Number.isFinite(mr.step.nRes))
+        w.push(`Stepper source: quasi-static pull-out bound — avoid sustained output speeds near ${(mr.step.nRes / N).toFixed(1)} rpm (mid-band resonance at the motor).`);
+    const iAtOut = (Tout) => Tout / (N * eta) / mr.Kt; // motor amps for an output torque (pre-saturation)
+    const hold = br && br.brake && Number.isFinite(br.brake.Thold) ? br.brake.Thold * N : null; // static: ratio only (friction aids holding)
+    if (br && br.err && br.err.length)
+        w.push("The brake design in its tab has errors — holding torque not composed.");
+    const etaBack = Math.max(2 - 1 / eta, 0); // first-order back-drive efficiency
+    const selfLock = etaBack <= 0.02 || type9 === "Harmonic" && N >= 80;
+    return { N, st, spr, eta, etaStage, type: type9, curve,
+        noLoad: mr.noLoad / N,
+        op: mr.op ? { n: mr.op.n / N, T: mr.op.T * N * eta } : null,
+        peakT: (mr.peakT || 0) * N * eta,
+        Tcont: mr.therm && Number.isFinite(mr.therm.Tcont) ? mr.therm.Tcont * N * eta : null,
+        hold: hold !== null && br && br.err && br.err.length ? null : hold,
+        iAtOut, etaBack, selfLock, warn: w };
+}
 function computeDesign(p) {
     const w = []; // warnings
     const err = [];
+    if (p.motorType === "actuator") // composition module — no machine of its own
+        return { err, warn: w, curve: [], actuator: true, noLoad: 0, Kt: 0 };
     const Ns = Math.max(3, Math.round(p.slots));
     const poles = Math.max(2, Math.round(p.poles / 2) * 2);
     const brushedM = p.motorType === "brushed"; // slots on the rotating armature, magnets on the housing ID
@@ -17618,7 +17661,15 @@ function computeDesign(p) {
     const MLT = MLTmm / 1000; // m per turn
     const coilDia = MLTmm / Math.PI; // equivalent round-coil Ø
     const bobSuggest = Math.max(coilDia - tb, 0); // core Ø that yields this MLT
-    const Rphase = (RHO_CU * MLT * coilsPerPhase * p.turns * 1e6) / (aBare * p.strands * a * a); // ohm
+    // bench calibration (pm & brushed): captured multiplicative factors ride every downstream
+    // calculation, so design tweaks (±turns, wire, geometry) predict the REAL motor's response
+    const calAct = p.calOn === "yes" && (p.motorType === "pm" || brushedM);
+    const cKR = calAct ? Math.max(p.calKR || 1, 0.05) : 1;
+    const cKL = calAct ? Math.max(p.calKL || 1, 0.05) : 1;
+    const cKe = calAct ? Math.max(p.calKKe || 1, 0.05) : 1;
+    const cKt = calAct ? Math.max(p.calKKt || 1, 0.05) : 1;
+    const cTd = calAct ? Math.max(p.calTd || 0, 0) : 0;
+    const Rphase = cKR * (RHO_CU * MLT * coilsPerPhase * p.turns * 1e6) / (aBare * p.strands * a * a); // ohm
     const Rll = p.conn === "wye" ? 2 * Rphase : (2 / 3) * Rphase;
     // operating resistance: copper at winding temp + drive FETs / leads per phase
     const Rhot = Rphase * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
@@ -17755,7 +17806,7 @@ function computeDesign(p) {
     // back-EMF constant at the working airgap flux
     const fluxPole = (2 * BgEff * D * L) / poles; // Wb
     const Eph = 4.44 * p.freq * kw * Nser * fluxPole; // rms @ f
-    const Ke = wSync > 0 ? Eph / wSync : 0; // V_rms per mech rad/s
+    const Ke = (calAct ? cKe : 1) * (wSync > 0 ? Eph / wSync : 0); // V_rms per mech rad/s
     // first-order demagnetization check at the drive current limit
     let Hdemag = 0, demagMargin = 1;
     if (p.motorType === "pm" && airgap > 0 && p.magT > 0) {
@@ -17775,7 +17826,7 @@ function computeDesign(p) {
     const lamSlot = bAvgSlot > 0 ? Math.max(hs, 0) / (3 * bAvgSlot) + p.tipH / Math.max(p.slotOpen, 0.1) : 1.5;
     const Lslot = ((4 * 3) / Ns) * MU0 * (p.stackL / 1000) * lamSlot * Nser * Nser;
     const Lend = 0.3 * Lslot; // end-winding leakage, rule-of-thumb fraction
-    const Lph = Lmag + Lslot + Lend; // rotor installed
+    const Lph = cKL * (Lmag + Lslot + Lend); // rotor installed
     const LmagNR = (3 / Math.PI) * MU0 * ((D * L) / (p.statorID / 2000)) * Math.pow(kw * Nser, 2) / (poles * poles);
     const LphNR = LmagNR + Lslot + Lend; // rotor removed: flux must cross the open bore
     const Lll = p.conn === "wye" ? 2 * Lph : (2 / 3) * Lph;
@@ -17798,6 +17849,8 @@ function computeDesign(p) {
             : (p.ctrl === "foc" ? p.Vdc / (Math.sqrt(3) * Math.SQRT2) // SVM linear limit, L-L bridge
                 : (Math.SQRT2 / Math.PI) * p.Vdc); // six-step fundamental
         Kt = (p.ctrl === "foc" ? 1.0 : 0.955) * 3 * Ke * (tapDrive ? 0.5 : 1); // half-winding drive halves torque/amp
+        if (calAct)
+            Kt *= cKt / cKe; // measured stall vs no-load = real Kt droop
         if (Ke > 0 && Rhot > 0) {
             // steady-state phasor limit: Vph² = (R·I + Ke·ω)² + (pp·ω·L·I)²  (Id = 0 below base speed)
             const pp3 = poles / 2, lamF = Ke / pp3, Lq2 = Math.max(Lph, 1e-7);
@@ -17884,21 +17937,40 @@ function computeDesign(p) {
         const Ib = p.Vdc / Math.max(Rb, 1e-6);
         const NI = Ntot * Ib;
         const mu0b = 4e-7 * Math.PI;
-        const bodyM = STEELS[p.statorMat] || { Bmax: 1.6, mur: 700 };
+        const bodyM = STEELS[p.statorMat] || { Bmax: 1.6, mur: 700 }; // backiron (pot core)
+        const armM = STEELS[p.rotorMat] || bodyM; // sliding armature plate
         const Bsat = Math.min(bodyM.Bmax || 1.6, 2.1);
-        // iron path as equivalent extra gap: down the boss, across the back web, up the rim, through the armature
-        const lFe = (2 * pktD + (rOD - rThru) + p.brkArm) / 1000;
-        const gFe = lFe / Math.max(bodyM.mur || 700, 100);
+        const BsatA = Math.min(armM.Bmax || 1.6, 2.1);
+        // iron path as equivalent extra gap, split by material: boss + web + rim in the backiron,
+        // the radial run across the armature in its own steel
+        const lFeB = (2 * pktD + (rOD - rThru) / 2) / 1000;
+        const lFeA = ((rOD - rThru) / 2 + p.brkArm) / 1000;
+        const gFe = lFeB / Math.max(bodyM.mur || 700, 100) + lFeA / Math.max(armM.mur || 700, 100);
+        const AarmMin = 2 * Math.PI * (rBoss / 1000) * (Math.max(p.brkArm, 0.5) / 1000); // tightest armature ring section
         const pullAt = (g) => {
             const Rtot = (g / (mu0b * Ain)) + (g / (mu0b * Aout)) + (gFe / (mu0b * Amin));
             let Phi = NI / Rtot;
-            Phi = Math.min(Phi, Bsat * Amin); // saturation cap
+            Phi = Math.min(Phi, Bsat * Amin, BsatA * AarmMin); // saturation cap: backiron OR armature
             const F = (Phi * Phi / (2 * mu0b)) * (1 / Ain + 1 / Aout);
-            return { F, Phi, Bin: Phi / Ain, Bout: Phi / Aout, satLim: Phi >= Bsat * Amin * 0.999 };
+            return { F, Phi, Bin: Phi / Ain, Bout: Phi / Aout, Barm: Phi / AarmMin,
+                satLim: Phi >= Math.min(Bsat * Amin, BsatA * AarmMin) * 0.999 };
         };
         const atGap = pullAt(g0), atSeat = pullAt(gRes);
-        const Fclamp = Math.max(p.brkSpring, 1);
-        const Fcompr = Fclamp + Math.max(p.brkK, 0) * Math.max(p.brkStroke, 0.05);
+        // spring pack from catalog-style heights: free length L0, engaged height L1 (springs seat on
+        // the pocket floor and bear on the armature, so L1 physically = pocket depth + air gap);
+        // pulling in compresses them a further stroke.
+        const sprL0 = Math.max(Number.isFinite(p.brkSprFree) ? p.brkSprFree : 0, 0.1);
+        const sprL1 = Math.max(Number.isFinite(p.brkSprEng) ? p.brkSprEng : 0, 0.1);
+        const strk9 = Math.max(p.brkStroke, 0.05);
+        const Fclamp = Math.max(Math.max(p.brkK, 0) * Math.max(sprL0 - sprL1, 0), 1);
+        const Fcompr = Fclamp + Math.max(p.brkK, 0) * strk9;
+        const sprCav = pktD + strk9; // the spring's working cavity
+        if (sprL0 <= sprL1)
+            w.push(`Spring free length ${sprL0} mm ≤ engaged height ${sprL1} mm — no preload; the brake cannot clamp.`);
+        if (Math.abs(sprL1 - sprCav) > 1.5)
+            w.push(`Engaged spring height ${sprL1} mm vs pocket depth + air gap = ${sprCav.toFixed(1)} mm — springs seat on the pocket floor and bear on the armature, so these should agree (or call out dedicated spring seats).`);
+        if (sprL1 - strk9 < 0.4 * sprL0)
+            w.push(`Released spring height ${(sprL1 - strk9).toFixed(1)} mm is under 40% of the ${sprL0} mm free length — coil-bind (solid) risk at pull-in; deepen the pocket or pick a shorter-travel spring.`);
         const marginRel = atGap.F / Fcompr;
         const marginHold = atSeat.F / Fcompr;
         const ro = Math.max(p.brkRo, 2) / 1000, ri = Math.max(Math.min(p.brkRi, p.brkRo - 1), 1) / 1000;
@@ -17941,7 +18013,8 @@ function computeDesign(p) {
         brake = { Thold, Tdyn, re: re * 1000, reUP: reUP * 1000, faces, Fclamp, Fcompr, padP,
             pMax: matB ? matB.pMax : NaN, Tmax: matB ? matB.Tmax : NaN,
             Fpull: atGap.F, Fseat: atSeat.F, marginRel, marginHold, satLim: atGap.satLim,
-            Bin: atGap.Bin, Bout: atGap.Bout, Bback, NI, Rb, Ib, Pb, Ihold, Phold, eco, TcuB, RthB, Lb, tau: Lb / Math.max(Rb, 1e-6),
+            Bin: atGap.Bin, Bout: atGap.Bout, Barm: atSeat.Barm, Bback, NI, Rb, Ib, Pb, Ihold, Phold, eco, TcuB, RthB, Lb, tau: Lb / Math.max(Rb, 1e-6),
+            Fclamp, Fcompr, sprL0, sprL1, sprCav,
             Vrel: Math.min(Vrel, 10 * p.Vdc), capT: capB, Ain: Ain * 1e6, Aout: Aout * 1e6,
             hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, wireLen };
         op = { n: 0, T: Thold };
@@ -17973,6 +18046,8 @@ function computeDesign(p) {
             w.push(`Coil won't fit: ${Ntot} turns vs ≈ ${Math.floor(capB)} at this wire on a ${bobL} mm bobbin before the pocket ID (85% winding efficiency).`);
         if (Number.isFinite(brake.Ipull) && brake.Ipull > Ib)
             w.push(`Pull-in needs ${brake.Ipull.toFixed(2)} A but the bus only pushes ${Ib.toFixed(2)} A — the brake will not release at ${p.Vdc} V.`);
+        if (Number.isFinite(atSeat.Barm) && atSeat.Barm > BsatA * 0.95)
+            w.push(`Armature ring section runs ${atSeat.Barm.toFixed(2)} T vs ~${BsatA.toFixed(1)} T for ${p.rotorMat} — thicken the armature or pick a higher-Bsat plate.`);
         if (eco < 1 && Number.isFinite(Idrop) && Ihold < 1.3 * Idrop)
             w.push(`Economizer hold ${(eco * 100).toFixed(0)}% gives ${Ihold.toFixed(2)} A vs drop-out ${Idrop.toFixed(3)} A — under a ×1.3 hold margin; the brake may re-engage. Raise the hold voltage.`);
         if (marginRel < 1.3)
@@ -18070,8 +18145,24 @@ function computeDesign(p) {
             teethPP, tPitch, BtBias, stiff: stiffS, f0, J: Jr, on2, thArr: thArr6, tArr: tArr6, tNxt: tNxt6, tDet: tDet6 };
         op = { n: 0, T: Th };
         peakT = Th;
-        noLoad = 0;
         Kt = KtPh;
+        // pull-out torque vs speed: per-phase flux constant back-solved from holding torque so the
+        // curve anchors at Th; achievable current rolls off with BEMF and phase impedance —
+        // T(ω) = √2·kφ·I_ach, I_ach = (0.9·V − kφ·ω)/√(Rs² + (kE·ω·Ls)²), clamped to Imax.
+        // Quasi-static upper bound (no mid-band resonance dip) — chopper-drive assumed above V/R.
+        {
+            const kphi = Th / Math.max(Math.SQRT2 * p.Imax, 1e-9); // N·m/A ≡ V·s/rad per phase
+            const wMax = (0.9 * p.Vdc) / Math.max(kphi, 1e-9); // BEMF eats the bus
+            for (let i6 = 0; i6 <= 80; i6++) {
+                const wm = (wMax * i6) / 80.5;
+                const Zp = Math.sqrt(Rs * Rs + Math.pow(kE * wm * Ls, 2));
+                const Ia = Math.min(Math.max((0.9 * p.Vdc - kphi * wm) / Math.max(Zp, 1e-9), 0), p.Imax);
+                curve.push({ n: (wm * 60) / (2 * Math.PI), T: Math.SQRT2 * kphi * Ia });
+            }
+            noLoad = (wMax * 60) / (2 * Math.PI);
+            step.kphi = kphi;
+            step.nRes = (60 * f0) / step.stepsRev; // rpm where step rate ≈ f0 (mid-band resonance)
+        }
         if (hyb && stepA > 15)
             w.push(`Hybrid at ${stepA.toFixed(1)}°/step is unusual — coarse steps (15–30°) are normally a PM-rotor stepper; switch the type or raise tooth count.`);
         if (!hyb && stepA < 15)
@@ -18094,7 +18185,8 @@ function computeDesign(p) {
         const PhiP = (BgAvg * Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000)) / poles; // flux per pole at the armature surface
         const Z = condPerSlot * Ns; // total armature conductors
         const A2 = pathsEff; // parallel paths (lap = poles × plex, wave = 2 × plex)
-        Kt = (poles * Z * PhiP) / (2 * Math.PI * A2); // = Ke in SI
+        Kt = (calAct ? cKe : 1) * (poles * Z * PhiP) / (2 * Math.PI * A2); // = Ke in SI (BEMF, bench-scaled)
+        const KtT9 = calAct ? Kt * (cKt / cKe) : Kt; // torque production with measured stall droop
         const Ra = ((RHO_CU * ((MLT / 2) * Z)) / (A2 * A2 * aBare * 1e-6)) * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
         // armature inductance seen at the brushes: airgap term (magnets ≈ air) + slot-leakage adder
         const geB = Math.max((airgap * kcGap + p.magT / mag.mur) / 1000, 1e-5);
@@ -18104,14 +18196,14 @@ function computeDesign(p) {
         if (Kt > 0 && Ra > 0) {
             const wNL = VphAvail / Kt;
             noLoad = (wNL * 60) / (2 * Math.PI);
-            peakT = Kt * Math.min(p.Imax, VphAvail / Ra);
-            TstallW = Kt * (VphAvail / Ra);
+            peakT = KtT9 * Math.min(p.Imax, VphAvail / Ra);
+            TstallW = KtT9 * (VphAvail / Ra);
             baseN = ((Math.max(VphAvail - p.Imax * Ra, 0) / Kt) * 60) / (2 * Math.PI);
             for (let i = 0; i <= 80; i++) {
                 const wm = (wNL * i) / 80;
-                curve.push({ n: (wm * 60) / (2 * Math.PI), T: Kt * Math.min(Math.max((VphAvail - Kt * wm) / Ra, 0), p.Imax) });
+                curve.push({ n: (wm * 60) / (2 * Math.PI), T: KtT9 * Math.min(Math.max((VphAvail - Kt * wm) / Ra, 0), p.Imax) });
             }
-            op = { n: ((Math.max(VphAvail - Iph * Ra, 0) / Kt) * 60) / (2 * Math.PI), T: Kt * Math.min(Iph, p.Imax) };
+            op = { n: ((Math.max(VphAvail - Iph * Ra, 0) / Kt) * 60) / (2 * Math.PI), T: KtT9 * Math.min(Iph, p.Imax) };
         }
         // armature-reaction demag at the current limit: cross-field A·t per pole across magnet + gap
         if (airgap > 0 && p.magT > 0) {
@@ -18337,6 +18429,19 @@ function computeDesign(p) {
                 : p.motorType === "brake" && brake
                     ? brake.Pb // coil across the bus while released
                     : 3 * Iph * Iph * Rhot;
+    if (calAct && cTd > 0 && curve.length) {
+        // measured rated point implies friction/windage drag the geometry model doesn't see
+        curve = curve.map((c9) => ({ ...c9, T: Math.max(c9.T - cTd, 0) }));
+        let nz9 = 0;
+        for (const c9 of curve)
+            if (c9.T > 0)
+                nz9 = Math.max(nz9, c9.n);
+        if (nz9 > 0)
+            noLoad = Math.min(noLoad, nz9);
+        peakT = Math.max(peakT - cTd, 0);
+        if (op)
+            op = { ...op, T: Math.max(op.T - cTd, 0) };
+    }
     // iron loss estimate (Steinmetz-style scaling from 1.5 T / 60 Hz specific loss)
     const fe = nShaft > 0 ? (nShaft * poles) / 120 : p.freq;
     // lam body radii: stator = bore→OD; brushed armature = shaft→armature OD (yoke band = core over the shaft)
@@ -18487,6 +18592,7 @@ function computeDesign(p) {
         // stationary toroid: winding heat leaves through both ring faces over the covered arc
         const RextO = Math.max(p.Rext, 0) / 1000;
         const Ra20 = Math.max((latm.Ra - RextO) / (1 + 0.00393 * (p.Tcu - 20)), 1e-6);
+        latm.Ra20 = Ra20 + RextO; // terminal resistance at ambient
         const kcov2 = Math.min((Math.max(p.latmSect, 1) * Math.max(p.latmSpan, 5)) / 360, 1);
         const AtorW = 2 * (Math.PI * ((p.statorID + p.statorOD) / 2 / 1000) * (p.stackL / 1000)) * kcov2; // ID + OD faces
         const RthCuT = AtorW > 0 ? 1 / (400 * AtorW) : 99;
@@ -18582,6 +18688,7 @@ function computeDesign(p) {
         Trated, nSync, nShaft, Pout, Pcu, eta, Eph, Ke, Kt, VphAvail,
         rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
         mag, BrT, HcJT, HcJmin, demagT, kcGap, BgAvg, B1, BgEff, Hdemag, demagMargin,
+        cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
         MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
         stM, rtM, Bt, By, Byr, hyr, coreMass, Bavg, TstallW, Jimp, bemf, Rhot, cog,
         Lph, LphNR, Lll, LllNR, acim, therm, acFr, Pwind, Pfe, feOp, brush, latm, brake, step,
@@ -19775,6 +19882,73 @@ function CrossSection({ p, r, anim, phaseSel }) {
                 React.createElement("path", { d: "M0,0 L7,3 L0,6 Z", fill: COPPER }))),
         React.createElement("text", { x: cx, y: cy + rRot * 0.62, textAnchor: "middle", className: "svgLabel" }, r.rotation)));
 }
+/* ---- Actuator composite outline: gearhead > motor > brake on one axial section ---- */
+function ActuatorOutline({ motorP, brakeP, act, withBrk, us, gbOD, gbLen }) {
+    const dl = (mm) => (us === "in" ? (mm / 25.4).toFixed(2) + "\u2033" : Math.round(mm) + " mm");
+    // component envelopes (mm) — first-order typical proportions, disclosed below
+    const modOD = motorP.statorOD, stk = motorP.stackL;
+    const ovh = motorP.headH > 0 ? motorP.headH : Math.max(0.16 * modOD, 5); // coil head axial overhang / side
+    const Lm = stk + 2 * (ovh + 3); // stack + heads + endbells
+    const gODa = modOD * (act.type === "Harmonic" ? 1.0 : 1.1);
+    const gOD = gbOD > 0 ? gbOD : gODa; // specified envelope wins
+    const perStage = act.type === "Harmonic" ? 0.55 : act.type === "Planetary" ? 0.42 : 0.34;
+    const Lg = gbLen > 0 ? gbLen : gODa * (perStage * act.st + 0.22); // stages + output bearing block
+    const hasB = withBrk && brakeP;
+    const bOD = hasB ? brakeP.statorOD : 0;
+    const Lb = hasB ? brakeP.stackL + (brakeP.brkArm || 4) + 4 : 0; // backiron + armature/disc pack
+    const shD = Math.max(motorP.shaftD || 5, 3);
+    const oShD = Math.max(gOD * 0.16, shD);
+    const Ltot = Lg + Lm + Lb, stub = 12;
+    const W = 430, H = 250, yC = 118, mLx = 56;
+    const k = Math.min((W - mLx - 44) / (Ltot + stub), (H - 96) / Math.max(gOD, modOD, bOD || 1));
+    const X0 = mLx + stub * k;
+    const R = (od) => (od / 2) * k;
+    const blk = (x, L, od, fill, key) => (React.createElement("rect", { key: key, x: X0 + x * k, y: yC - R(od), width: L * k, height: 2 * R(od), fill: fill, stroke: "#334155", strokeWidth: "1" }));
+    const dimSeg = (x, L, label, row) => {
+        const y9 = yC + R(Math.max(gOD, modOD, bOD || 1)) + 14 + row * 15;
+        return (React.createElement("g", { key: "d" + label },
+            React.createElement("line", { x1: X0 + x * k, y1: y9, x2: X0 + (x + L) * k, y2: y9, stroke: "#64748B", strokeWidth: "0.8" }),
+            React.createElement("line", { x1: X0 + x * k, y1: y9 - 3, x2: X0 + x * k, y2: y9 + 3, stroke: "#64748B", strokeWidth: "0.8" }),
+            React.createElement("line", { x1: X0 + (x + L) * k, y1: y9 - 3, x2: X0 + (x + L) * k, y2: y9 + 3, stroke: "#64748B", strokeWidth: "0.8" }),
+            React.createElement("text", { x: X0 + (x + L / 2) * k, y: y9 - 3, textAnchor: "middle", className: "dim" }, label)));
+    };
+    const odLbl = (x, od, txt) => (React.createElement("g", { key: "o" + txt },
+        React.createElement("line", { x1: X0 + x * k, y1: yC - R(od), x2: X0 + x * k, y2: yC - R(od) - 8, stroke: "#94A3B8", strokeWidth: "0.6", strokeDasharray: "2 2" }),
+        React.createElement("text", { x: X0 + x * k, y: yC - R(od) - 11, textAnchor: "middle", className: "dim" }, txt)));
+    const xm = Lg, xb = Lg + Lm; // block start coordinates (mm)
+    return (React.createElement("svg", { id: "svg-actline", xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${W} ${H}`, className: "chart" },
+        React.createElement("style", null, SVGCSS),
+        React.createElement("text", { x: W / 2, y: 14, textAnchor: "middle", className: "dim" }, `output \u2039 ${act.type.toLowerCase()} ${act.st}-stage ${act.N}:1 \u203a motor${hasB ? " \u203a brake" : ""} — typical proportions`),
+        React.createElement("line", { x1: 16, y1: yC, x2: W - 12, y2: yC, stroke: "#94A3B8", strokeWidth: "0.7", strokeDasharray: "9 3 2 3" }),
+        React.createElement("rect", { x: X0, y: yC - (shD / 2) * k, width: (Ltot) * k, height: shD * k, fill: "#8A97A8", stroke: "#334155", strokeWidth: "0.7" }),
+        React.createElement("rect", { x: X0 - stub * k, y: yC - (oShD / 2) * k, width: stub * k, height: oShD * k, fill: "#8A97A8", stroke: "#334155", strokeWidth: "0.9" }),
+        blk(0, Lg, gOD, "#B9C2CE", "g"),
+        React.createElement("rect", { x: X0, y: yC - R(gOD), width: Lg * k, height: 5, fill: "#8A97A8" }),
+        React.createElement("rect", { x: X0, y: yC + R(gOD) - 5, width: Lg * k, height: 5, fill: "#8A97A8" }),
+        Array.from({ length: act.st - 1 }, (_, i9) => {
+            const xd = X0 + (Lg * 0.22 + ((Lg * 0.78) / act.st) * (i9 + 1)) * k;
+            return React.createElement("line", { key: "st" + i9, x1: xd, y1: yC - R(gOD) + 5, x2: xd, y2: yC + R(gOD) - 5, stroke: "#64748B", strokeWidth: "0.8", strokeDasharray: "4 3" });
+        }),
+        React.createElement("text", { x: X0 + (Lg / 2) * k, y: yC - R(gOD) * 0.45, textAnchor: "middle", className: "wnum" }, act.type.toLowerCase()),
+        blk(xm, Lm, modOD, "#C7CFDA", "m"),
+        React.createElement("rect", { x: X0 + (xm + (Lm - stk) / 2) * k, y: yC - R(modOD * 0.94), width: stk * k, height: 2 * R(modOD * 0.94), fill: "#9AA7B8", stroke: "#334155", strokeWidth: "0.7" }),
+        React.createElement("rect", { x: X0 + (xm + (Lm - stk) / 2 - ovh) * k, y: yC - R(modOD * 0.8), width: ovh * k, height: 2 * R(modOD * 0.8), fill: "#C87F3D", opacity: "0.9" }),
+        React.createElement("rect", { x: X0 + (xm + (Lm + stk) / 2) * k, y: yC - R(modOD * 0.8), width: ovh * k, height: 2 * R(modOD * 0.8), fill: "#C87F3D", opacity: "0.9" }),
+        React.createElement("text", { x: X0 + (xm + Lm / 2) * k, y: yC - R(modOD) * 0.45, textAnchor: "middle", className: "wnum" }, motorP.motorType === "brushed" ? "brushed DC" : "BLDC"),
+        hasB && (React.createElement("g", null,
+            blk(xb, brakeP.stackL, bOD, "#B9C2CE", "b"),
+            React.createElement("rect", { x: X0 + (xb + brakeP.stackL) * k, y: yC - R(bOD * 0.96), width: Math.max((brakeP.brkArm || 4) * k, 2.5), height: 2 * R(bOD * 0.96), fill: "#8A97A8", stroke: "#334155", strokeWidth: "0.7" }),
+            React.createElement("rect", { x: X0 + (xb + brakeP.stackL + (brakeP.brkArm || 4)) * k, y: yC - R(bOD * 0.9), width: Math.max(3 * k, 2), height: 2 * R(bOD * 0.9), fill: "#7B8494", stroke: "#334155", strokeWidth: "0.7" }),
+            React.createElement("text", { x: X0 + (xb + Lb / 2) * k, y: yC - R(bOD) - 22, textAnchor: "middle", className: "wnum" }, "brake"),
+            React.createElement("line", { x1: X0 + (xb + Lb / 2) * k, y1: yC - R(bOD) - 18, x2: X0 + (xb + Lb / 2) * k, y2: yC - R(bOD) + 2, stroke: "#94A3B8", strokeWidth: "0.6", strokeDasharray: "2 2" }))),
+        odLbl(Lg * 0.5, gOD, `\u00d8${dl(gOD)}`),
+        odLbl(xm + Lm * 0.5, modOD, `\u00d8${dl(modOD)}`),
+        hasB && odLbl(xb + Lb * 0.72, bOD, `\u00d8${dl(bOD)}`),
+        dimSeg(0, Lg, dl(Lg), 0),
+        dimSeg(xm, Lm, dl(Lm), 0),
+        hasB && dimSeg(xb, Lb, dl(Lb), 0),
+        dimSeg(0, Ltot, `overall ${dl(Ltot)}`, 1)));
+}
 function TorqueSpeedChart({ r, us }) {
     const W = 330, H = 240, mL = 50, mB = 36, mT = 14, mR = 14;
     if (!r.curve.length)
@@ -20120,7 +20294,8 @@ function SlotDetail({ p, r, us }) {
     const r0 = p.statorID / 2, r1 = r0 + p.tipH, r2 = r1 + r.hs, r3 = r2 + p.yoke, rRt = p.rotorOD / 2;
     const rc = r.rcFil || 0, pitch = (2 * Math.PI) / Ns;
     const dAng = 1.5 * pitch; // ±1.5 slot pitches: center slot + neighbors
-    const rIn = Math.max(rRt - Math.max(p.magT, 0) - Math.min(5, rRt * 0.3), 1);
+    const magT9 = p.motorType === "pm" ? Math.max(p.magT || 0, 0) : 0; // induction rotor has no magnet band
+    const rIn = Math.max(rRt - magT9 - Math.min(5, rRt * 0.3), 1);
     const k = Math.min((W - 84) / (2 * r3 * Math.sin(dAng)), (H - 66) / (r3 - rIn * Math.cos(dAng)));
     const Cx = W / 2, Cy = 26 + r3 * k; // motor center below the canvas
     const P = (rad, a) => `${(Cx + rad * k * Math.sin(a)).toFixed(2)} ${(Cy - rad * k * Math.cos(a)).toFixed(2)}`;
@@ -20353,7 +20528,7 @@ function AxialCutaway({ p, r, us, anim }) {
                 React.createElement("text", { x: (x0 + x1) / 2, y: y - 3, textAnchor: "middle", className: "dim" }, label)));
             const rSprM = (rBossm + rPktm) / 2;
             const xPkt0 = xBody0, xPkt1 = xBody0 + pktDpx; // pocket opens toward the armature
-            const xBob0 = xPkt0 + 1.5, xBob1 = Math.min(xBob0 + bobLpx, xPkt1 - 1);
+            const xBob1 = xPkt1 - 1, xBob0 = Math.max(xBob1 - bobLpx, xPkt0 + 1); // bobbin seats at the pocket bottom
             const rBobm = p.brkBobID / 2, rCoilm = ((r.brake && r.brake.coilOD) || p.brkBobID + 2) / 2;
             const rFlgm = Math.min(p.brkBobOD / 2, rPktm - 0.3); // flange to the max-finish Ø, inside the pocket
             return (React.createElement("g", null,
@@ -20367,14 +20542,40 @@ function AxialCutaway({ p, r, us, anim }) {
                 bandV(xBob0, xBob1, rBobm, rCoilm, "#E8933A", "coil"),
                 zig(xArm + tArm, xPkt1, Y(rSprM), "sprT"),
                 zig(xArm + tArm, xPkt1, yC + rSprM * k, "sprB"),
-                bandV(xArm, xArm + tArm, rThrum, rODm, "#7C9885", "arm"),
-                bandV(xDisc, xDisc + tD, riLm, roLm, "#3F3F46", "disc"),
-                bandV(xPP, xDisc, rThrum * 0.8, rODm, "#5B7B9A", "pp"),
-                React.createElement("rect", { x: xPP - 6, y: Y(riLm), width: (xDisc + tD - xPP) + 12, height: riLm * 2 * k, fill: "#B5C9A5", stroke: "#334155", strokeWidth: "0.9" }),
+                (() => {
+                    const rHubm = Math.max(riLm * 0.8, rThrum + 1.5); // hub OD — the disk splines onto it
+                    return (React.createElement("g", null,
+                        bandV(xArm, xArm + tArm, rHubm + 0.8, rODm, "#7C9885", "arm"),
+                        p.brkFaces >= 2 ? (React.createElement("g", null,
+                            bandV(xDisc + 1.4, xDisc + tD - 1.4, rHubm, roLm, "#8A97A8", "discCore"),
+                            bandV(xDisc, xDisc + 1.4, riLm, roLm, "#3F3F46", "linA"),
+                            bandV(xDisc + tD - 1.4, xDisc + tD, riLm, roLm, "#3F3F46", "linB"),
+                            bandV(xPP, xDisc, rHubm + 0.8, rODm * 0.98, "#5B7B9A", "pp"),
+                            React.createElement("rect", { x: xPP, y: Y(rODm * 0.9) - 1.6, width: xBody0 - xPP, height: 3.2, fill: "#52525B", stroke: "#334155", strokeWidth: "0.5" }),
+                            React.createElement("rect", { x: xPP, y: yC + rODm * 0.9 * k - 1.6, width: xBody0 - xPP, height: 3.2, fill: "#52525B", stroke: "#334155", strokeWidth: "0.5" }))) : (React.createElement("g", null,
+                            bandV(xDisc, xDisc + tD, rHubm, roLm, "#8A97A8", "discSteel"),
+                            bandV(xArm - 1.6, xArm, riLm, roLm, "#3F3F46", "linArm"))),
+                        bandV((p.brkFaces >= 2 ? xPP : xDisc) - 7, xDisc + tD + 5, Math.max((p.shaftD / 2) + 0.3, 1.5), rHubm, "#B5C9A5", "hub")));
+                })(),
                 React.createElement("rect", { x: xPP - 26, y: yC - Math.max((p.shaftD / 2) * k, 3.5), width: xWall + 20 - (xPP - 26), height: Math.max((p.shaftD / 2) * k, 3.5) * 2, fill: "#9AA3AE", stroke: "#334155" }),
                 on && React.createElement("g", null,
                     React.createElement("line", { x1: xDisc + tD, y1: yC - roLm * k * 0.7, x2: xArm, y2: yC - roLm * k * 0.7, stroke: "#059669", strokeWidth: "1.6" }),
-                    React.createElement("text", { x: (xDisc + tD + xArm) / 2, y: yC - roLm * k * 0.7 - 4, textAnchor: "middle", className: "dim" }, "disc free")),
+                    React.createElement("text", { x: (xDisc + tD + xArm) / 2, y: yC - roLm * k * 0.7 - 4, textAnchor: "middle", className: "dim" }, "disc free"),
+                    (() => {
+                        const xA9 = xArm + tArm / 2, xW9 = (xPkt1 + xWall - 4) / 2;
+                        const loop = (rIn9, rOut9, half, kq) => {
+                            const y1 = half * (rOut9 * k), y2 = half * (rIn9 * k);
+                            return React.createElement("path", { key: kq, d: `M ${xA9} ${yC + y1} L ${xW9} ${yC + y1} L ${xW9} ${yC + y2} L ${xA9} ${yC + y2} Z`, fill: "none", stroke: "#2563EB", strokeWidth: "1.1", strokeDasharray: "5 3", opacity: "0.75", strokeLinejoin: "round" });
+                        };
+                        const rRim1 = (rPktm * 0.35 + rODm * 0.65), rRim2 = (rPktm * 0.7 + rODm * 0.3);
+                        const rBos1 = (rThrum * 0.3 + rBossm * 0.7), rBos2 = (rThrum * 0.65 + rBossm * 0.35);
+                        return React.createElement("g", null,
+                            loop(rBos1, rRim1, -1, "fxU1"),
+                            loop(rBos2, rRim2, -1, "fxU2"),
+                            loop(rBos1, rRim1, 1, "fxL1"),
+                            loop(rBos2, rRim2, 1, "fxL2"),
+                            React.createElement("text", { x: (xA9 + xW9) / 2, y: Y((rBossm + rPktm) / 2) + 4, textAnchor: "middle", style: { fontSize: 9, fill: "#2563EB", fontStyle: "italic" } }, "\u03A6"));
+                    })()),
                 !on && React.createElement("g", null,
                     React.createElement("line", { x1: xArm + tArm, y1: Y(rODm) - 8, x2: xBody0, y2: Y(rODm) - 8, stroke: PEACH, strokeWidth: "1.6" }),
                     React.createElement("text", { x: (xArm + tArm + xBody0) / 2, y: Y(rODm) - 12, textAnchor: "middle", className: "dim" },
@@ -20400,7 +20601,7 @@ function AxialCutaway({ p, r, us, anim }) {
                 React.createElement("line", { x1: 96, y1: 57, x2: (xBob0 + xBob1) / 2, y2: Y(rCoilm) + 2, stroke: "#7C4A1E", strokeWidth: "0.6", strokeDasharray: "3 2" }),
                 React.createElement("text", { x: 14, y: 50, className: "dim", style: { fill: "#7C4A1E" } }, `coil \u00d8${dl((r.brake && r.brake.coilOD) || 0)}`),
                 React.createElement("text", { x: 14, y: 61, className: "dim", style: { fill: "#7C4A1E" } }, `clr ${r.brake ? r.brake.clr.toFixed(2) : "\u2014"} mm in pocket`),
-                React.createElement("text", { x: xPP + tPP / 2 + 3, y: yC, textAnchor: "middle", className: "wnum", transform: `rotate(-90 ${xPP + tPP / 2 + 3} ${yC})` }, "pressure plate"),
+                p.brkFaces >= 2 && React.createElement("text", { x: xPP + tPP / 2 + 3, y: yC, textAnchor: "middle", className: "wnum", transform: `rotate(-90 ${xPP + tPP / 2 + 3} ${yC})` }, "pressure plate"),
                 React.createElement("text", { x: xDisc + tD / 2, y: yC + roLm * k + 11, textAnchor: "middle", className: "wnum" }, "disc"),
                 React.createElement("text", { x: xArm + tArm / 2, y: yC + 4, textAnchor: "middle", className: "wnum", transform: `rotate(-90 ${xArm + tArm / 2} ${yC + 4})` }, "armature"),
                 React.createElement("text", { x: 14, y: 34, className: "wlbl", style: { fill: on ? "#059669" : "#B91C1C", fontSize: 11 } }, on ? "POWER ON — armature pulled in (released)" : "POWER OFF — springs clamp the disc (engaged)")));
@@ -20819,12 +21020,13 @@ function synthEnvelope(wiz, p, us) {
                 for (const pktD of pktDC) {
                     if (pktID - boss < 6 || od - pktID < 4 || boss - bore < 5 || pktD >= stk - 1)
                         continue;
+                    const sprEng9 = +(pktD + stroke).toFixed(2), sprFree9 = +(sprEng9 + Fspr / kSpr).toFixed(1);
                     const base = { ...p, motorType: "brake", statorOD: od, stackL: stk, shaftD: Math.max(bore - 2, 3),
-                        brkBore: bore, brkRo: ro9, brkRi: ri9, brkSpring: Math.round(Fspr), brkK: kSpr, brkSpringN: od < 45 ? 4 : 6,
+                        brkBore: bore, brkRo: ro9, brkRi: ri9, brkSprFree: sprFree9, brkSprEng: sprEng9, brkK: kSpr, brkSpringN: od < 45 ? 4 : 6,
                         brkStroke: stroke, brkArm: +Math.max(od / 10, 3).toFixed(1), brkFaces: 2, brkMu: 0.40, brkMuD: 0.32,
                         brkMat: "Organic (resin-bonded)", brkBossOD: boss, brkPktID: pktID, brkPktD: pktD,
                         brkBobID: +(boss + 2.2).toFixed(1), brkBobOD: pktID - 1, brkBobL: Math.max(pktD - 2.5, 3),
-                        brkPole: 6, Vdc, Imax: Math.max(Imax, 0.5), loadMode: "J", strands: 1, endMode: "auto", seq: "ABC",
+                        Vdc, Imax: Math.max(Imax, 0.5), loadMode: "J", strands: 1, endMode: "auto", seq: "ABC",
                         statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85,
                         Tcu: 100, Rext: 0, conn: "wye", pattern: "concentrated", layers: 2, span: 0, paths: 1 };
                     for (const turns of [220, 300, 400, 520, 680, 880, 1120, 1400])
@@ -20867,7 +21069,7 @@ function synthEnvelope(wiz, p, us) {
             return { fail: "⚠ No brake construction releases against these springs in the envelope — grow OD/backiron length, raise the bus, or cut the torque/stroke." };
         const b = pick.b, q = pick.cand;
         return { p: q, alts: altsK,
-            msg: `Brake: boss Ø${q.brkBossOD} / pocket Ø${q.brkPktID} × ${q.brkPktD} mm deep, ${q.turns}t AWG ${q.awg}, springs ${q.brkSpring} N. ` +
+            msg: `Brake: boss Ø${q.brkBossOD} / pocket Ø${q.brkPktID} × ${q.brkPktD} mm deep, ${q.turns}t AWG ${q.awg}, springs ${b.Fclamp.toFixed(0)} N (free ${q.brkSprFree} / engaged ${q.brkSprEng} mm). ` +
                 `Hold ${tqW(b.Thold)} (asked ${tqW(Tst)}), release ×${b.marginRel.toFixed(2)}, pull-in ${b.Ipull.toFixed(2)} of ${b.Ib.toFixed(2)} A available, drop-out ${b.Idrop.toFixed(3)} A, coil ≈ ${Math.round(b.TcuB)} °C held released. ` +
                 (bestK ? "✓ Warning-free point." : `⚠ Best available point carries ${pick.warnN} warning(s) — check the Brake card.`) };
     }
@@ -21023,6 +21225,186 @@ function synthEnvelope(wiz, p, us) {
             (altTxt.length ? `Runners-up: ${altTxt.join(", ")}. ` : "") +
             (sugg.length ? "⚠ " + sugg.join(" ") : "✓ Passes rotation, fill, saturation & rated-point checks.") };
 }
+/* ---- Actuator module: composes the motor & brake designs open in their tabs through a gearhead ---- */
+function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
+    const motorT = p.actMotor === "brushed" ? "brushed" : p.actMotor === "stepper" ? "stepper" : "pm";
+    const motorP = typeMem.current[motorT]
+        ? { ...typeMem.current[motorT], motorType: motorT }
+        : { ...p, ...(typeDefaults[motorT] ? PRESETS[typeDefaults[motorT]] : {}), motorType: motorT };
+    const mr = React.useMemo(() => computeDesign(motorP), [JSON.stringify(motorP)]);
+    const brakeP = typeMem.current.brake
+        ? { ...typeMem.current.brake, motorType: "brake" }
+        : { ...p, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
+    const withBrk = p.actBrake === "yes";
+    const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
+    const act = composeActuator(mr, br, { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff });
+    const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
+    const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
+    const pIT = { motorType: motorT === "stepper" ? "pm" : motorT, Imax: motorP.Imax }; // chart math is generic
+    const srcTag = (t9) => (typeMem.current[t9] ? "from its tab (live)" : "tab not opened yet — using its default preset");
+    return (React.createElement(React.Fragment, null,
+        React.createElement("div", null,
+            React.createElement("div", { className: "card", style: { borderTop: "3px solid #3B82F6" } },
+                React.createElement("h2", null, "Architecture"),
+                React.createElement(Pick, { label: "Machine type", v: p.motorType, set: switchType, opts: [{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }] }),
+                React.createElement("div", { className: "note" }, "Composite actuator: the motor and brake designs open in their tabs, driven through a multi-stage gearhead, presented at the output shaft.")),
+            React.createElement("div", { className: "card", style: { marginTop: 14 } },
+                React.createElement("h2", null, "Composition"),
+                React.createElement(Pick, { label: "Motor source", v: p.actMotor, set: s("actMotor"), opts: [{ v: "pm", t: "BLDC tab" }, { v: "brushed", t: "Brushed tab" }, { v: "stepper", t: "Stepper tab" }] }),
+                React.createElement("div", { className: "note", style: { marginTop: 2 } },
+                    "Motor: ",
+                    srcTag(motorT),
+                    "."),
+                React.createElement(Pick, { label: "Holding brake", v: p.actBrake, set: s("actBrake"), opts: [{ v: "yes", t: "Include (Brake tab)" }, { v: "no", t: "None" }] }),
+                withBrk && React.createElement("div", { className: "note", style: { marginTop: 2 } },
+                    "Brake: ",
+                    srcTag("brake"),
+                    "."),
+                React.createElement(Pick, { label: "Gearhead", v: ["Planetary", "Harmonic", "Spur"].includes(p.gbType) ? p.gbType : "Planetary", set: s("gbType"), opts: [{ v: "Planetary", t: "Planetary" }, { v: "Harmonic", t: "Harmonic" }, { v: "Spur", t: "Spur cluster" }] }),
+                React.createElement(Num, { label: "Overall ratio", unit: ":1", v: p.gbRatio, set: s("gbRatio"), min: 1 }),
+                React.createElement(Num, { label: "Stages", v: p.gbStages, set: s("gbStages"), min: 1, max: 4 }),
+                React.createElement(Num, { label: "Efficiency override (0 = auto)", unit: "%", v: p.gbEff, set: s("gbEff"), min: 0, max: 100 }),
+                React.createElement(Num, { label: "Gearhead OD (0 = auto shell)", unit: "mm", v: p.gbOD, set: s("gbOD"), min: 0 }),
+                React.createElement(Num, { label: "Gearhead length (0 = auto shell)", unit: "mm", v: p.gbLen, set: s("gbLen"), min: 0 }),
+                React.createElement("div", { className: "note" }, "Per-stage efficiency for miniature/precision gearheads (Maxon/Faulhaber-class catalog data): planetary 90%, spur 93%, harmonic 80% at rated load & warm \u2014 compounded per stage (\u03B7 = \u03B7_stage^stages). Premium needle-bearing planetaries reach 95%+, and harmonic drops at partial load, cold, and the highest ratios \u2014 enter the datasheet value in the override where it matters. Ratio splits evenly across stages against each train's practical window."))),
+        React.createElement("div", null,
+            !act.fail && (React.createElement("div", { className: "card" },
+                React.createElement("div", { className: "cardhead" },
+                    React.createElement("h2", null, "Composite outline"),
+                    React.createElement("button", { className: "btn mini ghost", onClick: () => exportPng("svg-actline", "actuator-outline.png") }, "PNG \u2913")),
+                React.createElement(ActuatorOutline, { motorP: motorP, brakeP: withBrk ? brakeP : null, act: act, withBrk: withBrk, us: us, gbOD: p.gbOD, gbLen: p.gbLen }),
+                React.createElement("div", { className: "note" },
+                    "Envelope outline at true relative scale. Gearhead: ",
+                    p.gbOD > 0 || p.gbLen > 0 ? "specified envelope where entered, typical shell for the rest" : "representative shell",
+                    " \u2014 auto length from typical per-stage proportions (",
+                    act.type === "Harmonic" ? "0.55" : act.type === "Planetary" ? "0.42" : "0.34",
+                    "\u00B7OD per stage + output bearing block), motor from stack + coil heads + endbells, brake from backiron + armature/disc pack. Verify against catalog drawings before packaging."))),
+            React.createElement("div", { className: "card", style: { marginTop: act.fail ? 0 : 14 } },
+                React.createElement("h2", null, "Composite performance (output shaft)"),
+                act.fail ? (React.createElement("div", { className: "warn" }, act.fail)) : (React.createElement(React.Fragment, null,
+                    React.createElement("div", { className: "tbl" },
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Gear train"),
+                            React.createElement("b", null,
+                                act.type,
+                                " \u00B7 ",
+                                act.st,
+                                " stage",
+                                act.st > 1 ? "s" : "",
+                                " \u00B7 ",
+                                act.spr.toFixed(1),
+                                ":1 each = ",
+                                act.N,
+                                ":1")),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Efficiency \u03B7 (per stage / total)"),
+                            React.createElement("b", null,
+                                (act.etaStage * 100).toFixed(0),
+                                "% / ",
+                                (act.eta * 100).toFixed(0),
+                                "%",
+                                p.gbEff > 0 ? " (override)" : "")),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Output no-load"),
+                            React.createElement("b", null,
+                                fmt(act.noLoad, 0),
+                                " rpm")),
+                        act.op && React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Output rated point"),
+                            React.createElement("b", null,
+                                fmt(act.op.n, 0),
+                                " rpm \u00B7 ",
+                                tqS(act.op.T),
+                                " \u00B7 ",
+                                fmt(mr.op && mr.Kt > 0 ? mr.op.T / mr.Kt : NaN, 2),
+                                " A")),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Output peak (drive-limited)"),
+                            React.createElement("b", null, tqS(act.peakT))),
+                        Number.isFinite(act.Tcont) && act.Tcont !== null && React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Output continuous (S1)"),
+                            React.createElement("b", null, tqS(act.Tcont))),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Static holding (brake \u00D7 ratio)"),
+                            React.createElement("b", null, act.hold !== null ? tqS(act.hold) : withBrk ? "—" : "no brake")),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Back-drive"),
+                            React.createElement("b", null, act.selfLock ? "self-locking (not backdrivable)" : "η_back ≈ " + (act.etaBack * 100).toFixed(0) + "%")),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Load inertia reflected to motor"),
+                            React.createElement("b", null,
+                                "\u00F7 ",
+                                (act.N * act.N).toFixed(0))),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null,
+                                "Gearhead OD ",
+                                p.gbOD > 0 ? "(specified)" : "(est, on this motor)"),
+                            React.createElement("b", null, (() => { const od9 = p.gbOD > 0 ? p.gbOD : motorP.statorOD * (act.type === "Harmonic" ? 1.0 : 1.1); return us === "in" ? (od9 / 25.4).toFixed(2) + " in" : Math.round(od9) + " mm"; })()))),
+                    act.warn.map((m9, i9) => React.createElement("div", { className: "warn", key: i9 }, m9)),
+                    React.createElement("h2", { style: { marginTop: 14 } }, "Output torque\u2013speed"),
+                    React.createElement(TorqueSpeedChart, { r: rTS, us: us }),
+                    React.createElement("h2", { style: { marginTop: 14 } }, "Motor current vs output torque"),
+                    React.createElement(CurrentTorqueChart, { r: rIT, p: pIT, us: us }),
+                    React.createElement("div", { className: "note" }, "Motor curve mapped through the train: speed \u00F7 N, torque \u00D7 N\u00B7\u03B7; the current axis is motor phase current with the same saturation bend, so the drive limit reads directly. Holding torque passes the ratio without \u03B7 \u2014 friction aids holding. Gearhead torque rating, backlash, and stiffness are not modeled \u2014 check the datasheet."))))),
+        React.createElement("div", null,
+            React.createElement("div", { className: "card" },
+                React.createElement("h2", null, "Components"),
+                React.createElement("div", { className: "tbl" },
+                    React.createElement("div", { className: "kv" },
+                        React.createElement("span", null, "Motor"),
+                        React.createElement("b", null,
+                            motorT === "pm" ? "BLDC/PMSM" : motorT === "stepper" ? (motorP.stpKind === "pm" ? "PM stepper" : "Hybrid stepper") : "Brushed DC",
+                            " \u00B7 \u00D8",
+                            motorP.statorOD,
+                            " \u00D7 ",
+                            motorP.stackL,
+                            " mm")),
+                    React.createElement("div", { className: "kv" },
+                        React.createElement("span", null, "Kt / no-load"),
+                        React.createElement("b", null,
+                            fmt(mr.Kt, 4),
+                            " N\u00B7m/A \u00B7 ",
+                            fmt(mr.noLoad, 0),
+                            " rpm")),
+                    mr.op && React.createElement("div", { className: "kv" },
+                        React.createElement("span", null, "Motor rated point"),
+                        React.createElement("b", null,
+                            fmt(mr.op.n, 0),
+                            " rpm \u00B7 ",
+                            tqS(mr.op.T))),
+                    mr.err.length > 0 && React.createElement("div", { className: "kv" },
+                        React.createElement("span", null, "Motor status"),
+                        React.createElement("b", { style: { color: "#DC2626" } },
+                            mr.err.length,
+                            " error(s) in its tab")),
+                    withBrk && br && (React.createElement(React.Fragment, null,
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Brake"),
+                            React.createElement("b", null,
+                                "\u00D8",
+                                brakeP.statorOD,
+                                " mm",
+                                br.brake ? ` · springs ${br.brake.Fclamp.toFixed(0)} N` : "")),
+                        br.brake && React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Brake hold / release margin"),
+                            React.createElement("b", null,
+                                tqS(br.brake.Thold),
+                                " \u00B7 \u00D7",
+                                fmt(br.brake.marginRel, 2))),
+                        br.brake && React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Brake coil (released)"),
+                            React.createElement("b", null,
+                                fmt(br.brake.Ihold, 2),
+                                " A \u00B7 ",
+                                fmt(br.brake.Phold, 1),
+                                " W")),
+                        br.err.length > 0 && React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Brake status"),
+                            React.createElement("b", { style: { color: "#DC2626" } },
+                                br.err.length,
+                                " error(s) in its tab"))))),
+                React.createElement("div", { className: "note" }, "Sources are the live designs in each tab \u2014 edit there, and this composite follows. The brake mounts on the motor shaft ahead of the gearhead.")))));
+}
 function MotorDesigner() {
     const [p, setP] = useState({
         slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
@@ -21034,15 +21416,16 @@ function MotorDesigner() {
         statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)", shaftD: 15,
         loadMode: "J", Irate: 5, bdRpm: 1800, Tcu: 100, Rext: 20,
         Tamb: 25, cooling: "Open air", TcuMax: 130, Tmin: -40, dutyPct: 100, cycleT: 10, brkEco: 100,
-        mR: 0, mL: 0, mKe: 0, mNl: 0,
-        gbType: "None", gbRatio: 10, gbStages: 1, gbEff: 0,
+        mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
+        calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
+        gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
         brushV: 1.5, latmWind: 2,
-        brkSpring: 200, brkRf: 20, brkMu: 0.40, brkMuD: 0.32, brkFaces: 2, brkStroke: 0.3,
+        brkSprFree: 23.3, brkSprEng: 18.3, brkMu: 0.40, brkMuD: 0.32, brkFaces: 2, brkStroke: 0.3,
         brkBore: 26, brkPole: 6, brkArm: 6, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
         brkPktID: 48, brkBossOD: 38, brkPktD: 18, brkBobID: 40.2, brkBobOD: 47, brkBobL: 15,
         stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, latmSect: 4, latmSpan: 60, latmTravel: 45,
         rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
-        Vll: 400, Vdc: 48, Imax: 40, freq: 50, slip: 3, sb: 18, J: 5.5, Bg: 0.85, seq: "ABC",
+        Vll: 400, Vdc: 48, Imax: 40, freq: 50, J: 5.5, Bg: 0.85, seq: "ABC",
     });
     const [ioMsg, setIoMsg] = useState("");
     const [us, setUs] = useState("in");
@@ -21097,6 +21480,40 @@ function MotorDesigner() {
         setP(a9.p);
         setWizMsg(`Applied alternate: ${a9.label} — ${a9.note}`);
     };
+    const captureCal = () => {
+        const r0 = computeDesign({ ...p, calOn: "no" });
+        if (r0.err.length) {
+            setIoMsg("Fix design errors before capturing calibration.");
+            return;
+        }
+        const termR = brM ? (r0.brush ? r0.brush.Ra : 0) : r0.Rll;
+        const termL = brM ? (r0.brush ? r0.brush.La : 0) : r0.Lll;
+        const kR = p.mR > 0 && termR > 0 ? p.mR / 1000 / termR : 1;
+        const kL = p.mL > 0 && termL > 0 ? (p.mL / 1e6) / termL : 1;
+        const kKe = p.mNl > 0 && r0.noLoad > 0 ? r0.noLoad / p.mNl : 1;
+        let kKt = kKe; // no stall measured → torque tracks BEMF
+        if (p.calTs > 0 && r0.peakT > 0)
+            kKt = (us === "in" ? p.calTs / IN2C : p.calTs) / r0.peakT;
+        let Td = 0;
+        if (p.calTt > 0 && p.calTn > 0) {
+            const r1 = computeDesign({ ...p, calOn: "yes", calKR: kR, calKL: kL, calKKe: kKe, calKKt: kKt, calTd: 0 });
+            if (!r1.err.length && r1.curve.length) {
+                const Tm = us === "in" ? p.calTt / IN2C : p.calTt;
+                let Tp = 0;
+                for (let i9 = 1; i9 < r1.curve.length; i9++) {
+                    const c0 = r1.curve[i9 - 1], c1 = r1.curve[i9];
+                    if ((c0.n - p.calTn) * (c1.n - p.calTn) <= 0 && c1.n !== c0.n) {
+                        Tp = c0.T + ((p.calTn - c0.n) / (c1.n - c0.n)) * (c1.T - c0.T);
+                        break;
+                    }
+                }
+                Td = Math.max(Tp - Tm, 0);
+            }
+        }
+        setP((o) => ({ ...o, calOn: "yes", calKR: +kR.toFixed(4), calKL: +kL.toFixed(4),
+            calKKe: +kKe.toFixed(4), calKKt: +kKt.toFixed(4), calTd: +Td.toFixed(5) }));
+        setIoMsg("Calibration captured — the model now tracks the bench, and design tweaks predict the real motor's response.");
+    };
     const restorePrev = () => {
         if (!envPrev.current)
             return;
@@ -21136,6 +21553,7 @@ function MotorDesigner() {
         const saved = typeMem.current[nt];
         if (saved) {
             setP({ ...saved, motorType: nt });
+            setIoMsg("");
             return;
         }
         if (TYPE_DEFAULTS[nt] && PRESETS[TYPE_DEFAULTS[nt]]) {
@@ -21144,12 +21562,25 @@ function MotorDesigner() {
             return;
         }
         setP((o) => ({ ...o, motorType: nt }));
+        setIoMsg("");
     };
     const r = useMemo(() => computeDesign(p), [p]);
     const pm = p.motorType === "pm" || p.motorType === "brushed";
     const brM = p.motorType === "brushed";
     const latmM = p.motorType === "latm";
     const brkM = p.motorType === "brake", stpM = p.motorType === "stepper";
+    const actM = p.motorType === "actuator";
+    const IN2C = 141.612;
+    // bench BEMF: derive Ke from what the scope/meter shows.
+    // BLDC: RMS (or pk-pk/2√2 sine estimate) at speed 120·f/poles. Brushed: DC volts at rig speed.
+    const mKeEff = (() => {
+        if (brM)
+            return p.mBrms > 0 && p.mBn > 0 ? p.mBrms / (p.mBn / 1000) : p.mKe;
+        const rms9 = p.mBrms > 0 ? p.mBrms : p.mBpp > 0 ? p.mBpp / (2 * Math.SQRT2) : 0;
+        const nB9 = p.mBf > 0 ? (120 * p.mBf) / Math.max(p.poles, 2) : 0;
+        return rms9 > 0 && nB9 > 0 ? rms9 / (nB9 / 1000) : p.mKe;
+    })();
+    const mBn9 = brM ? p.mBn : p.mBf > 0 ? (120 * p.mBf) / Math.max(p.poles, 2) : 0;
     // envelope architecture follows the globally selected machine type
     const wArch = ({ pm: "pm", brushed: "brushed", latm: "latm", stepper: "stepper", brake: "brake", induction: "acim" })[p.motorType] || "pm";
     const special = latmM || brkM || stpM;
@@ -21187,6 +21618,11 @@ function MotorDesigner() {
                     // legacy brake files: bobbin OD used to be the winding START (bore/barrel pair, ~1.6 mm apart).
                     // Migrate to winding-window semantics: start = old OD, max finish = pocket − 1 mm.
                     let migrated = false;
+                    if (n.motorType === "brake" && Number.isFinite(src.brkSpring) && src.brkSpring > 0 && !("brkSprFree" in src) && n.brkK > 0) {
+                        n.brkSprEng = +(n.brkPktD + Math.max(n.brkStroke, 0.05)).toFixed(2);
+                        n.brkSprFree = +(n.brkSprEng + src.brkSpring / n.brkK).toFixed(1);
+                        migrated = true;
+                    }
                     if (n.motorType === "brake" && Number.isFinite(n.brkBobID) && Number.isFinite(n.brkBobOD) &&
                         n.brkBobOD - n.brkBobID < 3 && n.brkPktID - n.brkBobOD > 3) {
                         n.brkBobID = n.brkBobOD;
@@ -21340,18 +21776,19 @@ function MotorDesigner() {
                     React.createElement("button", { className: us === "in" ? "on" : "", onClick: () => setUs("in") }, "inch"),
                     React.createElement("button", { className: us === "mm" ? "on" : "", onClick: () => setUs("mm") }, "mm"))),
             React.createElement("p", { className: "eyebrow" }, "Engineering Tools \u00B7 Three-Phase BLDC Motor Designer"),
-            React.createElement("div", { className: "grid" },
+            React.createElement("div", { className: "grid" }, actM ? React.createElement(ActuatorView, { p: p, s: s, us: us, switchType: switchType, typeMem: typeMem, tqS: tqS, typeDefaults: TYPE_DEFAULTS }) : React.createElement(React.Fragment, null,
                 React.createElement("div", null,
                     React.createElement("div", { className: "card", style: { borderTop: "3px solid #3B82F6" } },
                         React.createElement("h2", null, "Architecture"),
-                        React.createElement(Pick, { label: "Machine type", v: p.motorType, set: switchType, opts: [{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }] }),
+                        React.createElement(Pick, { label: "Machine type", v: p.motorType, set: switchType, opts: [{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }] }),
                         React.createElement("div", { className: "note" },
                             p.motorType === "pm" ? "3-phase PM synchronous: stationary slotted stator, rotating magnet rotor."
                                 : p.motorType === "brushed" ? "Brushed PM DC: magnet ring fixed to the housing ID; the slotted lamination, coils, and commutator rotate as the armature."
                                     : p.motorType === "latm" ? "Limited-angle torquer: toroidal sector windings on a slotless core, PM rotor, ±excursion output."
                                         : p.motorType === "stepper" ? "Stepper: hybrid fine-tooth (1.8°-class) or PM can-stack (7.5°+)."
                                             : p.motorType === "brake" ? "Power-off spring-applied brake: annular electromagnet vs springs, friction disc output."
-                                                : "Line-fed squirrel-cage induction machine.",
+                                                : p.motorType === "actuator" ? "Composite actuator: the motor and brake designs open in their tabs, driven through a multi-stage gearhead, presented at the output shaft."
+                                                    : "Line-fed squirrel-cage induction machine.",
                             " ",
                             "Each type keeps its own parameter set while this session is open \u2014 toggling away and back restores it.")),
                     React.createElement("div", { className: "card" },
@@ -21613,10 +22050,22 @@ function MotorDesigner() {
                             React.createElement(Num, { label: "Bobbin length (winding)", unit: "mm", v: p.brkBobL, set: s("brkBobL"), step: 0.5 }),
                             React.createElement(Num, { label: "Armature thickness", unit: "mm", v: p.brkArm, set: s("brkArm"), step: 0.5 }),
                             React.createElement(Num, { label: "Armature stroke (air gap)", unit: "mm", v: p.brkStroke, set: s("brkStroke"), step: 0.05 }),
-                            React.createElement(Num, { label: "Spring clamp force (engaged)", unit: "N", v: p.brkSpring, set: s("brkSpring"), step: 10 }),
+                            React.createElement(Num, { label: "Spring free height", unit: "mm", v: p.brkSprFree, set: s("brkSprFree"), step: 0.5 }),
+                            React.createElement(Num, { label: "Spring height, brake engaged", unit: "mm", v: p.brkSprEng, set: s("brkSprEng"), step: 0.5 }),
+                            r.brake && React.createElement("div", { className: "kv" },
+                                React.createElement("span", null, "Clamp force engaged / pulled-in \u00B7 cavity"),
+                                React.createElement("b", null,
+                                    fmt(r.brake.Fclamp, 0),
+                                    " / ",
+                                    fmt(r.brake.Fcompr, 0),
+                                    " N \u00B7 ",
+                                    fmt(r.brake.sprCav, 1),
+                                    " mm")),
                             React.createElement(Num, { label: "Economizer hold voltage", unit: "%", v: p.brkEco, set: s("brkEco"), step: 5, min: 10, max: 100 }),
                             React.createElement(Num, { label: "Spring rate (total)", unit: "N/mm", v: p.brkK, set: s("brkK"), step: 5 }),
                             React.createElement(Num, { label: "Spring count", v: p.brkSpringN, set: s("brkSpringN"), min: 3, max: 12 }),
+                            React.createElement(Sel, { label: "Backiron material", v: p.statorMat, set: s("statorMat"), opts: Object.keys(STEELS) }),
+                            React.createElement(Sel, { label: "Armature material", v: p.rotorMat, set: s("rotorMat"), opts: Object.keys(STEELS) }),
                             React.createElement(Sel, { label: "Friction material", v: p.brkMat, set: (v) => setP((o) => { const m = BRAKE_MATS[v]; return { ...o, brkMat: v, ...(m ? { brkMu: m.mus, brkMuD: m.mud } : {}) }; }), opts: Object.keys(BRAKE_MATS) }),
                             React.createElement(Num, { label: "Static friction \u00B5s", v: p.brkMu, set: s("brkMu"), step: 0.02 }),
                             React.createElement(Num, { label: "Dynamic friction \u00B5d", v: p.brkMuD, set: s("brkMuD"), step: 0.02 }),
@@ -21640,8 +22089,7 @@ function MotorDesigner() {
                             React.createElement(Num, { label: "Sector span", unit: "\u00B0", v: p.latmSpan, set: s("latmSpan"), min: 10, max: 180 }),
                             React.createElement(Num, { label: "Travel between stops", unit: "\u00B0", v: p.latmTravel, set: s("latmTravel"), min: 1, max: 355 }),
                             React.createElement(Num, { label: "Turns / sector", v: p.turns, set: s("turns"), step: 10 }),
-                            React.createElement(Num, { label: "Winding radial build", unit: "mm", v: p.latmWind, set: s("latmWind"), step: 0.5 }),
-                            React.createElement(Num, { label: "Winding temp", unit: "\u00B0C", v: p.Tcu, set: s("Tcu"), step: 5 }))),
+                            React.createElement(Num, { label: "Winding radial build", unit: "mm", v: p.latmWind, set: s("latmWind"), step: 0.5 }))),
                         p.motorType === "pm" ? (React.createElement(React.Fragment, null,
                             React.createElement(Pick, { label: "Control scheme", v: p.ctrl, set: s("ctrl"), opts: [{ v: "foc", t: "FOC (sinusoidal)" }, { v: "six", t: "Six-step" }] }),
                             p.ctrl === "six" && (React.createElement(Pick, { label: "Commutation", v: p.sense, set: s("sense"), opts: [{ v: "hall", t: "Hall sensors" }, { v: "sless", t: "Sensorless" }] })),
@@ -21656,20 +22104,26 @@ function MotorDesigner() {
                             React.createElement(Num, { label: "End-ring area", unit: "mm\u00B2", v: p.ringA, set: s("ringA"), step: 10, min: 1 }))),
                         React.createElement(Num, { label: "Winding temp", unit: "\u00B0C", v: p.Tcu, set: s("Tcu"), step: 10 }),
                         React.createElement(Num, { label: brM ? "Lead / harness R" : "Drive + lead R / phase", unit: "m\u03A9", v: p.Rext, set: s("Rext"), step: 5, min: 0 }),
-                        React.createElement(Pick, { label: "Rated loading by", v: p.loadMode, set: s("loadMode"), opts: [{ v: "J", t: "Current density" }, { v: "I", t: brM ? "Armature current" : "Phase current" }] }),
-                        p.loadMode === "I"
+                        (pm || p.motorType === "induction") && React.createElement(Pick, { label: "Rated loading by", v: p.loadMode, set: s("loadMode"), opts: [{ v: "J", t: "Current density" }, { v: "I", t: brM ? "Armature current" : "Phase current" }] }),
+                        (pm || p.motorType === "induction") && (p.loadMode === "I"
                             ? React.createElement(Num, { label: brM ? "Rated armature current" : "Rated phase current", unit: "A", v: p.Irate, set: s("Irate"), step: 0.5, min: 0 })
-                            : React.createElement(Num, { label: "Current density J", unit: "A/mm\u00B2", v: p.J, set: s("J"), step: 0.5 }),
-                        !pm && React.createElement(Num, { label: "Airgap flux B\u0302g", unit: "T", v: p.Bg, set: s("Bg"), step: 0.05 }),
+                            : React.createElement(Num, { label: "Current density J", unit: "A/mm\u00B2", v: p.J, set: s("J"), step: 0.5 })),
+                        p.motorType === "induction" && React.createElement(Num, { label: "Airgap flux B\u0302g", unit: "T", v: p.Bg, set: s("Bg"), step: 0.05 }),
                         p.motorType === "pm" && p.conn === "wye" && (React.createElement(Pick, { label: "Voltage reference", v: p.vref, set: s("vref"), opts: [{ v: "ll", t: "Line-line" }, { v: "ln", t: "L-N (center tap)" }] })),
                         brM
                             ? React.createElement(Pick, { label: "Supply polarity", v: p.seq, set: s("seq"), opts: [{ v: "ABC", t: "Normal" }, { v: "ACB", t: "Reversed" }] })
                             : React.createElement(Pick, { label: "Phase sequence", v: p.seq, set: s("seq"), opts: [{ v: "ABC", t: "A-B-C" }, { v: "ACB", t: "A-C-B" }] })),
-                    pm && (React.createElement("div", { className: "card", style: { marginTop: 14 } },
-                        React.createElement("h2", null, brM ? "Field magnets (housing ID)" : "Rotor magnets"),
+                    (pm || latmM || stpM) && (React.createElement("div", { className: "card", style: { marginTop: 14 } },
+                        React.createElement("h2", null, brM ? "Field magnets (housing ID)" : latmM ? "Rotor magnets (arc segments)" : stpM ? (p.stpKind === "pm" ? "Rotor magnet ring" : "Rotor PM disc (axial)") : "Rotor magnets"),
                         React.createElement(Sel, { label: "Grade", v: p.mag, set: s("mag"), opts: Object.keys(MAGNETS) }),
                         React.createElement(Num, { label: "Magnet thickness", unit: "mm", v: p.magT, set: s("magT"), step: 0.5, min: 0.5 }),
-                        React.createElement(Num, { label: "Pole-arc coverage", unit: "%", v: p.poleArc, set: s("poleArc"), step: 5, min: 40, max: 100 }),
+                        !stpM && React.createElement(Num, { label: latmM ? "Magnet arc (of pole pitch)" : "Pole-arc coverage", unit: "%", v: p.poleArc, set: s("poleArc"), step: 5, min: 40, max: 100 }),
+                        !stpM && React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Magnet arc / length @ rotor OD"),
+                            React.createElement("b", null,
+                                ((p.poleArc / 100) * (360 / Math.max(p.poles, 1))).toFixed(1),
+                                "\u00B0 \u00B7 ",
+                                (() => { const mm9 = (p.poleArc / 100) * (Math.PI * p.rotorOD) / Math.max(p.poles, 1); return us === "in" ? (mm9 / 25.4).toFixed(3) + " in" : mm9.toFixed(1) + " mm"; })())),
                         React.createElement(Num, { label: "Magnet temperature", unit: "\u00B0C", v: p.Top, set: s("Top"), step: 5 }),
                         React.createElement(Num, { label: "Cold-start temp", unit: "\u00B0C", v: p.Tmin, set: s("Tmin"), step: 5, min: -70, max: 25 }),
                         React.createElement("div", { className: "tbl" },
@@ -21698,14 +22152,12 @@ function MotorDesigner() {
                                     " kJ/m\u00B3 \u00B7 ",
                                     r.mag.Tmax,
                                     " \u00B0C")),
-                            React.createElement("div", { className: "kv" },
-                                React.createElement("span", null, "Airgap B (avg / fund. peak)"),
-                                React.createElement("b", null,
-                                    fmt(r.BgAvg),
-                                    " / ",
-                                    fmt(r.B1),
-                                    " T")),
-                            React.createElement("div", { className: "kv" },
+                            !stpM && React.createElement("div", { className: "kv" },
+                                React.createElement("span", null,
+                                    "Airgap B",
+                                    latmM ? " (working gap)" : " (avg / fund. peak)"),
+                                React.createElement("b", null, latmM ? fmt(r.latm ? r.latm.Bg : 0) + " T" : fmt(r.BgAvg) + " / " + fmt(r.B1) + " T")),
+                            !latmM && !stpM && React.createElement("div", { className: "kv" },
                                 React.createElement("span", null,
                                     "Demag field @ ",
                                     p.Imax,
@@ -21714,14 +22166,14 @@ function MotorDesigner() {
                                 React.createElement("b", null,
                                     fmt(r.Hdemag, 0),
                                     " kA/m")),
-                            !brM && React.createElement("div", { className: "kv" },
+                            !brM && !latmM && !stpM && React.createElement("div", { className: "kv" },
                                 React.createElement("span", null, "Sat. knockdown (no-load / @Imax)"),
                                 React.createElement("b", null,
                                     (r.ksat * 100).toFixed(1),
                                     "% / ",
                                     (r.ksat * r.kIT * 100).toFixed(1),
                                     "%")),
-                            React.createElement("div", { className: "kv" },
+                            !latmM && !stpM && React.createElement("div", { className: "kv" },
                                 React.createElement("span", null, "Demag margin"),
                                 React.createElement("b", { style: { color: r.demagMargin < 0.3 ? "#DC2626" : "#059669" } },
                                     fmt(r.demagMargin * 100, 0),
@@ -21729,7 +22181,8 @@ function MotorDesigner() {
                         React.createElement("div", { className: "note" },
                             "Typical catalog values in the style of the Arnold Magnetics N-grade and RECOMA (SmCo) tables \u2014 verify against the specific datasheet before cutting steel. Flux model: leakage 0.9, Carter 1.05,",
                             brM ? " arc magnets bonded to the housing ID (steel MMF drops not iterated in this mode)."
-                                : " surface-mounted magnets.")))),
+                                : latmM ? " slotless ring — the sector winding sits in the magnetic gap; no armature-reaction demag iteration in this mode."
+                                    : " surface-mounted magnets.")))),
                 React.createElement("div", null,
                     React.createElement("div", { className: "card paper" },
                         React.createElement("div", { className: "cardhead" },
@@ -21915,7 +22368,7 @@ function MotorDesigner() {
                                 brkM && React.createElement("button", { className: "btn mini", onClick: () => setAnim((a) => ({ ...a, on: !a.on })) }, anim.on ? "⏸ Pause" : "▶ Play"),
                                 React.createElement("button", { className: "btn mini ghost", onClick: () => exportPng("svg-axial", "axial-cutaway.png") }, "PNG \u2913"))),
                         React.createElement(AxialCutaway, { p: p, r: r, us: us, anim: anim }),
-                        brkM ? (React.createElement("div", { className: "note" }, "Working drawing of the pot-core brake: \u00D8 ladder on the right (OD, pocket ID, boss, through-hole), axial dims below (bobbin, pocket depth, backiron length), wound-coil \u00D8 with its pocket clearance called out, and the engaged air gap. \u25B6 Play toggles power \u2014 only the armature moves; the disc, hub, and pressure plate stay put, so release visibly separates the pads.")) : (React.createElement("div", { className: "note" }, "Full 180\u00B0 section through the shaft: lamination stack, winding band, end-turn overhang from the active coil-build model, rotor, magnets, and shaft \u2014 with stack, overall length, and the major diameters called out for a quick sanity check."))),
+                        brkM ? (React.createElement("div", { className: "note" }, "Working drawing of the pot-core brake: \u00D8 ladder on the right (OD, pocket ID, boss, through-hole), axial dims below (bobbin, pocket depth, backiron length), wound-coil \u00D8 with its pocket clearance called out, and the engaged air gap. Friction architecture follows the face count: one face puts a static lining on the armature working the bare rotating disc; two faces bond lining to both sides of the rotating disc, pinched between the static pressure plate and the armature. \u25B6 Play toggles power \u2014 only the (non-rotating) armature slides, and the energized state overlays the flux path looping the coil: rim leg \u2192 working gap \u2192 armature \u2192 boss gap \u2192 back web.")) : (React.createElement("div", { className: "note" }, "Full 180\u00B0 section through the shaft: lamination stack, winding band, end-turn overhang from the active coil-build model, rotor, magnets, and shaft \u2014 with stack, overall length, and the major diameters called out for a quick sanity check."))),
                     stpM && r.step && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                         React.createElement("div", { className: "cardhead" },
                             React.createElement("h2", null, "Torque vs angle (one step)"),
@@ -21925,6 +22378,23 @@ function MotorDesigner() {
                             "Restoring curve of the energized phase about its detent position; pull-out is the peak one full step away. The blue curve is the same winding after one phase advance \u2014 its zero is the next detent, and the gap between curves at the handoff sets margin under load. Dashed: unpowered detent torque (4\u00D7 electrical frequency, \u2248",
                             r.step.kind === "hybrid" ? "5" : "10",
                             "% of 2-on holding \u2014 the cogging you feel spinning it by hand)."))),
+                    stpM && r.step && r.curve.length > 0 && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
+                        React.createElement("div", { className: "cardhead" },
+                            React.createElement("h2", null, "Pull-out torque vs speed"),
+                            React.createElement("button", { className: "btn mini ghost", onClick: () => exportPng("svg-curve", "pullout-torque-speed.png") }, "PNG \u2913")),
+                        React.createElement(TorqueSpeedChart, { r: r, us: us }),
+                        React.createElement("div", { className: "kv" },
+                            React.createElement("span", null, "Mid-band resonance (avoid sustained)"),
+                            React.createElement("b", null,
+                                "\u2248 ",
+                                fmt(r.step.nRes, 1),
+                                " rpm (",
+                                fmt(r.step.f0, 0),
+                                " steps/s)")),
+                        React.createElement("div", { className: "note" },
+                            "Quasi-static upper bound: pull-out anchors at 2-on holding torque, then achievable phase current rolls off as BEMF and phase impedance eat the ",
+                            p.Vdc,
+                            " V bus \u2014 chopper drive assumed above V/R. Real pull-out dips near the mid-band resonance and depends on load damping; derate accordingly."))),
                     latmM && r.latm && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                         React.createElement("div", { className: "cardhead" },
                             React.createElement("h2", null, "Torque vs angle"),
@@ -22362,8 +22832,69 @@ function MotorDesigner() {
                         React.createElement("h2", null, "Bench calibration"),
                         React.createElement(Num, { label: brM ? "Measured R terminal" : "Measured R line-line", unit: "m\u03A9", v: p.mR, set: s("mR"), step: 10, min: 0 }),
                         React.createElement(Num, { label: brM ? "Measured L terminal" : "Measured L line-line", unit: "\u00B5H", v: p.mL, set: s("mL"), step: 10, min: 0 }),
-                        !latmM && !stpM && !brkM && React.createElement(Num, { label: brM ? "Measured Ke terminal" : "Measured Ke line-line", unit: "V/krpm", v: p.mKe, set: s("mKe"), step: 0.1, min: 0 }),
+                        (pm && !brM) && (React.createElement(React.Fragment, null,
+                            React.createElement(Num, { label: "Back-driven BEMF pk-pk (L-L)", unit: "V", v: p.mBpp, set: s("mBpp"), step: 0.1, min: 0 }),
+                            React.createElement(Num, { label: "Back-driven BEMF RMS (L-L)", unit: "V", v: p.mBrms, set: s("mBrms"), step: 0.1, min: 0 }),
+                            React.createElement(Num, { label: "BEMF frequency", unit: "Hz", v: p.mBf, set: s("mBf"), step: 1, min: 0 }))),
+                        brM && (React.createElement(React.Fragment, null,
+                            React.createElement(Num, { label: "Back-driven BEMF (DC)", unit: "V", v: p.mBrms, set: s("mBrms"), step: 0.1, min: 0 }),
+                            React.createElement(Num, { label: "Back-drive speed", unit: "rpm", v: p.mBn, set: s("mBn"), step: 100, min: 0 }))),
+                        (pm || brM) && mKeEff > 0 && (React.createElement("div", { className: "tbl", style: { marginTop: 4 } },
+                            mBn9 > 0 && React.createElement("div", { className: "kv" },
+                                React.createElement("span", null, brM ? "Rig speed" : `Speed from f (${p.poles} poles)`),
+                                React.createElement("b", null,
+                                    fmt(mBn9, 0),
+                                    " rpm")),
+                            React.createElement("div", { className: "kv" },
+                                React.createElement("span", null,
+                                    "Measured Ke ",
+                                    brM ? "(terminal)" : "(L-L RMS)",
+                                    " / implied Kt"),
+                                React.createElement("b", null,
+                                    fmt(mKeEff, 2),
+                                    " V/krpm \u00B7 ",
+                                    (() => {
+                                        const KtM = (brM ? mKeEff : Math.sqrt(3) * mKeEff) / ((1000 * 2 * Math.PI) / 60);
+                                        return us === "in" ? (KtM * IN2C).toFixed(2) + " oz·in/A" : KtM.toFixed(4) + " N·m/A";
+                                    })(),
+                                    !brM ? " (FOC basis)" : "")),
+                            !brM && p.mBpp > 0 && p.mBrms > 0 && (React.createElement("div", { className: "kv" },
+                                React.createElement("span", null, "Waveform crest (pk-pk / RMS)"),
+                                React.createElement("b", null,
+                                    fmt(p.mBpp / p.mBrms, 2),
+                                    " \u2014 sine 2.83, trapezoidal lower"))),
+                            !brM && p.mBpp > 0 && !(p.mBrms > 0) && (React.createElement("div", { className: "kv" },
+                                React.createElement("span", null, "RMS basis"),
+                                React.createElement("b", null, "pk-pk / 2\u221A2 (sine estimate)"))))),
                         !latmM && !stpM && !brkM && React.createElement(Num, { label: "Measured no-load", unit: "rpm", v: p.mNl, set: s("mNl"), step: 100, min: 0 }),
+                        (pm || brM) && (React.createElement(React.Fragment, null,
+                            React.createElement(Num, { label: "Measured rated torque", unit: us === "in" ? "oz·in" : "N·m", v: p.calTt, set: s("calTt"), min: 0 }),
+                            React.createElement(Num, { label: "\u2026at speed", unit: "rpm", v: p.calTn, set: s("calTn"), step: 100, min: 0 }),
+                            React.createElement(Num, { label: "Measured stall torque", unit: us === "in" ? "oz·in" : "N·m", v: p.calTs, set: s("calTs"), min: 0 }),
+                            React.createElement("div", { className: "iobar", style: { marginTop: 8 } },
+                                React.createElement("button", { className: "btn", onClick: captureCal }, "Capture factors"),
+                                React.createElement(Pick, { label: "", v: p.calOn, set: s("calOn"), opts: [{ v: "yes", t: "Active" }, { v: "no", t: "Off" }] })),
+                            p.calOn === "yes" && r.cal && (React.createElement("div", { className: "tbl", style: { marginTop: 6 } },
+                                React.createElement("div", { className: "kv" },
+                                    React.createElement("span", null, "Applied factors R \u00B7 L"),
+                                    React.createElement("b", null,
+                                        "\u00D7",
+                                        fmt(r.cal.kR, 3),
+                                        " \u00B7 \u00D7",
+                                        fmt(r.cal.kL, 3))),
+                                React.createElement("div", { className: "kv" },
+                                    React.createElement("span", null, "Ke (no-load) \u00B7 Kt (stall)"),
+                                    React.createElement("b", null,
+                                        "\u00D7",
+                                        fmt(r.cal.kKe, 3),
+                                        " \u00B7 \u00D7",
+                                        fmt(r.cal.kKt, 3),
+                                        Math.abs(r.cal.kKt - r.cal.kKe) > 0.02 ? ` (${((r.cal.kKt / r.cal.kKe - 1) * 100).toFixed(1)}% sat droop)` : "")),
+                                r.cal.Td > 0 && React.createElement("div", { className: "kv" },
+                                    React.createElement("span", null, "Fitted drag (friction/windage)"),
+                                    React.createElement("b", null,
+                                        "\u2212",
+                                        tqS(r.cal.Td))))))),
                         React.createElement("div", { className: "tbl", style: { marginTop: 8 } }, (() => {
                             const rows = [];
                             const add = (name, pred, meas, unit2) => {
@@ -22400,20 +22931,27 @@ function MotorDesigner() {
                             else if (brM && r.brush) {
                                 add("Ra term", r.brush.Ra * 1000, p.mR, "mΩ");
                                 add("La term", r.brush.La * 1e6, p.mL, "µH");
-                                add("Ke term", r.Kt * ((1000 * 2 * Math.PI) / 60), p.mKe, "V/krpm");
+                                add("Ke term", r.Kt * ((1000 * 2 * Math.PI) / 60), mKeEff, "V/krpm");
                                 add("No-load", r.noLoad, p.mNl, "rpm");
                             }
                             else {
                                 add("R L-L", r.Rll * 1000, p.mR, "mΩ");
                                 add("L L-L", r.Lll * 1e6, p.mL, "µH");
-                                add("Ke L-L", r.Ke * Math.sqrt(3) * ((1000 * 2 * Math.PI) / 60), p.mKe, "V/krpm");
+                                add("Ke L-L", r.Ke * Math.sqrt(3) * ((1000 * 2 * Math.PI) / 60), mKeEff, "V/krpm");
                                 add("No-load", r.noLoad, p.mNl, "rpm");
                             }
                             return rows.length ? rows : React.createElement("div", { className: "kv" },
                                 React.createElement("span", null, "Enter measurements to compare"),
                                 React.createElement("b", null, "\u2014"));
                         })()),
-                        React.createElement("div", { className: "note" }, "Persisted in the design file. R error \u21D2 end-turn/MLT model (or wire gauge); L error \u21D2 leakage permeance; Ke/no-load error \u21D2 magnet Br, temperature, or effective airgap. Green \u22647%, amber \u226415%.")),
+                        React.createElement("div", { className: "note" },
+                            "Persisted in the design file. R error \u21D2 end-turn/MLT model (or wire gauge); L error \u21D2 leakage permeance; Ke/no-load error \u21D2 magnet Br, temperature, or effective airgap. Green \u22647%, amber \u226415%.",
+                            (pm || brM) && ` BEMF is entered as raw scope/meter readings — pk-pk, RMS, frequency (speed derives from pole
+              count; brushed takes DC volts at rig speed) — and Ke/Kt fall out; with both amplitudes the crest
+              ratio flags waveform shape. Capture freezes the measured-vs-model factors against the as-built geometry and
+              applies them multiplicatively through R, L, BEMF, torque (with stall-implied saturation droop),
+              and a fitted drag from the rated point — so adding or removing a turn predicts how the REAL motor
+              responds. Re-bench and re-capture after a physical change.`)),
                     brkM && r.brake && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                         React.createElement("h2", null, "Brake output (power-off, spring-applied)"),
                         React.createElement("div", { className: "tbl" },
@@ -22480,6 +23018,11 @@ function MotorDesigner() {
                                     fmt(r.brake.tBack, 1),
                                     " mm \u00B7 ",
                                     fmt(r.brake.Bback, 2),
+                                    " T")),
+                            React.createElement("div", { className: "kv" },
+                                React.createElement("span", null, "Armature ring B (seated)"),
+                                React.createElement("b", null,
+                                    fmt(r.brake.Barm, 2),
                                     " T")),
                             React.createElement("div", { className: "kv" },
                                 React.createElement("span", null,
@@ -22699,8 +23242,13 @@ function MotorDesigner() {
                                 React.createElement("span", null, "Continuous-hold current (thermal)"),
                                 React.createElement("b", null, r.therm ? fmt(r.therm.Icont, 2) + " A" : "—")),
                             React.createElement("div", { className: "kv" },
-                                React.createElement("span", null, "Coil resistance (hot)"),
+                                React.createElement("span", null,
+                                    "Coil R at terminals (20 \u00B0C / ",
+                                    p.Tcu,
+                                    " \u00B0C)"),
                                 React.createElement("b", null,
+                                    fmt(r.latm.Ra20, 2),
+                                    " / ",
                                     fmt(r.latm.Ra, 2),
                                     " \u03A9")),
                             React.createElement("div", { className: "kv" },
@@ -22719,83 +23267,6 @@ function MotorDesigner() {
                             "Two-wire toggle: +polarity drives the rotor onto stop B and holds with the stop torque; flipping polarity mirrors the curve and drives to stop A. Unpowered there is no detent \u2014 the slotless core gives zero cogging, so position is held by the stops, friction, or the load. Stiffness is the energized magnetic spring rate against disturbances at the stop. Fringing softens the profile edges over \u2248 (gap + winding build)/r; stops must sit inside the \u00B1",
                             r.latm.zeroAng.toFixed(0),
                             "\u00B0 torque reversal or the rotor cannot reach them."))),
-                    !special && React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
-                        React.createElement("h2", null, "Gearbox / actuator"),
-                        React.createElement(Pick, { label: "Type", v: p.gbType, set: s("gbType"), opts: [{ v: "None", t: "None" }, { v: "Spur", t: "Spur" }, { v: "Planetary", t: "Planet." }, { v: "Harmonic", t: "Harmonic" }, { v: "Worm", t: "Worm" }] }),
-                        p.gbType !== "None" && (React.createElement(React.Fragment, null,
-                            React.createElement(Num, { label: "Overall ratio", unit: ":1", v: p.gbRatio, set: s("gbRatio"), min: 1 }),
-                            React.createElement(Num, { label: "Stages", v: p.gbStages, set: s("gbStages"), min: 1, max: 4 }),
-                            React.createElement(Num, { label: "Efficiency override (0 = auto)", unit: "%", v: p.gbEff, set: s("gbEff"), min: 0, max: 100 }),
-                            (() => {
-                                const N = Math.max(p.gbRatio, 1);
-                                const effAuto = p.gbType === "Harmonic" ? 0.85
-                                    : p.gbType === "Worm" ? Math.max(0.9 - (0.05 * N) / 10, 0.4)
-                                        : Math.pow(0.97, Math.max(p.gbStages, 1));
-                                const eff = p.gbEff > 0 ? p.gbEff / 100 : effAuto;
-                                const spr = Math.pow(N, 1 / Math.max(p.gbStages, 1));
-                                return (React.createElement(React.Fragment, null,
-                                    React.createElement("div", { className: "tbl", style: { marginTop: 8 } },
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null,
-                                                "Efficiency \u03B7 ",
-                                                p.gbEff > 0 ? "" : "(auto)"),
-                                            React.createElement("b", null,
-                                                (eff * 100).toFixed(0),
-                                                "%")),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Output no-load"),
-                                            React.createElement("b", null,
-                                                fmt(r.noLoad / N, 0),
-                                                " rpm")),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Output rated point"),
-                                            React.createElement("b", null, r.op ? fmt(r.op.n / N, 0) + " rpm · " + tqS(r.op.T * N * eff) : "—")),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Output peak (drive-limited)"),
-                                            React.createElement("b", null, tqS(r.peakT * N * eff))),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Output continuous (S1)"),
-                                            React.createElement("b", null, r.therm ? tqS(r.therm.Tcont * N * eff) : "—")),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Load inertia reflected to motor"),
-                                            React.createElement("b", null,
-                                                "\u00F7 ",
-                                                (N * N).toFixed(0))),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Ratio per stage"),
-                                            React.createElement("b", null,
-                                                spr.toFixed(1),
-                                                ":1")),
-                                        p.gbType === "Planetary" && (() => {
-                                            const Zs = 15, Zr = Math.round(Zs * (spr - 1)), Zp = Math.floor((Zr - Zs) / 2);
-                                            const ok = (Zr - Zs) % 2 === 0 && (Zs + Zr) % 3 === 0;
-                                            return React.createElement("div", { className: "kv" },
-                                                React.createElement("span", null, "Teeth / stage (sun/planet/ring)"),
-                                                React.createElement("b", null,
-                                                    Zs,
-                                                    "/",
-                                                    Zp,
-                                                    "/",
-                                                    Zr,
-                                                    ok ? "" : " ⚠ adjust for 3-planet assembly"));
-                                        })(),
-                                        p.gbType === "Harmonic" && (React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Flexspline / circular teeth"),
-                                            React.createElement("b", null,
-                                                Math.round(2 * N),
-                                                "/",
-                                                Math.round(2 * N) + 2))),
-                                        React.createElement("div", { className: "kv" },
-                                            React.createElement("span", null, "Gearhead OD (est)"),
-                                            React.createElement("b", null, us === "in" ? ((p.statorOD * (p.gbType === "Harmonic" ? 1.0 : 1.1)) / 25.4).toFixed(2) + " in" : Math.round(p.statorOD * (p.gbType === "Harmonic" ? 1.0 : 1.1)) + " mm"))),
-                                    p.gbType !== "Harmonic" && p.gbType !== "Worm" && spr > 7 && (React.createElement("div", { className: "warn" },
-                                        "Stage ratio ",
-                                        spr.toFixed(1),
-                                        ":1 is high for a ",
-                                        p.gbType.toLowerCase(),
-                                        " train \u2014 add a stage (practical \u2264 6\u20137:1)."))));
-                            })())),
-                        React.createElement("div", { className: "note" }, "Transmission applied to the continuous-rotation output: torque \u00D7 N\u00B7\u03B7, speed \u00F7 N, load inertia \u00F7 N\u00B2. Backlash, stiffness, and the gearhead's own torque rating are not modeled \u2014 check its datasheet limits.")),
                     React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                         React.createElement("h2", null, "Magnetics & materials"),
                         React.createElement("div", { className: "tbl" },
@@ -22847,7 +23318,7 @@ function MotorDesigner() {
                         React.createElement("div", { className: "note" }, "Bt from slot-pitch/tooth-width flux concentration; yoke from half-pole flux. Linear model \u2014 values above ~88% of the material ceiling mean real flux will fall below prediction as the steel saturates. Iron loss is a Steinmetz-style scaling from 1.5 T / 60 Hz catalog specific loss.")),
                     (r.warn.length > 0) && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                         React.createElement("h2", null, "Checks"),
-                        r.warn.map((m, i) => React.createElement("div", { className: "warn", key: i }, m)))))),
+                        r.warn.map((m, i) => React.createElement("div", { className: "warn", key: i }, m))))))),
             React.createElement("footer", { className: "ft" },
                 React.createElement("span", null, "CortexEdge \u00B7 MotrSynth"),
                 React.createElement("span", null, "\u00B7"),
