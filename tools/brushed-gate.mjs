@@ -11,7 +11,7 @@ const html = readFileSync('index.html', 'utf8');
 const i0 = html.indexOf('<script>/*APP*/') + '<script>/*APP*/'.length;
 const i1 = html.indexOf('</script>\n<script>/*BOOT*/');
 const app = html.slice(i0, i1).replace(/<\\\/script/g, '</script');
-const fn = new Function('React', app + '\nreturn { computeDesign, BrushedSection, BrushedSlotDetail, AxialCutaway, CrossSection, SlotDetail, CurrentTorqueChart, TorqueSpeedChart };');
+const fn = new Function('React', app + '\nreturn { computeDesign, BrushedSection, BrushedSlotDetail, AxialCutaway, CrossSection, SlotDetail, CurrentTorqueChart, TorqueSpeedChart, ArmLamPreview };');
 const M = fn(React);
 
 // 540-class brushed: 24 mm armature in a 28 mm can, 2-pole ferrite-ish ring -> use N35 for test
@@ -77,6 +77,11 @@ for (const [name, C, props] of [
     console.log("  ✓ " + name + " renders (" + s.length + " chars)");
     if (!s.length) { console.log("  ✗ empty render: " + name); process.exitCode = 1; }
   } catch (e) { console.log("  ✗ " + name + " THREW: " + e.message); process.exitCode = 1; }
+}
+{
+  const svgA = renderToString(React.createElement(M.ArmLamPreview, { p, us: "in" }));
+  if (!svgA.includes("svg-armlam") || /NaN/.test(svgA) || !svgA.includes("airgap up")) { console.log("  ✗ ArmLamPreview render"); process.exitCode = 1; }
+  else console.log("  ✓ ArmLamPreview renders (armature slots outward, airgap up)");
 }
 // wave winding check: A2 = 2
 const r2 = M.computeDesign({ ...p, pattern: "concentrated" });

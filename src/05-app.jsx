@@ -406,6 +406,207 @@ function synthEnvelope(wiz, p, us) {
       (sugg.length ? "⚠ " + sugg.join(" ") : "✓ Passes rotation, fill, saturation & rated-point checks.") };
 }
 
+/* ---- Winding-arbor tooling module: coil dimensions from the arbor, verified against the
+   stator drawing alone — no rotor, no performance ---- */
+function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, impPanel }) {
+  const inv = p.wbMode === "inv";
+  const sol = inv ? solveBobbin(p) : null;
+  const pEff = inv ? { ...p, wbArborD: sol.Da, wbChanW: sol.chW, wbChanH: sol.chH, wbFlange: sol.flgEst, wbJump: sol.jumpEst } : p;
+  const b = computeBobbin(pEff);
+  const dl9 = (mm) => (us === "in" ? (mm / 25.4).toFixed(3) + "\u2033" : mm.toFixed(2) + " mm");
+  return (
+    <>
+      <div>
+        <div className="card" style={{ borderTop: "3px solid #3B82F6" }}>
+          <h2>Architecture</h2>
+          <Pick label="Machine type" v={p.motorType} set={switchType}
+            opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }, { v: "bobbin", t: "Winding" }]} />
+          <div className="note">Winding-arbor tooling: coil dimensions from the arbor & channel, wire and resistance per coil and per string, verified against only what the stator drawing says.</div>
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <h2>Files</h2>
+          <div className="iobar">
+            <button className="btn" onClick={exportDesign}>Export .json</button>
+            <label className="btn ghost">
+              Import…
+              <input type="file" accept=".json,application/json" onChange={importDesign} />
+            </label>
+          </div>
+          {ioMsg && <div className="iomsg">{ioMsg}</div>}
+          {impPanel}
+          <div className="note">Same design-file format as the machine modules — the tool, wire, and stator-drawing fields all serialize, so a winding spec can travel with (or separately from) its motor.</div>
+        </div>
+        <AssumptionsCard p={p} />
+        <div className="card" style={{ marginTop: 14 }}>
+          <h2>{inv ? "Solve the tool" : "Winding arbor (tool)"}</h2>
+          <Pick label="Driving mode" v={p.wbMode} set={s("wbMode")}
+            opts={[{ v: "fwd", t: "Tool known → coil data" }, { v: "inv", t: "Coil spec → tool dims" }]} />
+          {inv ? (
+            <>
+              <Num label="Target R line-line (20 °C, 0 = insertion rule)" unit="Ω" v={p.wbRt} set={s("wbRt")} step={0.05} min={0} />
+              <Pick label="Connection" v={p.conn} set={s("conn")} opts={[{ v: "wye", t: "Wye" }, { v: "delta", t: "Delta" }]} />
+              <Pick label="Winding style" v={p.wbStyle} set={s("wbStyle")} opts={[{ v: "tooth", t: "Tooth-wound" }, { v: "lap", t: "Lap (inserted)" }]} />
+              {p.wbStyle === "lap" && <Num label="Coil throw" unit="slots" v={p.wbThrow} set={s("wbThrow")} min={1} />}
+              <Num label="Coils per phase (string)" v={p.wbCoils} set={s("wbCoils")} min={1} max={48} />
+              <div className="tbl" style={{ marginTop: 6 }}>
+                <div className="kv"><span>Solved arbor Ø ({sol.basis})</span>
+                  <b style={{ color: sol.Da < Math.max(sol.DaIns, sol.DaGeo) - 0.25 ? "#DC2626" : "#059669" }}>{dl9(sol.Da)}</b></div>
+                <div className="kv"><span>Insertion needs (bore + 2·tip)</span><b>≥ {dl9(sol.DaIns)}</b></div>
+                <div className="kv"><span>Stator geometry needs (2·stack + 2·heads)</span><b>Ø{dl9(sol.DaGeo)} · heads {dl9(sol.Lhead)}/end</b></div>
+                <div className="kv"><span>Coil perimeter (as inserted)</span><b>{dl9(sol.perim)}</b></div>
+                <div className="kv"><span>Solved channel W × flange H</span><b>{dl9(sol.chW)} × {dl9(sol.chH)}</b></div>
+                <div className="kv"><span>Flange Ø / est. thickness</span><b>{dl9(b.flangeOD)} / {dl9(sol.flgEst)}</b></div>
+                <div className="kv"><span>Est. inter-coil jumper (from lamination)</span><b>{dl9(sol.jumpEst)}</b></div>
+                {sol.RcT > 0 && <div className="kv"><span>Per-coil R budget (after jumpers)</span><b>{fmt(sol.RcT, 3)} Ω</b></div>}
+                {sol.throwArc > 0 && <div className="kv"><span>Coil span arc (throw {p.wbThrow} slots)</span><b>{dl9(sol.throwArc)}</b></div>}
+                <div className="kv"><span>Lay (square bundle)</span><b>{sol.tpl} turns/layer · {sol.layers} layers · {dl9(sol.build)} build</b></div>
+              </div>
+              {sol.Da < Math.max(sol.DaIns, sol.DaGeo) - 0.25 && <div className="warn">
+                Target resistance demands a smaller arbor than {sol.DaGeo > sol.DaIns ? "the stack + heads require" : "insertion allows"} —
+                the coil would be too short to reach around the stack. Fewer turns, finer wire, more strands,
+                or accept Ø{dl9(Math.max(sol.DaIns, sol.DaGeo))} and a higher L-L.</div>}
+              <div className="note">Flange thickness and jumper allowance are estimated from the lamination and
+                winding scheme (same-phase coils land every Ns/coils slots — the jumper spans that arc at the
+                mean slot Ø, +25% lay slack); the L-L target converts through the connection and series string
+                with jumper copper deducted.</div>
+            </>
+          ) : (
+            <>
+              <Num label="Arbor Ø (winding surface)" unit="mm" v={p.wbArborD} set={s("wbArborD")} step={0.5} min={1} />
+              <Num label="Channel width" unit="mm" v={p.wbChanW} set={s("wbChanW")} step={0.5} min={0.5} />
+              <Num label="Flange height (max build)" unit="mm" v={p.wbChanH} set={s("wbChanH")} step={0.5} min={0.5} />
+              <Num label="Flange thickness" unit="mm" v={p.wbFlange} set={s("wbFlange")} step={0.2} min={0.3} />
+              <Num label="Coils on the stick" v={p.wbCoils} set={s("wbCoils")} min={1} max={48} />
+              <Num label="Inter-coil jumper allowance" unit="mm" v={p.wbJump} set={s("wbJump")} step={5} min={0} />
+            </>
+          )}
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <h2>Coil & wire</h2>
+          <Num label="Turns per coil" v={p.turns} set={s("turns")} min={1} />
+          <Num label="Magnet wire" unit="AWG" v={p.awg} set={s("awg")} min={8} max={40} step={0.5} />
+          <Num label="Strands in hand" v={p.strands} set={s("strands")} min={1} max={12} />
+          <Sel label="Insulation build" v={p.insBuild} set={s("insBuild")} opts={Object.keys(INS_BUILD)} />
+          <Pick label="Wind style" v={p.wbLay} set={s("wbLay")}
+            opts={[{ v: "wild", t: "Wild (scramble)" }, { v: "precise", t: "Precise lay" }]} />
+          <Num label="Hot reference temp" unit="°C" v={p.Tcu} set={s("Tcu")} step={5} />
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <h2>Stator drawing (verification only)</h2>
+          <Num label="Lamination OD" unit="mm" v={p.statorOD} set={s("statorOD")} />
+          <Num label="Bore Ø" unit="mm" v={p.statorID} set={s("statorID")} />
+          <Num label="Slots" v={p.slots} set={s("slots")} min={3} />
+          <Num label="Tooth width" unit="mm" v={p.toothW} set={s("toothW")} step={0.1} />
+          <Num label="Yoke depth" unit="mm" v={p.yoke} set={s("yoke")} step={0.1} />
+          <Num label="Tip height" unit="mm" v={p.tipH} set={s("tipH")} step={0.1} />
+          <Num label="Slot opening" unit="mm" v={p.slotOpen} set={s("slotOpen")} step={0.1} />
+          <Num label="Liner thickness" unit="mm" v={p.liner} set={s("liner")} step={0.05} />
+          <Num label="Stack length" unit="mm" v={p.stackL} set={s("stackL")} />
+          <Num label="Coil head per end (0 = auto from scheme)" unit="mm" v={p.wbHead} set={s("wbHead")} step={0.5} min={0} />
+          <Num label="Slot bottom corner R" unit="mm" v={p.slotR} set={s("slotR")} step={0.1} min={0} />
+          <Num label="Slot mouth corner R" unit="mm" v={p.wbRtip} set={s("wbRtip")} step={0.1} min={0} />
+          <Pick label="Coil sides per slot" v={p.wbSides} set={s("wbSides")} opts={[{ v: 1, t: "Single layer" }, { v: 2, t: "Double layer" }]} />
+        </div>
+      </div>
+      <div>
+        <div className="card">
+          <div className="cardhead">
+            <h2>Lamination (from the drawing fields)</h2>
+            <button className="btn mini ghost" onClick={() => exportPng("svg-lam", "lamination-preview.png")}>PNG ⤓</button>
+          </div>
+          <LamPreview p={p} us={us} />
+          <div className="note">Drawn from the stator-drawing card alone — full lamination at true polar geometry,
+            single slot dimensioned with the four internal corner radii. If this doesn't look like the print,
+            the entered dims are off.</div>
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="cardhead">
+            <h2>Inserted coil — stack & heads</h2>
+            <button className="btn mini ghost" onClick={() => exportPng("svg-coilhead", "coil-heads.png")}>PNG ⤓</button>
+          </div>
+          <CoilHeadView p={p} b={b} us={us} />
+          <div className="note">
+            Plan view of one coil as inserted: straight legs run the stack in the slots, heads loop beyond each
+            end ({(p.wbStyle || "tooth") === "lap" ? "diamond over the throw arc" : "around the tooth"}). Change
+            the scheme, stack, or head override and the shape follows — with an override entered, the dashed
+            outline shows the scheme's auto estimate for comparison. The coil perimeter this implies is what
+            sizes the arbor in the inverse mode.
+          </div>
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="cardhead">
+            <h2>Winding arbor</h2>
+            <button className="btn mini ghost" onClick={() => exportPng("svg-arbor", "winding-arbor.png")}>PNG ⤓</button>
+          </div>
+          <ArborView p={pEff} b={b} us={us} />
+          <div className="note">
+            Sequential channels, one coil each. Copper drawn at the nested build; the strand bundle is treated
+            as an effective Ø of wire × √strands — a lay-dependent first-order figure. Tool length includes a
+            flange between and outside every channel.
+          </div>
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <h2>Coil results</h2>
+          <div className="tbl">
+            <div className="kv"><span>Wire (bare / insulated / bundle)</span><b>Ø{b.dBare.toFixed(3)} / {b.dIns.toFixed(3)} / {b.dEff.toFixed(3)} mm</b></div>
+            <div className="kv"><span>Lay: turns per layer · layers</span><b>{b.tpl} · {b.layers}</b></div>
+            <div className="kv"><span>Build (nested / crossover worst)</span>
+              <b style={{ color: b.buildX > p.wbChanH ? "#DC2626" : "#059669" }}>{b.build.toFixed(2)} / {b.buildX.toFixed(2)} of {p.wbChanH} mm</b></div>
+            <div className="kv"><span>Coil heads (per end) · stack fit</span>
+              <b>{dl9(b.Lhead)} · {dl9(b.stackFit)} vs stack {dl9(p.stackL)}
+                <span style={{ color: b.stackFit < p.stackL - 0.5 ? "#DC2626" : Math.abs(b.stackFit - p.stackL) < Math.max(6, 0.15 * p.stackL) ? "#059669" : "#B45309" }}> {b.stackFit < p.stackL - 0.5 ? "✗ short" : Math.abs(b.stackFit - p.stackL) < Math.max(6, 0.15 * p.stackL) ? "✓" : "loose"}</span></b></div>
+            <div className="kv"><span>Coil ID / OD · channel capacity</span><b>{dl9(p.wbArborD)} / {dl9(b.coilOD)} · ~{b.capCh} turns</b></div>
+            <div className="kv"><span>Mean turn · wire per coil</span><b>{dl9(b.MLT)} · {b.lenCoil.toFixed(2)} m</b></div>
+            <div className="kv"><span>String: {p.wbCoils} coils + jumpers</span><b>{b.lenString.toFixed(2)} m · {(b.mCu * 1000).toFixed(0)} g Cu</b></div>
+            <div className="kv"><span>R per coil (20 / {p.Tcu} °C)</span><b>{fmt(b.R20c, 3)} / {fmt(b.R20c * b.RhotF(p.Tcu), 3)} Ω</b></div>
+            <div className="kv"><span>R string, series (20 / {p.Tcu} °C)</span><b>{fmt(b.R20s, 3)} / {fmt(b.R20s * b.RhotF(p.Tcu), 3)} Ω</b></div>
+            {b.wild && (() => {
+              const bP9 = computeBobbin({ ...pEff, wbLay: "precise" });
+              const dOD9 = b.coilOD - bP9.coilOD, dR9 = bP9.R20c > 0 ? (b.R20c / bP9.R20c - 1) * 100 : 0;
+              return <div className="kv"><span>Wild-wind cost vs precise lay</span>
+                <b>+{dl9(dOD9)} coil Ø · +{dR9.toFixed(1)}% R · cap ×0.8</b></div>;
+            })()}
+            <div className="kv"><span>Magnet wire per phase (incl. jumpers)</span>
+              <b>{us === "in" ? (b.mPhase * 2.20462).toFixed(3) + " lb" : b.mPhase.toFixed(3) + " kg"}</b></div>
+            <div className="kv"><span>Magnet wire per motor (3 phases)</span>
+              <b>{us === "in" ? (b.mPhase * 3 * 2.20462).toFixed(3) + " lb" : (b.mPhase * 3).toFixed(3) + " kg"}</b></div>
+            {b.wild && <div className="note" style={{ marginTop: 4 }}>
+              Wild wind modeled: the first layer lays clean on the arbor, then crossovers kill the row nesting
+              (~1.0·wire Ø stacking + 8% bump vs 0.866 nested) and channel capacity derates ×0.8 — the coil OD,
+              mean turn, resistance, and wire weight above all carry that penalty. Switch to Precise lay to see
+              the ideal wind.</div>}
+            {b.slot && Number.isFinite(b.slot.fill) && (
+              <div className="kv"><span>Slot fill ({b.slot.sides} side{b.slot.sides > 1 ? "s" : ""}/slot, lined)</span>
+                <b style={{ color: b.slot.fill > 0.42 ? "#DC2626" : b.slot.fill > 0.35 ? "#D97706" : "#059669" }}>{(b.slot.fill * 100).toFixed(0)}%</b></div>
+            )}
+          </div>
+          {b.err.map((m9, i9) => <div className="err" key={"e" + i9}>{m9}</div>)}
+          {b.warn.map((m9, i9) => <div className="warn" key={"w" + i9}>{m9}</div>)}
+          <div className="note">
+            Knowledge here stops at the stator drawing: fill, slot-opening feed, and channel capacity are
+            verified; no rotor is assumed, so nothing performance-level (Ke, torque, speed) is claimed.
+          </div>
+        </div>
+      </div>
+      <div>
+        <div className="card">
+          <h2>Tooling notes</h2>
+          <div className="tbl">
+            <div className="kv"><span>Tool length ({p.wbCoils} channels)</span><b>{dl9(b.lenTool)}</b></div>
+            <div className="kv"><span>Flange OD</span><b>{dl9(b.flangeOD)}</b></div>
+            {b.slot && <div className="kv"><span>Slot opening vs bundle</span>
+              <b style={{ color: b.dEff > p.slotOpen - 0.1 ? "#DC2626" : "#059669" }}>{p.slotOpen} vs {b.dEff.toFixed(2)} mm</b></div>}
+          </div>
+          <div className="note">
+            Wind direction alternates per channel if coils insert A-B-A-B; the jumper allowance covers the
+            inter-coil throw plus a service loop. Verify the coil OD clears your insertion tooling.
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ---- Actuator module: composes the motor & brake designs open in their tabs through a gearhead ---- */
 function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
   const motorT = p.actMotor === "brushed" ? "brushed" : p.actMotor === "stepper" ? "stepper" : "pm";
@@ -429,7 +630,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
         <div className="card" style={{ borderTop: "3px solid #3B82F6" }}>
           <h2>Architecture</h2>
           <Pick label="Machine type" v={p.motorType} set={switchType}
-            opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }]} />
+            opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }, { v: "bobbin", t: "Winding" }]} />
           <div className="note">Composite actuator: the motor and brake designs open in their tabs, driven through a multi-stage gearhead, presented at the output shaft.</div>
         </div>
         <div className="card" style={{ marginTop: 14 }}>
@@ -447,6 +648,30 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
           <Num label="Efficiency override (0 = auto)" unit="%" v={p.gbEff} set={s("gbEff")} min={0} max={100} />
           <Num label="Gearhead OD (0 = auto shell)" unit="mm" v={p.gbOD} set={s("gbOD")} min={0} />
           <Num label="Gearhead length (0 = auto shell)" unit="mm" v={p.gbLen} set={s("gbLen")} min={0} />
+          <h2 style={{ marginTop: 12 }}>Mounting</h2>
+          <Pick label="Mount style" v={p.mntStyle} set={s("mntStyle")}
+            opts={[{ v: "face", t: "Face mount" }, { v: "flange", t: "Flange" }]} />
+          <Sel label="Thread (tapped pattern)" v={p.mntThread} set={s("mntThread")} opts={Object.keys(MNT_THREADS)} />
+          <Num label="Holes (evenly spaced)" v={p.mntN} set={s("mntN")} min={0} max={12} />
+          <Num label="Bolt circle Ø (0 = auto)" unit="mm" v={p.mntBCD} set={s("mntBCD")} min={0} />
+          <Num label="Piloting boss OD (0 = none)" unit="mm" v={p.mntPilotOD} set={s("mntPilotOD")} min={0} />
+          <Num label="Piloting boss depth (0 = none)" unit="mm" v={p.mntPilotT} set={s("mntPilotT")} step={0.5} min={0} />
+          <h2 style={{ marginTop: 12 }}>Finish (iso)</h2>
+          <Sel label="Gearhead housing" v={p.finGb} set={s("finGb")} opts={Object.keys(ISO_FINISHES)} />
+          <Sel label="Motor housing" v={p.finMot} set={s("finMot")} opts={Object.keys(ISO_FINISHES)} />
+          {p.actBrake === "yes" && <Sel label="Brake housing" v={p.finBrk} set={s("finBrk")} opts={Object.keys(ISO_FINISHES)} />}
+          {p.mntStyle === "flange" && (
+            <>
+              <Pick label="Flange direction" v={p.mntDir} set={s("mntDir")}
+                opts={[{ v: "fwd", t: "Toward output" }, { v: "aft", t: "Away (boss fwd)" }]} />
+              <Num label="Flange Ø (0 = auto)" unit="mm" v={p.mntFlgOD} set={s("mntFlgOD")} min={0} />
+              {p.mntDir === "aft" && <Num label="Spacing from output face" unit="mm" v={p.mntGap} set={s("mntGap")} step={0.5} min={0} />}
+              <Num label={p.mntDir === "aft" ? "Flange thickness" : "Flange projection from output face"} unit="mm" v={p.mntFlgT} set={s("mntFlgT")} step={0.5} min={1} />
+              {p.mntDir === "aft" && <div className="note" style={{ marginTop: 2 }}>
+                The gearhead OD ahead of the flange acts as the mounting boss — it registers in the mating bore,
+                bolts pull from behind through the flange.</div>}
+            </>
+          )}
           <div className="note">
             Per-stage efficiency for miniature/precision gearheads (Maxon/Faulhaber-class catalog data):
             planetary 90%, spur 93%, harmonic 80% at rated load & warm — compounded per stage (η = η_stage^stages).
@@ -455,6 +680,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
             across stages against each train's practical window.
           </div>
         </div>
+        <AssumptionsCard p={p} />
       </div>
       <div>
         {!act.fail && (
@@ -463,7 +689,12 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
               <h2>Composite outline</h2>
               <button className="btn mini ghost" onClick={() => exportPng("svg-actline", "actuator-outline.png")}>PNG ⤓</button>
             </div>
-            <ActuatorOutline motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} />
+            <ActuatorOutline motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT }} />
+            <div className="cardhead" style={{ marginTop: 12 }}>
+              <h2>Isometric</h2>
+              <button className="btn mini ghost" onClick={() => exportPng("svg-actiso", "actuator-iso.png")}>PNG ⤓</button>
+            </div>
+            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} />
             <div className="note">
               Envelope outline at true relative scale. Gearhead: {p.gbOD > 0 || p.gbLen > 0 ? "specified envelope where entered, typical shell for the rest" : "representative shell"} — auto length from typical per-stage proportions
               ({act.type === "Harmonic" ? "0.55" : act.type === "Planetary" ? "0.42" : "0.34"}·OD per stage + output
@@ -549,6 +780,9 @@ export default function MotorDesigner() {
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
     calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
+    mntStyle: "face", mntThread: "4-40", mntN: 4, mntBCD: 0, mntFlgOD: 0, mntFlgT: 3, mntDir: "fwd", mntGap: 5, mntPilotOD: 0, mntPilotT: 0,
+    finGb: "Matte steel", finMot: "Aluminum", finBrk: "Black anodized",
+    wbArborD: 8, wbChanW: 6, wbChanH: 5, wbFlange: 1.2, wbCoils: 6, wbJump: 25, wbSides: 2, wbMode: "fwd", wbRt: 0, wbRtip: 0.8, wbLay: "wild", wbHead: 0,
     brushV: 1.5, latmWind: 2,
     brkSprFree: 23.3, brkSprEng: 18.3, brkMu: 0.40, brkMuD: 0.32, brkFaces: 2, brkStroke: 0.3,
     brkBore: 26, brkPole: 6, brkArm: 6, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
@@ -674,11 +908,15 @@ export default function MotorDesigner() {
     setIoMsg("");
   };
   const r = useMemo(() => computeDesign(p), [p]);
+  const rRaw = useMemo(
+    () => (p.calOn === "yes" && (p.motorType === "pm" || p.motorType === "brushed")
+      ? computeDesign({ ...p, calOn: "no" }) : null),
+    [p]);
   const pm = p.motorType === "pm" || p.motorType === "brushed";
   const brM = p.motorType === "brushed";
   const latmM = p.motorType === "latm";
   const brkM = p.motorType === "brake", stpM = p.motorType === "stepper";
-  const actM = p.motorType === "actuator";
+  const actM = p.motorType === "actuator", wbM = p.motorType === "bobbin";
   const IN2C = 141.612;
   // bench BEMF: derive Ke from what the scope/meter shows.
   // BLDC: RMS (or pk-pk/2√2 sine estimate) at speed 120·f/poles. Brushed: DC volts at rig speed.
@@ -705,21 +943,68 @@ export default function MotorDesigner() {
     URL.revokeObjectURL(url);
     setIoMsg("Design exported.");
   };
-  const importDesign = (e) => {
-    const f = e.target.files && e.target.files[0];
-    if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const j = JSON.parse(rd.result);
-        if (j && (j.units === "in" || j.units === "mm")) setUs(j.units);
-        const src = j && j.design ? j.design : j; // accept bare or wrapped JSON
-        setP((o) => {
+  const finMigrate = (v9) => (v9 === "Iridescent alum" ? "Iridite (chem film)" : v9);
+  const [pendImp, setPendImp] = useState(null);
+  // autosave + undo: guarded so restricted browsers (blocked localStorage) degrade silently
+  const LSK = "motrsynth-autosave-v1";
+  const lsOK = useMemo(() => { try { localStorage.setItem("__t", "1"); localStorage.removeItem("__t"); return true; } catch { return false; } }, []);
+  const [restore, setRestore] = useState(null);
+  const undoRef = React.useRef([]);
+  const lastSnapRef = React.useRef(null);
+  const skipPushRef = React.useRef(false);
+  const [undoN, setUndoN] = useState(0);
+  useEffect(() => {                                                   // offer restore once, on mount
+    if (!lsOK) return;
+    try {
+      const j = JSON.parse(localStorage.getItem(LSK) || "null");
+      if (j && j.design && j.ts) setRestore(j);
+    } catch { /* corrupt save — ignore */ }
+  }, [lsOK]);
+  useEffect(() => {                                                   // debounced autosave + undo push
+    const t = setTimeout(() => {
+      if (lastSnapRef.current && !skipPushRef.current &&
+          JSON.stringify(lastSnapRef.current.p) !== JSON.stringify(p)) {
+        undoRef.current.push(lastSnapRef.current);
+        if (undoRef.current.length > 25) undoRef.current.shift();
+        setUndoN(undoRef.current.length);
+      }
+      skipPushRef.current = false;
+      lastSnapRef.current = { p, us };
+      if (lsOK) { try { localStorage.setItem(LSK, JSON.stringify({ v: 1, ts: Date.now(), us, design: p })); } catch { /* full */ } }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [p, us, lsOK]);
+  const doUndo = () => {
+    const st = undoRef.current;
+    if (!st.length) return;
+    const prev = st.pop();
+    setUndoN(st.length);
+    skipPushRef.current = true;
+    lastSnapRef.current = prev;
+    setP(prev.p); setUs(prev.us);
+  };
+  const doRestore = () => {
+    if (!restore) return;
+    skipPushRef.current = true;
+    setP((o) => {
+      const n = { ...o };
+      Object.keys(o).forEach((k) => { if (k in restore.design && typeof restore.design[k] === typeof o[k]) n[k] = restore.design[k]; });
+      return n;
+    });
+    if (restore.us === "in" || restore.us === "mm") setUs(restore.us);
+    setRestore(null);
+    setIoMsg("Autosaved session restored.");
+  };
+  const applyImport = (src, fname, fileUnits) => {
+    if (fileUnits === "in" || fileUnits === "mm") setUs(fileUnits);
+    setPendImp(null);
+    setP((o) => {
           const n = { ...o };
           let hits = 0;
           Object.keys(o).forEach((k) => {
             if (k in src && typeof src[k] === typeof o[k]) { n[k] = src[k]; hits++; }
           });
+          ["finGb", "finMot", "finBrk"].forEach((k) => { n[k] = finMigrate(n[k]); });
           // legacy brake files: bobbin OD used to be the winding START (bore/barrel pair, ~1.6 mm apart).
           // Migrate to winding-window semantics: start = old OD, max finish = pocket − 1 mm.
           let migrated = false;
@@ -734,9 +1019,24 @@ export default function MotorDesigner() {
             n.brkBobOD = +(n.brkPktID - 1).toFixed(1);
             migrated = true;
           }
-          setIoMsg(hits ? `Imported ${f.name} (${hits} parameters).${migrated ? " Bobbin fields migrated to winding-window semantics (start unchanged, max = pocket − 1 mm)." : ""}` : "No recognizable parameters in that file.");
+          setIoMsg(hits ? `Imported ${fname} (${hits} parameters).${migrated ? " Bobbin fields migrated to winding-window semantics (start unchanged, max = pocket − 1 mm)." : ""}` : "No recognizable parameters in that file.");
           return n;
         });
+  };
+  const importDesign = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const j = JSON.parse(rd.result);
+        const src = j && j.design ? j.design : j; // accept bare or wrapped JSON
+        const diffs = Object.keys(p).filter((k) =>
+          k in src && typeof src[k] === typeof p[k] && src[k] !== p[k]
+        ).map((k) => ({ k, from: p[k], to: src[k] }));
+        if (!diffs.length) { setIoMsg(`${f.name} matches the current design — nothing would change.`); return; }
+        setIoMsg("");
+        setPendImp({ name: f.name, src, units: j && j.units, diffs });
       } catch {
         setIoMsg("Could not read that file — expected JSON exported from this tool.");
       }
@@ -744,6 +1044,23 @@ export default function MotorDesigner() {
     rd.readAsText(f);
     e.target.value = "";
   };
+  const fmtDiffV = (x) => typeof x === "number" ? (Math.abs(x) >= 1000 ? Math.round(x) : +(+x).toPrecision(5)) : String(x);
+  const impPanel = pendImp ? (
+    <div className="iomsg" style={{ marginTop: 6 }}>
+      <b>{pendImp.name}</b> changes {pendImp.diffs.length} field{pendImp.diffs.length > 1 ? "s" : ""}:
+      <div style={{ maxHeight: 150, overflowY: "auto", margin: "4px 0" }}>
+        {pendImp.diffs.slice(0, 14).map((d) => (
+          <div key={d.k} style={{ fontSize: "0.92em" }}>
+            {d.k}: {fmtDiffV(d.from)} → <b>{fmtDiffV(d.to)}</b></div>
+        ))}
+        {pendImp.diffs.length > 14 && <div>…and {pendImp.diffs.length - 14} more</div>}
+      </div>
+      <div className="iobar">
+        <button className="btn" onClick={() => applyImport(pendImp.src, pendImp.name, pendImp.units)}>Apply</button>
+        <button className="btn ghost" onClick={() => { setPendImp(null); setIoMsg("Import cancelled — design unchanged."); }}>Cancel</button>
+      </div>
+    </div>
+  ) : null;
   const importDxf = (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
@@ -848,21 +1165,33 @@ export default function MotorDesigner() {
       <header className="hd">
         <img className="logo" src="https://cortexelearn.github.io/assets/logo.png" alt="CortexEdge" />
         <h1>Cortex<b>Edge</b> <span className="tool">· MotrSynth</span></h1>
+        <button className="btn mini ghost" title="Undo last change (autosaved snapshots)" disabled={!undoN}
+          style={{ marginRight: 8, opacity: undoN ? 1 : 0.4 }} onClick={doUndo}>↩ Undo{undoN ? ` (${undoN})` : ""}</button>
         <div className="seg useg">
           <button className={us === "in" ? "on" : ""} onClick={() => setUs("in")}>inch</button>
           <button className={us === "mm" ? "on" : ""} onClick={() => setUs("mm")}>mm</button>
         </div>
       </header>
       <p className="eyebrow">Engineering Tools · Three-Phase BLDC Motor Designer</p>
+      {restore && (
+        <div className="iomsg" style={{ margin: "6px 0 10px" }}>
+          Autosaved session found from {new Date(restore.ts).toLocaleString()} —
+          <span className="iobar" style={{ display: "inline-flex", marginLeft: 8 }}>
+            <button className="btn mini" onClick={doRestore}>Restore</button>
+            <button className="btn mini ghost" onClick={() => setRestore(null)}>Dismiss</button>
+          </span>
+        </div>
+      )}
 
       <div className="grid">
-        {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} /> : <>
+        {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} />
+          : wbM ? <BobbinView p={p} s={s} us={us} switchType={switchType} exportDesign={exportDesign} importDesign={importDesign} ioMsg={ioMsg} impPanel={impPanel} /> : <>
         {/* ============ inputs ============ */}
         <div>
           <div className="card" style={{ borderTop: "3px solid #3B82F6" }}>
             <h2>Architecture</h2>
             <Pick label="Machine type" v={p.motorType} set={switchType}
-              opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }]} />
+              opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }, { v: "bobbin", t: "Winding" }]} />
             <div className="note">
               {p.motorType === "pm" ? "3-phase PM synchronous: stationary slotted stator, rotating magnet rotor."
                 : p.motorType === "brushed" ? "Brushed PM DC: magnet ring fixed to the housing ID; the slotted lamination, coils, and commutator rotate as the armature."
@@ -870,6 +1199,7 @@ export default function MotorDesigner() {
                 : p.motorType === "stepper" ? "Stepper: hybrid fine-tooth (1.8°-class) or PM can-stack (7.5°+)."
                 : p.motorType === "brake" ? "Power-off spring-applied brake: annular electromagnet vs springs, friction disc output."
                 : p.motorType === "actuator" ? "Composite actuator: the motor and brake designs open in their tabs, driven through a multi-stage gearhead, presented at the output shaft."
+                : p.motorType === "bobbin" ? "Winding-arbor tooling: coil dimensions from the arbor & channel, verified against the stator drawing alone."
                 : "Line-fed squirrel-cage induction machine."}
               {" "}Each type keeps its own parameter set while this session is open — toggling away and back restores it.
             </div>
@@ -897,6 +1227,7 @@ export default function MotorDesigner() {
                       </label>
                     </div>
                     {ioMsg && <div className="iomsg">{ioMsg}</div>}
+                    {impPanel}
                   </>
                 )}
                 {wizTab === "presets" && (
@@ -1015,6 +1346,7 @@ export default function MotorDesigner() {
                   <input type="file" accept=".dxf" onChange={importDxf} />
                 </label>}
                 <button className="btn mini ghost" onClick={() => downloadDxf(p, r)}>{brM ? "Export armature DXF" : "Export DXF"}</button>
+                {p.motorType === "pm" && <button className="btn mini ghost" title="2D magnetostatic model with this tool's BH and magnet data — open in FEMM and run" onClick={() => downloadFemm(p, r)}>Export FEMM</button>}
               </div>
             </div>
             {dxf && (
@@ -1058,7 +1390,9 @@ export default function MotorDesigner() {
             <Num label={stpM ? "Pole body width" : "Tooth width"} unit="mm" v={p.toothW} set={s("toothW")} step={0.1} />
             <Num label="Slot opening" unit="mm" v={p.slotOpen} set={s("slotOpen")} step={0.1} />
             <Num label="Tooth-tip height" unit="mm" v={p.tipH} set={s("tipH")} step={0.1} />
-            <Num label="Slot corner radius" unit="mm" v={p.slotR} set={s("slotR")} step={0.1} min={0} />
+            <Num label="Slot bottom corner R" unit="mm" v={p.slotR} set={s("slotR")} step={0.1} min={0} />
+            {(p.motorType === "pm" || p.motorType === "induction" || brM) &&
+              <Num label="Slot mouth corner R" unit="mm" v={p.wbRtip} set={s("wbRtip")} step={0.1} min={0} />}
             </>}
             <Num label="Stack length" unit="mm" v={p.stackL} set={s("stackL")} />
             {!latmM && <Num label="Slot liner" unit="mm" v={p.liner} set={s("liner")} step={0.05} />}
@@ -1180,8 +1514,8 @@ export default function MotorDesigner() {
                   opts={Object.keys(BRAKE_MATS)} />
                 <Num label="Static friction µs" v={p.brkMu} set={s("brkMu")} step={0.02} />
                 <Num label="Dynamic friction µd" v={p.brkMuD} set={s("brkMuD")} step={0.02} />
-                <Num label="Lining OD" unit="mm" v={p.brkRo} set={s("brkRo")} />
-                <Num label="Lining ID" unit="mm" v={p.brkRi} set={s("brkRi")} />
+                <Num label="Lining OD" unit="mm" v={+(p.brkRo * 2).toFixed(2)} set={(x) => s("brkRo")(x / 2)} />
+                <Num label="Lining ID" unit="mm" v={+(p.brkRi * 2).toFixed(2)} set={(x) => s("brkRi")(x / 2)} />
                 <Num label="Friction faces" v={p.brkFaces} set={s("brkFaces")} min={1} max={2} />
                 <div className="note">Material sets µ from catalog-typical dry values — edit µ directly for your
                   measured lining data. Housing/armature material comes from Magnetics ▸ stator steel.</div>
@@ -1269,6 +1603,8 @@ export default function MotorDesigner() {
                   <b>{latmM ? fmt(r.latm ? r.latm.Bg : 0) + " T" : fmt(r.BgAvg) + " / " + fmt(r.B1) + " T"}</b></div>}
                 {!latmM && !stpM && <div className="kv"><span>Demag field @ {p.Imax} A{brM ? " (armature reaction)" : ""}</span><b>{fmt(r.Hdemag, 0)} kA/m</b></div>}
                 {!brM && !latmM && !stpM && <div className="kv"><span>Sat. knockdown (no-load / @Imax)</span><b>{(r.ksat * 100).toFixed(1)}% / {(r.ksat * r.kIT * 100).toFixed(1)}%</b></div>}
+                {r.satCurve && <div className="kv"><span>Flux retention vs current (MEC)</span>
+                  <b>{r.satCurve.map((s9) => `${(s9.k * 100).toFixed(0)}%@${s9.f}·I`).join(" · ")}</b></div>}
             {!latmM && !stpM && <div className="kv"><span>Demag margin</span><b style={{ color: r.demagMargin < 0.3 ? "#DC2626" : "#059669" }}>{fmt(r.demagMargin * 100, 0)}%</b></div>}
               </div>
               <div className="note">
@@ -1280,6 +1616,7 @@ export default function MotorDesigner() {
               </div>
             </div>
           )}
+          <AssumptionsCard p={p} />
         </div>
 
         {/* ============ visualization ============ */}
@@ -1354,6 +1691,31 @@ export default function MotorDesigner() {
             )}
           </div>
 
+          {brM && <div className="card paper" style={{ marginTop: 14 }}>
+            <div className="cardhead">
+              <h2>Armature lamination (from the drawing fields)</h2>
+              <button className="btn mini ghost" onClick={() => exportPng("svg-armlam", "armature-lamination.png")}>PNG ⤓</button>
+            </div>
+            <ArmLamPreview p={p} us={us} />
+            <div className="note">
+              Verification view of the rotating armature lamination — slots on the OUTSIDE diameter: teeth
+              radiate outward, openings at the armature surface, core (yoke) between the slot bottoms and the
+              shaft. Single slot dimensioned airgap-up with the four internal corner radii. If this doesn't
+              match the print, the entered dims are off.
+            </div>
+          </div>}
+          {(p.motorType === "pm" || p.motorType === "induction") && <div className="card paper" style={{ marginTop: 14 }}>
+            <div className="cardhead">
+              <h2>Lamination (from the drawing fields)</h2>
+              <button className="btn mini ghost" onClick={() => exportPng("svg-lam", "lamination-preview.png")}>PNG ⤓</button>
+            </div>
+            <LamPreview p={p} us={us} />
+            <div className="note">
+              Verification view drawn from the lamination-geometry card alone — true polar lamination,
+              single slot dimensioned with the four internal corner radii. If this doesn't match the print,
+              the entered dims are off. The insertion map below shows where the winding lands in these slots.
+            </div>
+          </div>}
           {!latmM && !stpM && !brkM && <div className="card paper" style={{ marginTop: 14 }}>
             <div className="cardhead">
               <h2>{brM ? "Armature slot detail" : "Slot detail & insertion map"}</h2>
@@ -1528,7 +1890,11 @@ export default function MotorDesigner() {
               <h2>Torque–speed curve</h2>
               <button className="btn mini ghost" onClick={() => exportPng("svg-curve", "torque-speed.png")}>PNG ⤓</button>
             </div>
-            {!r.err.length && <TorqueSpeedChart r={r} us={us} />}
+            {!r.err.length && <TorqueSpeedChart r={r} us={us} ghost={rRaw && !rRaw.err.length ? rRaw : null} />}
+            {rRaw && !rRaw.err.length && <div className="note" style={{ marginTop: 4 }}>
+              Bench calibration active: solid = compensated (captured factors + fitted drag), dashed = the
+              uncompensated analytical model. Tweak turns, wire, or geometry and both move — the gap between
+              them is the frozen bench correction.</div>}
             <div className="tbl">
             <div className="kv"><span>No-load speed</span><b>{fmt(r.noLoad, 0)} rpm</b></div>
             {pm ? (
@@ -1570,7 +1936,7 @@ export default function MotorDesigner() {
                 <h2>Current vs torque</h2>
                 <button className="btn mini ghost" onClick={() => exportPng("svg-itcurve", "current-torque.png")}>PNG ⤓</button>
               </div>
-              <CurrentTorqueChart r={r} p={p} us={us} />
+              <CurrentTorqueChart r={r} p={p} us={us} ghost={rRaw && !rRaw.err.length ? rRaw : null} />
               <div className="note">
                 {brM
                   ? "I = T / Kt — linear for the brushed model (armature-reaction flux knockdown not iterated). Solid to the current-limited stall point; faint continuation = winding V/R capability. Red dashed = current limit."

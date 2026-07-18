@@ -37,11 +37,150 @@ function composeActuator(mr, br, cfg) {
     iAtOut, etaBack, selfLock, warn: w };
 }
 
+/* ---- winding-arbor tooling calculator: coil dimensions from the arbor & channel, wire/turns
+   capacity, resistance & copper, and fill verified against ONLY what the stator drawing says —
+   no rotor, no performance. Strand bundle treated as dEff = dIns·√strands (disclosed). ---- */
+/* ---- inverse winding solve: known stator drawing + winding spec → required arbor Ø, channel
+   dims, and tool constants. Square-ish bundle lay; the resistance target is entered as the
+   L-L (phase-to-phase) value at 20 °C — converted through the connection and the series
+   string (coils per phase) with the estimated jumper copper included. Flange thickness and
+   inter-coil jumper allowance are estimated from the lamination and winding scheme rather
+   than entered. ---- */
+function solveBobbin(p) {
+  const dBare = awgBareDia(p.awg);
+  const dIns = awgInsDia(dBare, p.insBuild);
+  const st = Math.max(Math.round(p.strands) || 1, 1);
+  const dEff = dIns * Math.sqrt(st);
+  const aBare = (Math.PI / 4) * dBare * dBare;
+  const N = Math.max(Math.round(p.turns), 1);
+  const nC = Math.max(Math.round(p.wbCoils) || 1, 1);                // coils per phase = the sequential string
+  const tpl = Math.max(Math.ceil(Math.sqrt(N)), 1);                  // square bundle in turns
+  const layers = Math.ceil(N / tpl);
+  const wild = (p.wbLay || "wild") !== "precise";
+  const chW = +((tpl * dEff) / 0.98 + 0.1).toFixed(2);
+  const build = wild
+    ? (layers <= 1 ? dEff : dEff * layers * 1.08)
+    : dEff * (1 + (layers - 1) * 0.866);
+  const chH = +(dEff * layers * (wild ? 1.08 : 1) * 1.12 + 0.2).toFixed(2); // clears the crossover worst
+  // lamination-derived tool constants
+  const Ns = Math.max(Math.round(p.slots), 3);
+  const hs9 = Math.max((p.statorOD - p.statorID) / 2 - p.yoke - p.tipH, 0);
+  const d1 = p.statorID + 2 * p.tipH, dm = p.statorID + 2 * (p.tipH + hs9 / 2); // mean slot diameter
+  // same-phase coils land every Ns/nC slots — jumper spans that arc at the mean slot Ø, + lay slack
+  const jumpEst = Math.max(Math.round((Math.PI * dm) / nC * 1.25), 5);
+  const flgEst = +Math.min(Math.max(0.25 * chW, 0.8), 3).toFixed(1); // stiffness vs channel width
+  const DaIns = +(d1).toFixed(2);
+  // coil-head estimate (same scheme model as the verifier) and the perimeter the coil must measure
+  const wmS = ((Math.PI * d1) / Ns - p.toothW + (Math.PI * (dm + hs9)) / Ns - p.toothW) / 2;
+  const headAuto9 = (p.wbStyle || "tooth") === "lap"
+    ? 1.25 * (Math.max(p.wbThrow, 1) * Math.PI * dm) / Ns
+    : p.toothW + 0.8 * Math.max(wmS, 0) + 3;
+  const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto9.toFixed(1);
+  const perim = 2 * (Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1) + 2 * Lhead;
+  const DaGeo = +((perim / Math.PI) - build).toFixed(2);             // arbor that yields exactly stack + heads
+  let Da = Math.max(DaGeo, DaIns), RcT = 0, Rjump = 0;
+  let basis = DaGeo >= DaIns ? "stator geometry (2\u00b7stack + 2\u00b7heads)" : "insertion rule (geometry coil would be under the tips)";
+  if (p.wbRt > 0) {
+    const Rph = p.conn === "delta" ? p.wbRt * 1.5 : p.wbRt / 2;      // L-L → per phase
+    Rjump = (RHO_CU * ((nC + 1) * jumpEst / 1000) * 1e6) / (aBare * st);
+    RcT = Math.max((Rph - Rjump) / nC, 1e-6);                        // per-coil budget after jumper copper
+    const MLTmm = (RcT * aBare * st) / (RHO_CU * 1e3 * N);           // required mean turn
+    Da = +(MLTmm / Math.PI - build).toFixed(2);
+    basis = `target R (${p.conn === "delta" ? "delta" : "wye"} L-L \u2192 ${RcT.toFixed(3)} \u03a9/coil)`;
+  }
+  const throwArc = p.wbStyle === "lap" ? +((Math.max(p.wbThrow, 1) * Math.PI * d1) / Ns).toFixed(1) : 0;
+  return { Da, DaIns, DaGeo, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
+    jumpEst, flgEst, RcT, Rjump, throwArc };
+}
+
+function computeBobbin(p) {
+  const w = [], err = [];
+  const dBare = awgBareDia(p.awg);
+  const dIns = awgInsDia(dBare, p.insBuild);
+  const st = Math.max(Math.round(p.strands) || 1, 1);
+  const dEff = dIns * Math.sqrt(st);                                 // strand bundle effective diameter
+  const arbor = Math.max(p.wbArborD, 1), chW = Math.max(p.wbChanW, dEff), chH = Math.max(p.wbChanH, 0.2);
+  const nC = Math.max(Math.round(p.wbCoils) || 1, 1), flg = Math.max(p.wbFlange, 0.3);
+  const tpl = Math.max(Math.floor((0.98 * chW) / dEff), 1);          // turns per layer across the channel
+  const layers = Math.ceil(p.turns / tpl);
+  const wild = (p.wbLay || "wild") !== "precise";                    // shop default: wild wind for insertion
+  // lay model — precise: rows nest at 0.866; wild: the first layer lays clean on the arbor, but
+  // crossovers after it kill the nesting (rows stack at ~1.0·dEff) and add a ~8% random bump
+  const build = wild
+    ? (layers <= 1 ? dEff : dEff * layers * 1.08)
+    : dEff * (1 + (layers - 1) * 0.866);
+  const buildX = dEff * layers * (wild ? 1.08 : 1);                  // crossover worst case
+  const coilOD = arbor + 2 * build;
+  const capCh = Math.max(Math.floor(tpl * Math.max(Math.floor((0.98 * chH) / (dEff * 0.866) - 0.15), 1) * (wild ? 0.8 : 1)), 1); // channel capacity
+  if (Math.max(build, buildX) > chH) w.push(`Winding build ${Math.max(build, buildX).toFixed(2)} mm (${wild ? "wild wind" : "crossover worst"}) overtops the ${chH} mm flange — wire will not stay in the channel. Fewer turns, finer wire, or a taller flange.`);
+  else if (build > 0.9 * chH) w.push(`Build ${build.toFixed(2)} mm is within 10% of the ${chH} mm flange — no margin for lay error.`);
+  if (p.turns > capCh) w.push(`Channel holds ~${capCh} turns of this bundle (${tpl}/layer) — asked ${p.turns}.`);
+  // coil heads: what the wire does beyond the stack at each end, per the winding scheme
+  const NsH = Math.max(Math.round(p.slots), 3);
+  const hsH = Math.max((p.statorOD - p.statorID) / 2 - p.yoke - p.tipH, 0);
+  const dmH = p.statorID + 2 * (p.tipH + hsH / 2);                   // mean slot diameter
+  const wmH = ((Math.PI * (p.statorID + 2 * p.tipH)) / NsH - p.toothW + (Math.PI * (dmH + hsH)) / NsH - p.toothW) / 2;
+  const headAuto = (p.wbStyle || "tooth") === "lap"
+    ? 1.25 * (Math.max(p.wbThrow, 1) * Math.PI * dmH) / NsH          // diamond head over the throw arc
+    : p.toothW + 0.8 * Math.max(wmH, 0) + 3;                        // around one tooth + bend radii
+  const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto.toFixed(1);      // per end
+  const LheadAuto = +headAuto.toFixed(1);
+  const stk9 = Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1;
+  const perim = 2 * stk9 + 2 * Lhead;                                // what the inserted coil must measure
+  // wire & resistance (per coil and the sequential string with inter-coil jumpers)
+  const MLTb = Math.PI * (arbor + build);                            // mean turn as wound on this arbor, mm
+  const stackFit = MLTb / 2 - Lhead;                                 // straight length the wound coil offers per side
+  if (Number.isFinite(p.stackL) && stackFit < p.stackL - 0.5)
+    w.push(`Wound coil offers ${stackFit.toFixed(1)} mm straight per side vs the ${p.stackL} mm stack (heads ${Lhead} mm/end) — arbor too small; grow it to \u2265 \u00d8${((perim / Math.PI) - build).toFixed(1)} mm.`);
+  else if (Number.isFinite(p.stackL) && stackFit > p.stackL + Math.max(6, 0.15 * p.stackL))
+    w.push(`Wound coil is ${(stackFit - p.stackL).toFixed(1)} mm long per side beyond stack + heads — loose fit wastes copper and resistance; shrink the arbor toward \u00d8${((perim / Math.PI) - build).toFixed(1)} mm.`);
+  const lenCoil = (MLTb * p.turns) / 1000;                           // m, per strand
+  const jump = Math.max(p.wbJump, 0) / 1000;
+  const lenString = nC * lenCoil + (nC - 1) * jump + 2 * jump;       // + lead tails
+  const aBare = (Math.PI / 4) * dBare * dBare;
+  const R20c = (RHO_CU * lenCoil * 1e6) / (aBare * st);              // Ω per coil
+  const R20s = (RHO_CU * lenString * 1e6) / (aBare * st);
+  const Rhot = (T9) => 1 + 0.00393 * (T9 - 20);
+  const mCu = 8960 * nC * lenCoil * aBare * 1e-6 * st;               // kg, coil copper on the stick
+  const mPhase = 8960 * lenString * aBare * 1e-6 * st;               // kg per phase incl. jumpers + lead tails
+  // stator-drawing verification: slot geometry from the lamination alone
+  let slot = null;
+  if (p.statorID > 0 && p.slots >= 3 && p.toothW > 0) {
+    const hs9 = (p.statorOD - p.statorID) / 2 - p.yoke - p.tipH;
+    const d1 = p.statorID + 2 * p.tipH, d2 = p.statorID + 2 * (p.tipH + Math.max(hs9, 0));
+    const w1 = (Math.PI * d1) / p.slots - p.toothW, w2 = (Math.PI * d2) / p.slots - p.toothW;
+    const areaG = Math.max(((w1 + w2) / 2) * Math.max(hs9, 0), 0);
+    const per = 2 * Math.max(hs9, 0) + w1 + w2;
+    const rB9 = Math.min(Math.max(p.slotR, 0), Math.min(w1, w2) / 2, Math.max(hs9, 0) / 2);   // slot-bottom pair
+    const rT9 = Math.min(Math.max(p.wbRtip || 0, 0), Math.min(w1, w2) / 2, Math.max(hs9, 0) / 2); // slot-mouth pair
+    const areaU = Math.max(areaG - per * Math.max(p.liner, 0) - (2 * rB9 * rB9 + 2 * rT9 * rT9) * (1 - Math.PI / 4), 0);
+    const sides = Math.max(Math.round(p.wbSides) || 2, 1);
+    const aIns = (Math.PI / 4) * dIns * dIns;
+    const fill = areaU > 0 ? (sides * p.turns * st * aIns) / areaU : NaN;
+    slot = { hs: hs9, w1, w2, areaU, fill, sides, rB: rB9, rT: rT9 };
+    if (!(hs9 > 0.5)) err.push("Stator drawing leaves no slot depth (check yoke / tip / bore) — nothing to verify against.");
+    else {
+      if (fill > 0.42) w.push(`Slot fill ${(fill * 100).toFixed(0)}% with ${sides} coil side(s) per slot — above the ~42% insertion ceiling.`);
+      else if (fill > 0.35) w.push(`Slot fill ${(fill * 100).toFixed(0)}% — insertable but tight; expect careful lacing.`);
+      if (dEff > p.slotOpen - 0.1) w.push(`Wire bundle Ø${dEff.toFixed(2)} mm vs ${p.slotOpen} mm slot opening — will not feed through for insertion winding.`);
+      const DaIns9 = p.statorID + 2 * p.tipH;
+      if (arbor < DaIns9 - 0.25) w.push(`Arbor Ø${arbor} mm is under bore + 2·tip height = Ø${DaIns9.toFixed(1)} mm — the coil ID won't seat over the tooth tips at insertion.`);
+    }
+  }
+  const lenTool = nC * chW + (nC + 1) * flg;                         // arbor stack length
+  return { err, warn: w, dBare, dIns, dEff, tpl, layers, build, buildX, coilOD, capCh,
+    MLT: MLTb, lenCoil, lenString, R20c, R20s, RhotF: Rhot, mCu, mPhase, slot, lenTool, wild,
+    Lhead, LheadAuto, perim, stackFit,
+    flangeOD: arbor + 2 * chH };
+}
+
 function computeDesign(p) {
   const w = []; // warnings
   const err = [];
-  if (p.motorType === "actuator")                                    // composition module — no machine of its own
-    return { err, warn: w, curve: [], actuator: true, noLoad: 0, Kt: 0 };
+  if (p.motorType === "actuator" || p.motorType === "bobbin")        // composition/tooling modules — no machine of their own
+    return { err, warn: w, curve: [], [p.motorType]: true, noLoad: 0, Kt: 0 };
+  if (p.motorType === "bobbin")                                      // tooling module — see computeBobbin
+    return { err, warn: w, curve: [], bobbin: true, noLoad: 0, Kt: 0 };
 
   const Ns = Math.max(3, Math.round(p.slots));
   const poles = Math.max(2, Math.round(p.poles / 2) * 2);
@@ -346,10 +485,11 @@ function computeDesign(p) {
   const LllNR = p.conn === "wye" ? 2 * LphNR : (2 / 3) * LphNR;
 
   // armature-loaded saturation knockdown at the drive current limit
-  let kIT = 1;
+  let kIT = 1, satCurve = null;
   if (p.motorType === "pm" && satAux && BgAvg > 0) {
-    const FaMax = (1.35 * kw * Nser * Math.SQRT2 * p.Imax) / (poles / 2);
-    kIT = Math.min(satAux(FaMax) / BgAvg, 1);
+    const FaOf = (I9) => (1.35 * kw * Nser * Math.SQRT2 * I9) / (poles / 2);
+    kIT = Math.min(satAux(FaOf(p.Imax)) / BgAvg, 1);
+    satCurve = [0, 0.5, 1, 1.5].map((f9) => ({ f: f9, k: Math.min(satAux(FaOf(f9 * p.Imax)) / BgAvg, 1) }));
   }
 
   /* ============ drive / control model ============ */
@@ -521,6 +661,7 @@ function computeDesign(p) {
       hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, wireLen };
     op = { n: 0, T: Thold }; peakT = Thold; noLoad = 0;
     if (p.brkRi >= p.brkRo) err.push("Friction lining ID must be smaller than its OD.");
+    if (2 * p.brkRo > p.statorOD - 1) w.push(`Lining \u00d8${(2 * p.brkRo).toFixed(1)} mm reaches or exceeds the \u00d8${p.statorOD} mm backiron — the disc normally sits inside the housing envelope.`);
     if (!(rThru < rBoss - 0.5)) err.push("Boss OD must exceed the through-hole by a usable pole width.");
     if (!(rBoss < rPkt - 1)) err.push("Pocket ID must exceed the boss OD — no room for a coil pocket.");
     if (!(rPkt < rOD - 0.5)) err.push("Backiron OD must exceed the pocket ID by a usable rim width.");
@@ -1102,7 +1243,7 @@ function computeDesign(p) {
 
   return {
     err, warn: w, Ns, poles, airgap, hs, w1, w2, slotArea, usableArea,
-    dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT,
+    dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve,
     Nser, MLT, Rphase, Rll, Iph, Iline: IlineOut, Istall, Vph, Arms,
     Trated, nSync, nShaft, Pout, Pcu, eta, Eph, Ke, Kt, VphAvail,
     rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
@@ -1240,6 +1381,112 @@ function buildArmDxf(p, r) {
   pts.forEach(([x, y]) => { gp2(10, x.toFixed(4)); gp2(20, y.toFixed(4)); });
   gp2(0, "ENDSEC"); gp2(0, "EOF");
   return L2.join("\n");
+}
+
+/* ---- FEMM export (Lua): full 2D planar magnetostatic model of the PM machine, one file.
+   Materials carry THIS tool's Froelich BH points and magnet data, so a FEMM solve validates
+   the analytical circuit apples-to-apples. Copper regions are closed at the tooth-tip radius
+   (wedge line) so slots, opening necks, and airgap mesh as separate regions. Phases follow
+   the 60-degree belt rule; circuits ship at 0 A — set currents in FEMM for loaded solves. ---- */
+function buildFemmLua(p, r) {
+  const Ns = r.Ns, poles = p.poles;
+  const r0 = p.statorID / 2, r1 = r0 + p.tipH, r2 = r1 + Math.max((p.statorOD - p.statorID) / 2 - p.yoke - p.tipH, 0);
+  const rOD = p.statorOD / 2, rSh = p.shaftD / 2, rMo = p.rotorOD / 2, rMi = rMo - p.magT;
+  const stM = STEELS[p.steel] || STEELS["M19 (29 ga)"];
+  const rtM = STEELS[p.rotSteel || p.steel] || stM;
+  const mag = MAGNETS[p.mag] || Object.values(MAGNETS)[0];
+  const mu0 = 4e-7 * Math.PI;
+  const HcAm = (mag.Br || 1.2) / (mu0 * (mag.mur || 1.05));          // A/m at 20 °C
+  const L = [];
+  const P9 = (rr, a) => [ +(rr * Math.cos(a)).toFixed(4), +(rr * Math.sin(a)).toFixed(4) ];
+  const node = (x, y) => L.push(`mi_addnode(${x},${y})`);
+  const seg = (x1, y1, x2, y2) => L.push(`mi_addsegment(${x1},${y1},${x2},${y2})`);
+  const arc = (x1, y1, x2, y2, deg) => L.push(`mi_addarc(${x1},${y1},${x2},${y2},${deg},2)`);
+  L.push('-- MotrSynth FEMM export: ' + Ns + ' slots / ' + poles + ' poles, stack ' + p.stackL + ' mm');
+  L.push('-- Open in FEMM, run this script (femm console: dofile). Solve, then torque:');
+  L.push('--   mo_groupselectblock(1)  mo_blockintegral(22)   -- rotor group steady torque, N·m');
+  L.push('-- With all circuits at 0 A, the airgap flux should match the analytical model (ksat-corrected Bg).');
+  L.push(`newdocument(0)`);
+  L.push(`mi_probdef(0,"millimeters","planar",1e-8,${p.stackL},30)`);
+  // materials: air, copper, steels with OUR Froelich BH, magnet with OUR Br/mur
+  L.push(`mi_addmaterial("Air",1,1,0,0,0,0,0,1,0,0,0)`);
+  L.push(`mi_addmaterial("Copper",1,1,0,0,58,0,0,1,0,0,0)`);
+  L.push(`mi_addmaterial("StatorSteel",${stM.muri},${stM.muri},0,0,0,0,0,${stM.kst},0,0,0)`);
+  L.push(`mi_addmaterial("RotorSteel",${rtM.muri},${rtM.muri},0,0,0,0,0,${rtM.kst},0,0,0)`);
+  for (let B9 = 0.1; B9 <= 2.4001; B9 += 0.1) {
+    L.push(`mi_addbhpoint("StatorSteel",${B9.toFixed(2)},${Hof(B9, stM).toFixed(1)})`);
+    L.push(`mi_addbhpoint("RotorSteel",${B9.toFixed(2)},${Hof(B9, rtM).toFixed(1)})`);
+  }
+  L.push(`mi_addmaterial("Magnet",${mag.mur},${mag.mur},${HcAm.toFixed(0)},0,0.667,0,0,1,0,0,0)`);
+  for (const ph of ["A", "B", "C"]) L.push(`mi_addcircprop("${ph}",0,1)`);
+  L.push(`mi_addboundprop("A0",0,0,0,0,0,0,0,0,0)`);
+  // outer boundary + bore + shaft as arc pairs
+  const cir = (rr, prop) => {
+    const [xa, ya] = P9(rr, 0), [xb, yb] = P9(rr, Math.PI);
+    node(xa, ya); node(xb, yb);
+    arc(xa, ya, xb, yb, 180); arc(xb, yb, xa, ya, 180);
+    if (prop) { L.push(`mi_selectarcsegment(0,${rr})`); L.push(`mi_selectarcsegment(0,${-rr})`);
+      L.push(`mi_setarcsegmentprop(2,"${prop}",0,0)`); L.push(`mi_clearselected()`); }
+  };
+  cir(rOD, "A0"); cir(r0, null); cir(rSh, null); cir(rMo, null); cir(rMi, null);
+  // slots: copper trapezoid r1..r2 (closed at r1) + opening neck r0..r1
+  const hwA = (rr) => Math.max(Math.PI / Ns - (p.toothW / 2) / rr, 0.008);
+  const soA = (rr) => Math.max((p.slotOpen / 2) / rr, 0.004);
+  for (let s9 = 0; s9 < Ns; s9++) {
+    const a0 = (s9 * 2 * Math.PI) / Ns;
+    const n1 = hwA(r1), n2 = hwA(r2), sA0 = soA(r0), sA1 = soA(r1);
+    const c = [P9(r1, a0 - n1), P9(r2, a0 - n2), P9(r2, a0 + n2), P9(r1, a0 + n1)];
+    c.forEach((q9) => node(q9[0], q9[1]));
+    seg(c[0][0], c[0][1], c[1][0], c[1][1]); arc(c[1][0], c[1][1], c[2][0], c[2][1], (2 * n2 * 180) / Math.PI);
+    seg(c[2][0], c[2][1], c[3][0], c[3][1]); seg(c[3][0], c[3][1], c[0][0], c[0][1]);
+    const o = [P9(r0, a0 - sA0), P9(r1, a0 - sA1), P9(r1, a0 + sA1), P9(r0, a0 + sA0)];
+    o.forEach((q9) => node(q9[0], q9[1]));
+    seg(o[0][0], o[0][1], o[1][0], o[1][1]); seg(o[1][0], o[1][1], o[2][0], o[2][1]);
+    seg(o[2][0], o[2][1], o[3][0], o[3][1]);
+    // labels: copper w/ circuit + belt sign; opening neck air
+    const belt = Math.floor(((((s9 + 0.5) * poles * 180) / Ns) % 360) / 60);
+    const PH = ["A", "C", "B", "A", "C", "B"][belt], SGN = [1, -1, 1, -1, 1, -1][belt];
+    const [lx, ly] = P9((r1 + r2) / 2, a0);
+    L.push(`mi_addblocklabel(${lx},${ly})`); L.push(`mi_selectlabel(${lx},${ly})`);
+    L.push(`mi_setblockprop("Copper",1,0,"${PH}",0,0,${SGN * Math.max(Math.round(r.condPerSlot || 1), 1)})`); L.push(`mi_clearselected()`);
+    const [ox, oy] = P9((r0 + r1) / 2, a0);
+    L.push(`mi_addblocklabel(${ox},${oy})`); L.push(`mi_selectlabel(${ox},${oy})`);
+    L.push(`mi_setblockprop("Air",1,0,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
+  }
+  // magnet pole boundaries + labels with alternating radial magnetization
+  for (let k9 = 0; k9 < poles; k9++) {
+    const ab = ((k9 - 0.5) * 2 * Math.PI) / poles;
+    const [x1, y1] = P9(rMi, ab), [x2, y2] = P9(rMo, ab);
+    node(x1, y1); node(x2, y2); seg(x1, y1, x2, y2);
+    const ac = (k9 * 2 * Math.PI) / poles, dirDeg = ((ac * 180) / Math.PI + (k9 % 2 ? 180 : 0)) % 360;
+    const [mx, my] = P9((rMi + rMo) / 2, ac);
+    L.push(`mi_addblocklabel(${mx},${my})`); L.push(`mi_selectlabel(${mx},${my})`);
+    L.push(`mi_setblockprop("Magnet",1,0,"<None>",${dirDeg.toFixed(2)},1,0)`); L.push(`mi_clearselected()`);
+  }
+  // bulk region labels: stator steel, rotor hub steel (group 1), shaft steel (group 1), airgap
+  const midToothA = Math.PI / Ns;                                    // tooth-center angle
+  const [sx, sy] = P9((r2 + rOD) / 2, midToothA);
+  L.push(`mi_addblocklabel(${sx},${sy})`); L.push(`mi_selectlabel(${sx},${sy})`);
+  L.push(`mi_setblockprop("StatorSteel",1,0,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
+  const [hx, hy] = P9((rSh + rMi) / 2, 0.3);
+  L.push(`mi_addblocklabel(${hx},${hy})`); L.push(`mi_selectlabel(${hx},${hy})`);
+  L.push(`mi_setblockprop("RotorSteel",1,1,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
+  L.push(`mi_addblocklabel(0,0)`); L.push(`mi_selectlabel(0,0)`);
+  L.push(`mi_setblockprop("RotorSteel",1,1,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
+  const [gx, gy] = P9((rMo + r0) / 2, midToothA);
+  L.push(`mi_addblocklabel(${gx},${gy})`); L.push(`mi_selectlabel(${gx},${gy})`);
+  L.push(`mi_setblockprop("Air",1,0,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
+  L.push(`mi_zoomnatural()`);
+  L.push(`mi_saveas("motrsynth-${Ns}s${poles}p.fem")`);
+  return L.join("\n") + "\n";
+}
+
+function downloadFemm(p, r) {
+  const blob = new Blob([buildFemmLua(p, r)], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `motrsynth-${r.Ns}s${p.poles}p.lua`; a.click();
+  URL.revokeObjectURL(url);
 }
 
 function downloadDxf(p, r) {

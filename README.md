@@ -6,7 +6,7 @@ saturation-aware physics, reactance/field-weakening drive model, thermal and
 efficiency estimates, DXF lamination import/export, bench-calibration tracking,
 an envelope wizard for every machine type (BLDC/PMSM, brushed, LATM, stepper,
 brake, ACIM) that scores real engine builds against per-type targets, and a
-gearbox / actuator output stage. Magnet wire in half-AWG sizes throughout.
+a composite Actuator module (motor + brake + multi-stage planetary/harmonic/spur gearhead with per-stage efficiencies). Magnet wire in half-AWG sizes throughout.
 Inch (default) or metric.
 
 Fully self-contained index.html — React and the app are bundled in; no CDN,

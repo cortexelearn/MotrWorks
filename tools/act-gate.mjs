@@ -61,6 +61,7 @@ try {
   ok(out.includes('Composite performance'), 'composite card present');
   ok(out.includes('svg-curve') && out.includes('svg-itcurve'), 'both output charts render');
   ok(out.includes('svg-actline') && out.includes('overall'), 'composite outline renders with the overall dim');
+  ok(out.includes('svg-actiso') && (out.match(/linearGradient/g) || []).length >= 6, 'isometric render present (shaded cylinders)');
   ok(out.includes('Static holding'), 'holding row present');
 } catch (e2) { ok(false, 'SSR threw: ' + e2.message); }
 
