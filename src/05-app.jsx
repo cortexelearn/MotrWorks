@@ -1,4 +1,4 @@
-/* MotrSynth module 05 — app shell: state, layout, wizard, cards */
+/* MotrWorks module 05 — app shell: state, layout, wizard, cards */
 /* ---- envelope synthesis: pure & gate-testable. One branch per machine type; every branch
    scores real computeDesign runs against the user's targets. Returns { p, msg } or { fail }. ---- */
 function synthEnvelope(wiz, p, us) {
@@ -408,6 +408,20 @@ function synthEnvelope(wiz, p, us) {
 
 /* ---- Winding-arbor tooling module: coil dimensions from the arbor, verified against the
    stator drawing alone — no rotor, no performance ---- */
+const GEAR_PRESETS = {
+  "1\u2033 \u00b7 4:1 \u00b7 1-stage \u00b7 3P":   { gbType: "Planetary", gbRatio: 4,   gbStages: 1, gbOD: 25.4,  nPlanets: 3 },
+  "1.6\u2033 \u00b7 25:1 \u00b7 2-stage \u00b7 3P": { gbType: "Planetary", gbRatio: 25,  gbStages: 2, gbOD: 40.6,  nPlanets: 3 },
+  "2.5\u2033 \u00b7 50:1 \u00b7 2-stage \u00b7 3P": { gbType: "Planetary", gbRatio: 50,  gbStages: 2, gbOD: 63.5,  nPlanets: 3 },
+  "3.2\u2033 \u00b7 64:1 \u00b7 3-stage \u00b7 4P": { gbType: "Planetary", gbRatio: 64,  gbStages: 3, gbOD: 81.3,  nPlanets: 4 },
+  "4\u2033 \u00b7 100:1 \u00b7 3-stage \u00b7 4P":  { gbType: "Planetary", gbRatio: 100, gbStages: 3, gbOD: 101.6, nPlanets: 4 },
+  "\u00d82\u2033 \u00b7 HD size 14 \u00b7 50:1":   { gbType: "Harmonic",  gbRatio: 50,  gbStages: 1, gbOD: 50,    nPlanets: 3 },
+  "\u00d82.75\u2033 \u00b7 HD size 20 \u00b7 100:1": { gbType: "Harmonic", gbRatio: 100, gbStages: 1, gbOD: 70,    nPlanets: 3 },
+  "\u00d83.35\u2033 \u00b7 HD size 25 \u00b7 80:1":  { gbType: "Harmonic", gbRatio: 80,  gbStages: 1, gbOD: 85,    nPlanets: 3 },
+  "0.75\u2033 \u00b7 spur 6:1 \u00b7 2-stage":     { gbType: "Spur",      gbRatio: 6,   gbStages: 2, gbOD: 19,    nPlanets: 3 },
+  "1.2\u2033 \u00b7 spur 20:1 \u00b7 3-stage":     { gbType: "Spur",      gbRatio: 20,  gbStages: 3, gbOD: 30.5,  nPlanets: 3 },
+  "1.5\u2033 \u00b7 spur 60:1 \u00b7 4-stage":     { gbType: "Spur",      gbRatio: 60,  gbStages: 4, gbOD: 38,    nPlanets: 3 },
+};
+
 function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, impPanel }) {
   const inv = p.wbMode === "inv";
   const sol = inv ? solveBobbin(p) : null;
@@ -489,7 +503,10 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
           <Sel label="Insulation build" v={p.insBuild} set={s("insBuild")} opts={Object.keys(INS_BUILD)} />
           <Pick label="Wind style" v={p.wbLay} set={s("wbLay")}
             opts={[{ v: "wild", t: "Wild (scramble)" }, { v: "precise", t: "Precise lay" }]} />
-          <Num label="Hot reference temp" unit="°C" v={p.Tcu} set={s("Tcu")} step={5} />
+          <Num label="Performance temp (copper)" unit="°C" v={p.Tcu} set={s("Tcu")} step={5} />
+          <div className="note" style={{ marginTop: 4 }}>Wire tables and the L-L resistance target stay at 20 °C ambient
+            per magnet-wire convention. This field only sets the copper temperature for the reported hot-side rows
+            (R scales by the standard 0.393%/°C — well-characterized, as you'd expect).</div>
         </div>
         <div className="card" style={{ marginTop: 14 }}>
           <h2>Stator drawing (verification only)</h2>
@@ -619,7 +636,13 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
     : { ...p, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
   const withBrk = p.actBrake === "yes";
   const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
-  const act = composeActuator(mr, br, { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff });
+  const act = composeActuator(mr, br, { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff, brg: p.gbBrg });
+  const gtAll = useMemo(() => {
+    if (act.fail) return null;
+    const env0 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
+    return designGearTrain(p, act, env0.gOD, env0.Lg);
+  }, [p, act, motorP, brakeP, withBrk]);
+  const gtLim = gtAll && Number.isFinite(gtAll.TmaxOut) ? { T: gtAll.TmaxOut, label: "tooth yield" } : null;
   const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
   const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
   const pIT = { motorType: motorT === "stepper" ? "pm" : motorT, Imax: motorP.Imax }; // chart math is generic
@@ -648,6 +671,22 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
           <Num label="Efficiency override (0 = auto)" unit="%" v={p.gbEff} set={s("gbEff")} min={0} max={100} />
           <Num label="Gearhead OD (0 = auto shell)" unit="mm" v={p.gbOD} set={s("gbOD")} min={0} />
           <Num label="Gearhead length (0 = auto shell)" unit="mm" v={p.gbLen} set={s("gbLen")} min={0} />
+          <Sel label="Gear preset" v={"(pick)"} set={(v9) => {
+            const g9 = GEAR_PRESETS[v9]; if (!g9) return;
+            ["gbType", "gbRatio", "gbStages", "gbOD", "nPlanets"].forEach((k9) => s(k9)(g9[k9]));
+          }} opts={["(pick)", ...Object.keys(GEAR_PRESETS)]} />
+          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11", "Q13"]} />
+          <Pick label="Pressure angle" v={p.presAng} set={s("presAng")} opts={[{ v: 20, t: "20°" }, { v: 25, t: "25°" }]} />
+          {p.gbType === "Planetary" && <Num label="Planets per stage" v={p.nPlanets} set={s("nPlanets")} min={2} max={6} />}
+          <Pick label="Output bearing" v={p.gbBrg} set={s("gbBrg")}
+            opts={[{ v: "radial", t: "Radial" }, { v: "double", t: "2\u00d7 radial" }, { v: "acpair", t: "AC pair" }]} />
+          <h2 style={{ marginTop: 12 }}>Output shaft</h2>
+          <Pick label="Shaft style" v={p.oshType} set={s("oshType")}
+            opts={[{ v: "round", t: "Round" }, { v: "key", t: "Keyed" }, { v: "dflat", t: "D-flat" }, { v: "pinion", t: "Pinion" }]} />
+          <Num label="Shaft OD (0 = auto)" unit="mm" v={p.oshOD} set={s("oshOD")} min={0} />
+          <Num label="Overall length from face (0 = auto)" unit="mm" v={p.oshLen} set={s("oshLen")} min={0} />
+          {p.oshType !== "round" && <Num label="Feature length at tip (0 = auto 70%)" unit="mm" v={p.oshFeat} set={s("oshFeat")} min={0} />}
+          {p.oshType === "pinion" && <Num label="Pinion tip Ø (0 = auto 1.35× shaft)" unit="mm" v={p.oshPinD} set={s("oshPinD")} min={0} />}
           <h2 style={{ marginTop: 12 }}>Mounting</h2>
           <Pick label="Mount style" v={p.mntStyle} set={s("mntStyle")}
             opts={[{ v: "face", t: "Face mount" }, { v: "flange", t: "Flange" }]} />
@@ -683,22 +722,91 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
         <AssumptionsCard p={p} />
       </div>
       <div>
+        {!act.fail && (() => {
+          const env9 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
+          const gt = designGearTrain(p, act, env9.gOD, env9.Lg);
+          return <div className="card">
+            <div className="cardhead">
+              <h2>Gear train — synthesized</h2>
+              <button className="btn mini ghost" onClick={() => exportPng("svg-gearsec", "gear-section.png")}>PNG ⤓</button>
+            </div>
+            <GearSection g={gt} us={us} />
+            <div className="cardhead" style={{ marginTop: 10 }}>
+              <h2>Gearhead section — side</h2>
+              <button className="btn mini ghost" onClick={() => exportPng("svg-ghsec", "gearhead-section.png")}>PNG ⤓</button>
+            </div>
+            <GearheadSection gt={gt} brg={p.gbBrg}
+              mnt={{ thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, dir: p.mntDir }}
+              oShD={p.oshOD > 0 ? p.oshOD : env9.oShD} us={us} />
+            {gt.stages[0] && gt.stages[0].Zr && (() => {
+              const s1 = gt.stages[0], m1 = s1.m;
+              const row9 = (nm, Z, PD, tip, root) => (
+                <div className="kv" key={nm}><span>{nm} \u00b7 {Z}t</span>
+                  <b>PD {PD} \u00b7 tip \u00d8{tip.toFixed(2)} \u00b7 root \u00d8{root.toFixed(2)} \u00b7 m {m1} (DP {(25.4 / m1).toFixed(1)}) \u00b7 {gt.presAng}\u00b0 \u00b7 face {s1.F} \u00b7 {gt.agmaQ}</b></div>
+              );
+              return <div className="tbl" style={{ marginTop: 8 }}>
+                <div className="kv"><span style={{ fontWeight: 600 }}>Drawing callouts (stage 1, mm)</span><b></b></div>
+                {row9(`Sun${s1.shift ? " (shifted +x)" : ""}`, s1.Zs, s1.PDs, s1.PDs + 2 * m1, s1.PDs - 2.5 * m1)}
+                {row9("Planet", s1.Zp, s1.PDp, s1.PDp + 2 * m1, s1.PDp - 2.5 * m1)}
+                {row9("Ring (internal)", s1.Zr, s1.PDr, s1.PDr - 2 * m1, s1.PDr + 2.5 * m1)}
+              </div>;
+            })()}
+            <div className="tbl" style={{ marginTop: 8 }}>
+              {gt.stages.map((s9) => (
+                <div className="kv" key={s9.i}><span>Stage {s9.i}{s9.Zr ? ` · Zs/Zp/Zr ${s9.Zs}/${s9.Zp}/${s9.Zr}` : s9.Z1 ? ` · Z ${s9.Z1}/${s9.Z2}` : ` · flex/circ ${s9.Zf}/${s9.Zc}`}</span>
+                  <b>m {s9.m} · face {s9.F} mm{s9.a ? ` · a ${s9.a} · pins Ø${s9.pinBC}` : ""} · {s9.u.toFixed(2)}:1 · η {(s9.ef * 100).toFixed(1)}%</b></div>
+              ))}
+              <div className="kv"><span>Stages for {act.N}:1 (practical {gt.win[0]}–{gt.win[1]}:1/stage)</span>
+                <b>{gt.stOk ? `${act.st} ✓` : <>{"recommend " + gt.recSt + " "}
+                  <button className="btn mini" onClick={() => s("gbStages")(gt.recSt)}>apply</button></>}</b></div>
+              <div className="kv"><span>Backlash at the output ({gt.agmaQ}: mesh + mech clearances est.)</span>
+                <b>{gt.blGear.toFixed(1)}′ + {gt.blMech.toFixed(1)}′ = {gt.blOut.toFixed(1)} arcmin</b></div>
+              <div className="kv"><span>Efficiency, forward / back-driving</span>
+                <b>{(gt.effF * 100).toFixed(1)}% / {gt.selfLock ? "self-locking" : (gt.effB * 100).toFixed(1) + "%"}</b></div>
+              <div className="kv"><span>Back-drive breakaway at the output (est.)</span><b>{gt.Tbd.toFixed(3)} N·m</b></div>
+              <div className="kv"><span>Friction torque through the train (fwd, at peak output)</span>
+                <b>{(act.peakT * (1 - gt.effF)).toFixed(2)} N·m of {act.peakT.toFixed(2)}</b></div>
+              {Number.isFinite(gt.TmaxOut) && <div className="kv"><span>{gt.stages[0] && gt.stages[0].harmonic ? "Momentary peak (ratcheting limit, size class)" : `Tooth-yield torque cap (Lewis, stage ${gt.limStage})`}</span>
+                <b style={{ color: act.peakT > gt.TmaxOut ? "#DC2626" : act.peakT > 0.6 * gt.TmaxOut ? "#D97706" : "#059669" }}>{gt.TmaxOut.toFixed(1)} N·m · margin ×{(gt.TmaxOut / Math.max(act.peakT, 1e-6)).toFixed(1)} vs peak</b></div>}
+              {act.op && (() => {                                       /* A3: gear heat into the housing */
+                const Pout = (act.op.T * act.op.n * 2 * Math.PI) / 60;
+                const Pg = Pout * (1 / Math.max(gt.effF, 0.05) - 1);
+                const A9 = Math.PI * (env9.gOD / 1000) * (env9.Lg / 1000) + (Math.PI / 2) * Math.pow(env9.gOD / 1000, 2);
+                const dT = Pg / (12 * Math.max(A9, 1e-4));               /* natural convection h ~ 12 */
+                return <>
+                  <div className="kv"><span>Gear dissipation at the operating point</span>
+                    <b>{Pg.toFixed(1)} W · housing ΔT ≈ {dT.toFixed(0)} °C (natural conv. est.)</b></div>
+                  {dT > 40 && <div className="warn">Gearhead runs ≈ {dT.toFixed(0)} °C over ambient at this point — sealed-housing heat is NOT in the motor thermal model; derate continuous torque or add conduction to the mount.</div>}
+                </>;
+              })()}
+              {gt.KvMax > 1.15 && <div className="note">Dynamic factor Kv up to {gt.KvMax.toFixed(2)} applied at input-stage pitch-line speed — higher AGMA quality reduces it.</div>}
+              {gt.w.map((w9, i9) => <div className="warn" key={i9}>{w9}</div>)}
+            </div>
+            <div className="note">
+              Synthesized from gearhead Ø, {gt.agmaQ}, {gt.presAng}° pressure angle{gt.nP && gt.stages[0] && gt.stages[0].Zr ? `, ${gt.nP} planets (ring–sun assembly constraint enforced)` : ""}.
+              Backlash: per-mesh allowance reflected through downstream ratios — the output stage dominates.
+              Efficiency: mesh sliding (tooth-count dependent) + seal/churning drag; back-drive reverses the
+              torque-proportional losses (η_b ≈ 2 − 1/η_f per stage). Tooth cap is Lewis bending at 380 MPa
+              case-hardened allowable — first-order, verify critical designs against AGMA 2001 or the catalog.
+            </div>
+          </div>;
+        })()}
         {!act.fail && (
           <div className="card">
             <div className="cardhead">
               <h2>Composite outline</h2>
               <button className="btn mini ghost" onClick={() => exportPng("svg-actline", "actuator-outline.png")}>PNG ⤓</button>
             </div>
-            <ActuatorOutline motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT }} />
+            <ActuatorOutline motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT, osh: { type: p.oshType, od: p.oshOD, len: p.oshLen, feat: p.oshFeat, pin: p.oshPinD } }} gt={gtAll} brg={p.gbBrg} />
             <div className="cardhead" style={{ marginTop: 12 }}>
               <h2>Isometric</h2>
               <button className="btn mini ghost" onClick={() => exportPng("svg-actiso", "actuator-iso.png")}>PNG ⤓</button>
             </div>
-            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} />
+            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT, osh: { type: p.oshType, od: p.oshOD, len: p.oshLen, feat: p.oshFeat, pin: p.oshPinD } }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} />
             <div className="note">
-              Envelope outline at true relative scale. Gearhead: {p.gbOD > 0 || p.gbLen > 0 ? "specified envelope where entered, typical shell for the rest" : "representative shell"} — auto length from typical per-stage proportions
-              ({act.type === "Harmonic" ? "0.55" : act.type === "Planetary" ? "0.42" : "0.34"}·OD per stage + output
-              bearing block), motor from stack + coil heads + endbells, brake from backiron + armature/disc pack.
+              Envelope outline at true relative scale. Gearhead: {p.gbOD > 0 || p.gbLen > 0 ? "specified envelope where entered, typical shell for the rest" : "representative shell"} — auto length built up from what
+              the stages need (1.5×face + carrier per stage, real bearing width, faceplate; harmonic straight
+              from the catalog size table), motor from stack + coil heads + endbells, brake from backiron + armature/disc pack.
               Verify against catalog drawings before packaging.
             </div>
           </div>
@@ -726,9 +834,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
               </div>
               {act.warn.map((m9, i9) => <div className="warn" key={i9}>{m9}</div>)}
               <h2 style={{ marginTop: 14 }}>Output torque–speed</h2>
-              <TorqueSpeedChart r={rTS} us={us} />
+              <TorqueSpeedChart r={rTS} us={us} tLimit={gtLim} />
               <h2 style={{ marginTop: 14 }}>Motor current vs output torque</h2>
-              <CurrentTorqueChart r={rIT} p={pIT} us={us} />
+              <CurrentTorqueChart r={rIT} p={pIT} us={us} tLimit={gtLim} />
               <div className="note">
                 Motor curve mapped through the train: speed ÷ N, torque × N·η; the current axis is motor phase
                 current with the same saturation bend, so the drive limit reads directly. Holding torque passes
@@ -780,6 +888,8 @@ export default function MotorDesigner() {
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
     calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
+    agmaQ: "Q9", presAng: 20, nPlanets: 3, gbBrg: "radial",
+    oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
     mntStyle: "face", mntThread: "4-40", mntN: 4, mntBCD: 0, mntFlgOD: 0, mntFlgT: 3, mntDir: "fwd", mntGap: 5, mntPilotOD: 0, mntPilotT: 0,
     finGb: "Matte steel", finMot: "Aluminum", finBrk: "Black anodized",
     wbArborD: 8, wbChanW: 6, wbChanH: 5, wbFlange: 1.2, wbCoils: 6, wbJump: 25, wbSides: 2, wbMode: "fwd", wbRt: 0, wbRtip: 0.8, wbLay: "wild", wbHead: 0,
@@ -787,7 +897,7 @@ export default function MotorDesigner() {
     brkSprFree: 23.3, brkSprEng: 18.3, brkMu: 0.40, brkMuD: 0.32, brkFaces: 2, brkStroke: 0.3,
     brkBore: 26, brkPole: 6, brkArm: 6, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
     brkPktID: 48, brkBossOD: 38, brkPktD: 18, brkBobID: 40.2, brkBobOD: 47, brkBobL: 15,
-    stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, latmSect: 4, latmSpan: 60, latmTravel: 45,
+    stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, stpHubD: 0, stpThruD: 0, latmSect: 4, latmSpan: 60, latmTravel: 45,
     rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
     Vll: 400, Vdc: 48, Imax: 40, freq: 50, J: 5.5, Bg: 0.85, seq: "ABC",
   });
@@ -933,7 +1043,7 @@ export default function MotorDesigner() {
   const special = latmM || brkM || stpM;
 
   const exportDesign = () => {
-    const payload = { tool: "motrsynth", version: 10, saved: new Date().toISOString(), units: us, design: p };
+    const payload = { tool: "motrworks", version: 10, saved: new Date().toISOString(), units: us, design: p };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const el = document.createElement("a");
@@ -946,7 +1056,7 @@ export default function MotorDesigner() {
   const finMigrate = (v9) => (v9 === "Iridescent alum" ? "Iridite (chem film)" : v9);
   const [pendImp, setPendImp] = useState(null);
   // autosave + undo: guarded so restricted browsers (blocked localStorage) degrade silently
-  const LSK = "motrsynth-autosave-v1";
+  const LSK = "motrworks-autosave-v1", LSK_OLD = "motrsynth-autosave-v1";
   const lsOK = useMemo(() => { try { localStorage.setItem("__t", "1"); localStorage.removeItem("__t"); return true; } catch { return false; } }, []);
   const [restore, setRestore] = useState(null);
   const undoRef = React.useRef([]);
@@ -956,7 +1066,7 @@ export default function MotorDesigner() {
   useEffect(() => {                                                   // offer restore once, on mount
     if (!lsOK) return;
     try {
-      const j = JSON.parse(localStorage.getItem(LSK) || "null");
+      const j = JSON.parse(localStorage.getItem(LSK) || localStorage.getItem(LSK_OLD) || "null"); // pre-rebrand autosaves carry over
       if (j && j.design && j.ts) setRestore(j);
     } catch { /* corrupt save — ignore */ }
   }, [lsOK]);
@@ -1164,7 +1274,7 @@ export default function MotorDesigner() {
 
       <header className="hd">
         <img className="logo" src="https://cortexelearn.github.io/assets/logo.png" alt="CortexEdge" />
-        <h1>Cortex<b>Edge</b> <span className="tool">· MotrSynth</span></h1>
+        <h1>Cortex<b>Edge</b> <span className="tool">· MotrWorks</span></h1>
         <button className="btn mini ghost" title="Undo last change (autosaved snapshots)" disabled={!undoN}
           style={{ marginRight: 8, opacity: undoN ? 1 : 0.4 }} onClick={doUndo}>↩ Undo{undoN ? ` (${undoN})` : ""}</button>
         <div className="seg useg">
@@ -1570,7 +1680,7 @@ export default function MotorDesigner() {
               </>
             )}
             <Num label="Winding temp" unit="°C" v={p.Tcu} set={s("Tcu")} step={10} />
-            <Num label={brM ? "Lead / harness R" : "Drive + lead R / phase"} unit="mΩ" v={p.Rext} set={s("Rext")} step={5} min={0} />
+            <Num label={brM || latmM || brkM ? "Drive + lead R" : "Drive + lead R / phase"} unit="mΩ" v={p.Rext} set={s("Rext")} step={5} min={0} />
             {(pm || p.motorType === "induction") && <Pick label="Rated loading by" v={p.loadMode} set={s("loadMode")}
               opts={[{ v: "J", t: "Current density" }, { v: "I", t: brM ? "Armature current" : "Phase current" }]} />}
             {(pm || p.motorType === "induction") && (p.loadMode === "I"
@@ -1583,13 +1693,17 @@ export default function MotorDesigner() {
             )}
             {brM
               ? <Pick label="Supply polarity" v={p.seq} set={s("seq")} opts={[{ v: "ABC", t: "Normal" }, { v: "ACB", t: "Reversed" }]} />
-              : <Pick label="Phase sequence" v={p.seq} set={s("seq")} opts={[{ v: "ABC", t: "A-B-C" }, { v: "ACB", t: "A-C-B" }]} />}
+              : !latmM && !stpM && !brkM
+                ? <Pick label="Phase sequence" v={p.seq} set={s("seq")} opts={[{ v: "ABC", t: "A-B-C" }, { v: "ACB", t: "A-C-B" }]} />
+                : null /* single-winding (LATM, brake) and 2-phase stepper drives have no 3-phase sequence */}
           </div>
           {(pm || latmM || stpM) && (
             <div className="card" style={{ marginTop: 14 }}>
               <h2>{brM ? "Field magnets (housing ID)" : latmM ? "Rotor magnets (arc segments)" : stpM ? (p.stpKind === "pm" ? "Rotor magnet ring" : "Rotor PM disc (axial)") : "Rotor magnets"}</h2>
               <Sel label="Grade" v={p.mag} set={s("mag")} opts={Object.keys(MAGNETS)} />
               <Num label="Magnet thickness" unit="mm" v={p.magT} set={s("magT")} step={0.5} min={0.5} />
+              {stpM && <Num label="Shaft / hub OD (0 = auto 1.6× shaft)" unit="mm" v={p.stpHubD} set={s("stpHubD")} min={0} />}
+              {stpM && <Num label="Through-hole Ø (0 = none)" unit="mm" v={p.stpThruD} set={s("stpThruD")} min={0} />}
               {!stpM && <Num label={latmM ? "Magnet arc (of pole pitch)" : "Pole-arc coverage"} unit="%" v={p.poleArc} set={s("poleArc")} step={5} min={40} max={100} />}
               {!stpM && <div className="kv"><span>Magnet arc / length @ rotor OD</span>
                 <b>{((p.poleArc / 100) * (360 / Math.max(p.poles, 1))).toFixed(1)}° · {(() => { const mm9 = (p.poleArc / 100) * (Math.PI * p.rotorOD) / Math.max(p.poles, 1); return us === "in" ? (mm9 / 25.4).toFixed(3) + " in" : mm9.toFixed(1) + " mm"; })()}</b></div>}
@@ -2391,7 +2505,7 @@ export default function MotorDesigner() {
       </div>
 
       <footer className="ft">
-        <span>CortexEdge · MotrSynth</span><span>·</span>
+        <span>CortexEdge · MotrWorks</span><span>·</span>
         <span>Ad-free</span><span>·</span>
         <span>No account required</span><span>·</span>
         <a href="mailto:CortexEdge@outlook.com">CortexEdge@outlook.com</a>

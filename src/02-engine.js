@@ -1,4 +1,4 @@
-/* MotrSynth module 02 — physics engine: computeDesign (pure function, mm-canonical) */
+/* MotrWorks module 02 — physics engine: computeDesign (pure function, mm-canonical) */
 /* ---- actuator composition: motor result × gear train (+ brake), pure & gate-testable.
    Per-stage efficiencies for the miniature/precision gearhead class this tool targets
    (Maxon/Faulhaber scale catalog data): planetary 90% (GP32-class runs 80–90% single-stage,
@@ -6,6 +6,230 @@
    spur 93% (single mesh per stage; e.g. a 141:1 multi-stage spur head lands ~66% overall),
    harmonic 80% at rated load & temperature (catalog band 60–90%; drops at partial load,
    cold, and the highest ratios). Compounded per stage: η_total = η_stage^stages. ---- */
+/* ---- gear train synthesis & refinement: from gearhead OD, AGMA quality, pressure angle,
+   and planet count, synthesize per-stage tooth counts / module / face width, then derive
+   output backlash, mesh-loss efficiency forward & back-driving, and Lewis tooth-yield
+   torque limits. Planetary is the deep path; spur is pair-based; harmonic is catalog-level
+   (near-zero backlash, ratcheting-limited — stated, not Lewis-computed). ---- */
+const AGMA_J = { "Q7": 0.030, "Q9": 0.018, "Q11": 0.010, "Q13": 0.006 };   // backlash allowance factor ·module
+// Lewis form factor Y for 20° full-depth (load at tip), interpolated; +0.035 with positive shift
+const LEWIS_Y = [[12, 0.245], [15, 0.290], [18, 0.309], [22, 0.331], [26, 0.346], [30, 0.359], [34, 0.371], [45, 0.399], [60, 0.422], [80, 0.435], [100, 0.447], [400, 0.485]];
+function yLewis(Z9, shifted) {
+  let y9 = LEWIS_Y[0][1];
+  for (let i9 = 1; i9 < LEWIS_Y.length; i9++) {
+    const [z0, v0] = LEWIS_Y[i9 - 1], [z1, v1] = LEWIS_Y[i9];
+    if (Z9 <= z1) { y9 = v0 + ((v1 - v0) * (Z9 - z0)) / (z1 - z0); break; }
+    y9 = v1;
+  }
+  return y9 + (shifted ? 0.035 : 0);
+}
+const KGAMMA = { 2: 1.10, 3: 1.15, 4: 1.25, 5: 1.35, 6: 1.45 };   // planet load-share (no floating sun)
+function kvDyn(vMs, agmaQ9) {                                     // AGMA-style dynamic factor
+  if (!(vMs > 0)) return 1;
+  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" ? 11 : agmaQ9 === "Q13" ? 11.5 : 9;
+  const B9 = 0.25 * Math.pow(12 - Math.min(Qv, 11), 2 / 3);
+  const A9 = 50 + 56 * (1 - B9);
+  return Math.pow((A9 + Math.sqrt(200 * vMs)) / A9, B9);
+}
+// Harmonic sizes in the industry catalog convention (CSF/CSG-class). Numbers are CLASS
+// APPROXIMATIONS for envelope + limit sanity: od/len mm, rated & momentary-peak N·m
+// (ratcheting limit) at mid ratios. Replace with the exact datasheet row when chosen.
+const HARMONIC_SIZES = {
+  8:  { od: 31,  len: 20, ratios: [30, 50, 100],                rated: 0.9,  peak: 3.3 },
+  11: { od: 40,  len: 24, ratios: [30, 50, 100],                rated: 3.5,  peak: 8.3 },
+  14: { od: 50,  len: 28, ratios: [30, 50, 80, 100],            rated: 7.8,  peak: 28 },
+  17: { od: 60,  len: 32, ratios: [30, 50, 80, 100, 120],       rated: 16,   peak: 56 },
+  20: { od: 70,  len: 36, ratios: [30, 50, 80, 100, 120, 160],  rated: 25,   peak: 82 },
+  25: { od: 85,  len: 42, ratios: [30, 50, 80, 100, 120, 160],  rated: 63,   peak: 157 },
+  32: { od: 110, len: 50, ratios: [30, 50, 80, 100, 120, 160],  rated: 118,  peak: 281 },
+  40: { od: 135, len: 60, ratios: [30, 50, 80, 100, 120, 160],  rated: 206,  peak: 402 },
+};
+function harmonicSizeUp(minOD) {                                   // smallest catalog size that swallows the motor
+  for (const sz of Object.keys(HARMONIC_SIZES)) if (HARMONIC_SIZES[sz].od >= minOD * 0.98) return +sz;
+  return 40;
+}
+/* auto gearhead length, built UP from what the stages actually need (face + carrier +
+   clearance) plus real bearing width, faceplate, and interface - replaces the old
+   proportional 0.42·OD/stage rule that ballooned at large OD. Harmonic comes straight
+   from the catalog size table: a set size that drops in with no wasted space. */
+function gearheadAutoLen(type9, st9, gOD9, brg9) {
+  const brgW = (brg9 === "acpair" ? 2.1 : brg9 === "double" ? 1.9 : 1.0) * 1.25 * Math.max(0.138 * gOD9, 4); // +seal & retainer
+  const face9 = Math.max(0.07 * gOD9, 2) + 2.5;                    // faceplate + rear interface
+  if (type9 === "Harmonic") {
+    const hs = HARMONIC_SIZES[harmonicSizeFor(gOD9)];
+    return hs.len + brgW + face9;
+  }
+  const mEst = (0.8 * gOD9) / 72;                                  // typical ring 72t at 0.8·OD pitch
+  const F9 = Math.min(8 * mEst, 0.3 * gOD9);
+  const perSt = (type9 === "Spur" ? 1.35 : 1.5) * F9 + 3.7;        // face + carrier/web + clearance + retention hardware
+  return st9 * perSt + brgW + face9 + 8;                           // +8 mm motor adapter/interface (GP-class anchored)
+}
+function harmonicSizeFor(gOD) {
+  let pick = 8;
+  for (const sz of Object.keys(HARMONIC_SIZES)) if (HARMONIC_SIZES[sz].od <= gOD * 1.02) pick = +sz;
+  return pick;
+}
+const GEAR_MODS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0];
+function designGearTrain(p, act, gODin, gLenIn) {
+  const type = act.type, st = Math.max(act.st, 1);
+  const uTarget = Math.pow(act.N, 1 / st);
+  const gOD = gODin > 0 ? gODin : 40;
+  const brgF = Math.max((act.brg === "acpair" ? 0.29 : act.brg === "double" ? 0.26 : 0.138), 4 / Math.max(gOD, 10)); // real bearing width / OD
+  const gLen = gLenIn > 0 ? gLenIn : gearheadAutoLen(type, st, gOD, act.brg);
+  const Fcap = Math.max(0.62 * (gLen - brgF * gOD) / st, 1);     // axial budget per stage for the gear face
+  const nP = Math.max(Math.round(p.nPlanets) || 3, 2);
+  const jQ = AGMA_J[p.agmaQ] ?? AGMA_J["Q9"];
+  const pa = (Math.max(p.presAng || 20, 14.5) * Math.PI) / 180;
+  const mu = 0.06;                                                   // lubricated steel sliding
+  const sigAllow = 380;                                              // MPa, case-hardened bending fatigue
+  const Y9 = 0.308;                                                  // Lewis form, ~18–30 t @20°
+  const stages = [], w = [];
+  let effF = 1, effB = 1, blOut = 0, TmaxOut = Infinity, limStage = 0;
+  const ratios = [];
+  if (type === "Planetary") {
+    // per-stage synthesis: ratio u = 1 + Zr/Zs; Zr = Zs + 2·Zp; assembly (Zs+Zr) % nP = 0
+    for (let i9 = 0; i9 < st; i9++) {
+      let best = null;
+      for (let Zs = 14; Zs <= 48; Zs++) {
+        const Zp = Math.round((Zs * (uTarget - 2)) / 2);
+        if (Zp < 12) continue;
+        const Zr = Zs + 2 * Zp;
+        if ((Zs + Zr) % nP !== 0) continue;
+        // adjacent planets must clear: pin chord > planet tip dia (+0.5 m margin)
+        if ((Zs + Zp) * Math.sin(Math.PI / nP) < Zp + 2.5) continue;
+        const u9 = 1 + Zr / Zs;
+        const err9 = Math.abs(u9 - uTarget) / uTarget;
+        if (!best || err9 < best.err9) best = { Zs, Zp, Zr, u9, err9 };
+      }
+      if (!best) { w.push(`Stage ${i9 + 1}: no planetary tooth set meets ratio ${uTarget.toFixed(2)} with ${nP} planets — adjust ratio, stages, or planet count.`); best = { Zs: 18, Zp: 27, Zr: 72, u9: 5, err9: 1 }; }
+      if (best.err9 > 0.06) w.push(`Stage ${i9 + 1}: nearest tooth set gives ${best.u9.toFixed(2)}:1 vs ${uTarget.toFixed(2)} target (${(best.err9 * 100).toFixed(1)}% off) — total ratio shifts accordingly.`);
+      const ringPD = 0.80 * gOD;                                     // ring pitch Ø inside the housing wall
+      let m9 = ringPD / best.Zr;
+      m9 = GEAR_MODS.reduce((a9, b9) => (b9 <= m9 * 1.02 ? b9 : a9), GEAR_MODS[0]);
+      const F9 = +(Math.min(8 * m9, 0.30 * gOD, Fcap)).toFixed(1);   // face: 8·m typical, housed, LENGTH-capped
+      if (Fcap < Math.min(8 * m9, 0.30 * gOD) - 0.05 && i9 === 0)
+        w.push(`Gearhead length ${gLen.toFixed(0)} mm limits gear face to ${F9} mm/stage (vs ${Math.min(8 * m9, 0.3 * gOD).toFixed(1)} unconstrained) \u2014 the tooth-yield torque cap shrinks with it.`);
+      // backlash at the carrier: ring–planet mesh acts directly; sun–planet reflects
+      // down by the stage ratio (the old ×2 overstated the gear contribution)
+      const jmm = m9 * (0.035 + jQ);
+      const bl9 = ((jmm / (best.Zr * m9 / 2) + jmm / (best.Zs * m9 / 2) / best.u9) * (10800 / Math.PI));
+      // efficiency: external sun–planet + internal planet–ring mesh sliding + miniature drag
+      const Lext = 2.3 * mu * (1 / best.Zs + 1 / best.Zp);
+      const Lint = 2.3 * mu * Math.abs(1 / best.Zp - 1 / best.Zr);
+      const sizeF = Math.pow(30 / Math.max(gOD, 10), 0.35);
+      const Lchurn = 0.058 * sizeF;                                  // grease churning, per stage (2-stage anchored to 0.9²)
+      const Lseal = i9 === st - 1 ? 0.045 * sizeF : 0;               // ONE output seal, output stage
+      const ef9 = Math.max(1 - Lext - Lint - Lchurn - Lseal, 0.5);
+      const eb9 = Math.max(2 - 1 / ef9, 0.01);                       // torque-proportional losses reversed
+      if (best.Zs < 17) w.push(`Stage ${i9 + 1}: ${best.Zs}-tooth sun needs positive profile shift to avoid undercut at ${p.presAng || 20}° — standard practice, note on the gear drawing.`);
+      stages.push({ i: i9 + 1, Zs: best.Zs, Zp: best.Zp, Zr: best.Zr, u: best.u9, m: m9, shift: best.Zs < 17,
+        a: +((best.Zs + best.Zp) * m9 / 2).toFixed(2), pinBC: +((best.Zs + best.Zp) * m9).toFixed(2),
+        PDs: +(best.Zs * m9).toFixed(2), PDp: +(best.Zp * m9).toFixed(2), PDr: +(best.Zr * m9).toFixed(2),
+        F: F9, bl: bl9, ef: ef9, eb: eb9, mesh: Lext + Lint, drag: Lchurn + Lseal });
+      ratios.push(best.u9);
+    }
+  } else if (type === "Spur") {
+    // cluster ladder with STEPPED modules: stage i carries u^i more torque, so modules
+    // scale ~ sqrt(torque) for balanced bending stress; the whole ladder of center
+    // distances still spans the housing diameter (input axis offset to the wall)
+    const Z1 = 12;                                                  // cluster practice: small shifted pinions
+    const Z2 = Math.max(Math.round(Z1 * uTarget), Z1 + 3);
+    w.push("12-tooth pinions need positive profile shift (standard cluster practice) \u2014 note on the gear drawings.");
+    const wgt = Array.from({ length: st }, (_, i9) => Math.pow(uTarget, i9 / 2));
+    const ladderW = wgt.reduce((a9, b9) => a9 + b9, 0) * (Z1 + Z2) / 2 + wgt[0] * Z1 / 2 + wgt[st - 1] * Z2 / 2;
+    const mBase = (0.86 * gOD) / ladderW;
+    let yAx = 0;
+    for (let i9 = 0; i9 < st; i9++) {
+      const mRaw = mBase * wgt[i9];
+      const m9 = GEAR_MODS.reduce((a9, b9) => (b9 <= mRaw * 1.02 ? b9 : a9), GEAR_MODS[0]);
+      const u9 = Z2 / Z1;
+      const F9 = +(Math.min(9 * m9, 0.3 * gOD, Fcap)).toFixed(1);
+      const a9m = +((Z1 + Z2) * m9 / 2).toFixed(2);
+      const jmm = m9 * (0.035 + jQ);
+      const bl9 = ((jmm / (Z2 * m9 / 2)) * (10800 / Math.PI));
+      const Lm = 2.3 * mu * (1 / Z1 + 1 / Z2);
+      const sizeF = Math.pow(30 / Math.max(gOD, 10), 0.35);
+      const ef9 = Math.max(1 - Lm - 0.024 * sizeF - (i9 === st - 1 ? 0.03 * sizeF : 0), 0.5), eb9 = Math.max(2 - 1 / ef9, 0.01);
+      stages.push({ i: i9 + 1, Z1, Z2, u: u9, m: m9, PD1: +(Z1 * m9).toFixed(2), PD2: +(Z2 * m9).toFixed(2),
+        a: a9m, yAx: +(yAx).toFixed(2), F: F9, bl: bl9, ef: ef9, eb: eb9, mesh: Lm, drag: 1 - ef9 - Lm });
+      yAx += a9m;
+      ratios.push(u9);
+    }
+    const span9 = (stages[0].PD1) / 2 + yAx + (stages[st - 1].PD2) / 2;
+    if (span9 > 0.92 * gOD) w.push(`Spur ladder span ${span9.toFixed(1)} mm exceeds the \u00d8${gOD.toFixed(0)} housing (input axis offset to the wall) \u2014 fewer stages, lower per-stage ratio, or a bigger gearhead.`);
+  } else {                                                            // Harmonic: size-based, catalog convention
+    if (st > 1) w.push("Harmonic units are single-stage components \u2014 modeling 1 stage (compound harmonic trains are exotic).");
+    const sz = harmonicSizeFor(gOD);
+    const hs = HARMONIC_SIZES[sz];
+    if (hs.od > gOD + 0.5) w.push(`Smallest harmonic size (8, \u00d831 mm) exceeds the \u00d8${gOD.toFixed(0)} mm envelope \u2014 treat this as a floor.`);
+    let Nh = hs.ratios.reduce((a9, b9) => Math.abs(b9 - act.N) < Math.abs(a9 - act.N) ? b9 : a9, hs.ratios[0]);
+    if (Math.abs(Nh - act.N) > 0.5) w.push(`Size ${sz} offers ${hs.ratios.join('/')}:1 \u2014 snapped ${act.N}:1 to ${Nh}:1 (catalog ratios are fixed per size).`);
+    const Zf = 2 * Nh, Zc = Zf + 2;
+    const efH = Math.min(Math.max(0.85 - 0.0006 * Nh, 0.60), 0.84); // rated, warm; falls with ratio (catalog trend)
+    const ebH = Math.max(2 - 1 / efH, 0.01);
+    stages.push({ i: 1, Zf, Zc, u: Nh, m: +(Math.PI * 0.72 * hs.od / Zf / Math.PI).toFixed(3), F: +(0.22 * hs.od).toFixed(1),
+      bl: 0.7, ef: efH, eb: ebH, mesh: 0.12, drag: 1 - efH - 0.12, harmonic: true, size: sz, hsOD: hs.od, hsLen: hs.len,
+      rated: hs.rated, ratchet: hs.peak });
+    ratios.push(Nh);
+    TmaxOut = hs.peak; limStage = 0;                               // ratcheting, not Lewis \u2014 flagged in UI
+    w.push(`Size ${sz} class limits: rated ${hs.rated} N\u00b7m, momentary peak (ratcheting) ${hs.peak} N\u00b7m; \u03b7 ${Math.round(efH * 100)}% at rated load, warm \u2014 drops sharply at partial load and cold. CSF-class approximations, replace with the datasheet row.`);
+  }
+  // compose: backlash reflected by downstream ratio; efficiencies compound
+  const Ntot = ratios.reduce((a9, b9) => a9 * b9, 1);
+  for (let i9 = 0; i9 < stages.length; i9++) {
+    const dsRatio = ratios.slice(i9 + 1).reduce((a9, b9) => a9 * b9, 1);
+    blOut += stages[i9].bl / dsRatio;
+    effF *= stages[i9].ef; effB *= stages[i9].eb;
+  }
+  const blGear = blOut;
+  // mechanical clearances at the output (bearing play, planet-pin fits, spline/key lash) -
+  // ESTIMATED, output-referred, once; these dominate gear-mesh lash in miniature units.
+  const blMech = type === "Harmonic" ? 0.5
+    : 11 * Math.pow(32 / Math.max(gOD, 10), 0.25) + (act.brg === "acpair" ? 2 : act.brg === "double" ? 4 : 7);
+  blOut += blMech;
+  // Lewis tooth-yield: per stage, tangential load at its input mesh vs allowable → output torque cap
+  const rpmMotor = act.noLoad > 0 && act.N > 0 ? act.noLoad * act.N : 0;   // input shaft speed if known
+  let KvMax = 1;
+  if (type !== "Harmonic") for (let i9 = 0; i9 < stages.length; i9++) {
+    const s9 = stages[i9];
+    const usRatio = ratios.slice(0, i9).reduce((a9, b9) => a9 * b9, 1);   // motor → this stage input
+    const dsRatio = ratios.slice(i9).reduce((a9, b9) => a9 * b9, 1);      // this stage input → output
+    const nIn = rpmMotor / usRatio;
+    const PDin = type === "Planetary" ? s9.PDs : s9.PD1;
+    const vMs = (Math.PI * PDin * nIn) / 60000;                           // pitch-line velocity, m/s
+    const Kv9 = kvDyn(vMs, p.agmaQ);
+    if (Kv9 > KvMax) KvMax = Kv9;
+    let WtAllow, share;
+    if (type === "Planetary") {
+      const Ysun = yLewis(s9.Zs, s9.shift);
+      const Ypl = 0.7 * yLewis(s9.Zp, false);                             // idler: fully reversed bending
+      WtAllow = sigAllow * s9.m * s9.F * Math.min(Ysun, Ypl);             // weakest tooth in the mesh
+      share = nP / (KGAMMA[nP] || 1.2);                                   // effective planets after load share
+      s9.limTooth = Ysun <= Ypl ? "sun" : "planet";
+    } else {
+      WtAllow = sigAllow * s9.m * s9.F * Math.min(yLewis(s9.Z1, true), yLewis(s9.Z2, false));
+      share = 1;
+      s9.limTooth = "pinion";
+    }
+    const TinAllow = ((WtAllow / Kv9) * share * (PDin / 2000));           // N·m at this stage's input
+    const ToutCap = TinAllow * dsRatio * effF;
+    if (ToutCap < TmaxOut) { TmaxOut = ToutCap; limStage = s9.i; }
+  }
+  const selfLock = effB <= 0.02;
+  // back-drive breakaway at the output: seal + grease drag as absolute torque (est.,
+  // OD^2.5 scaling anchored to miniature catalog no-load friction); harmonics need ~4x (preload)
+  const Tbd = (0.004 + 0.002 * st) * Math.pow(gOD / 30, 2.5) * (type === "Harmonic" ? 4 : 1);
+  // stage recommendation: planetary practical window 3-10:1/stage, spur 1.5-6, harmonic 30-160
+  const win = type === "Planetary" ? [3, 10] : type === "Spur" ? [1.5, 6] : [30, 160];
+  let recSt = st;
+  for (let s9 = 1; s9 <= 4; s9++) { const u9 = Math.pow(act.N, 1 / s9); recSt = s9; if (u9 >= win[0] && u9 <= win[1]) break; }
+  if (uTarget > win[1] * 1.02) w.push(`Per-stage ratio ${uTarget.toFixed(1)}:1 exceeds the ${type.toLowerCase()} practical window (${win[0]}\u2013${win[1]}:1) \u2014 recommend ${recSt} stage${recSt > 1 ? "s" : ""} for ${act.N}:1 (${Math.pow(act.N, 1 / recSt).toFixed(2)}:1 each).`);
+  else if (uTarget < win[0] * 0.98 && st > 1) w.push(`Per-stage ratio ${uTarget.toFixed(2)}:1 is below the practical window \u2014 ${recSt} stage${recSt > 1 ? "s" : ""} would suffice for ${act.N}:1.`);
+  const stOk = uTarget >= win[0] * 0.98 && uTarget <= win[1] * 1.02;
+  return { type, st, nP, stages, Ntot, effF, effB, selfLock, blOut, blGear, blMech, Tbd, KvMax, TmaxOut, limStage, w, recSt, win, stOk, gLen, brgF,
+    agmaQ: p.agmaQ || "Q9", presAng: p.presAng || 20, gOD };
+}
+
 function composeActuator(mr, br, cfg) {
   const w = [];
   const type9 = ["Planetary", "Harmonic", "Spur"].includes(cfg.type) ? cfg.type : "Planetary";
@@ -28,7 +252,7 @@ function composeActuator(mr, br, cfg) {
   if (br && br.err && br.err.length) w.push("The brake design in its tab has errors — holding torque not composed.");
   const etaBack = Math.max(2 - 1 / eta, 0);                          // first-order back-drive efficiency
   const selfLock = etaBack <= 0.02 || type9 === "Harmonic" && N >= 80;
-  return { N, st, spr, eta, etaStage, type: type9, curve,
+  return { N, st, spr, eta, etaStage, type: type9, brg: cfg.brg || "radial", curve,
     noLoad: mr.noLoad / N,
     op: mr.op ? { n: mr.op.n / N, T: mr.op.T * N * eta } : null,
     peakT: (mr.peakT || 0) * N * eta,
@@ -755,11 +979,20 @@ function computeDesign(p) {
       : ((Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000)) / NsP) / Math.max((1.05 * airgap + p.magT / mag.mur) / 1000, 1e-5) / (kE * 2));
     const tauS = Ls / Math.max(Rs, 1e-6);
     const rpmC2 = (Math.max(p.Vdc - p.Imax * Rs, 0) / Math.max(KtPh * kE, 1e-9)) * (60 / (2 * Math.PI)); // ω where bemf eats bus
-    const Jr = 0.5 * 7800 * Math.PI * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000) * 0.9; // rotor inertia, kg·m²
+    const hubD9 = p.stpHubD > 0 ? p.stpHubD : 1.6 * p.shaftD;      // rotor hub the cups/ring mount on
+    const thruD9 = Math.max(p.stpThruD || 0, 0);                    // hollow-rotor pass-through (0 = solid)
+    const Jr = 0.5 * 7800 * Math.PI * (Math.pow(p.rotorOD / 2000, 4) - Math.pow(thruD9 / 2000, 4)) * (p.stackL / 1000) * 0.9; // rotor inertia, hollow-aware, kg·m²
+    if (thruD9 > 0) {
+      const wall9 = (hubD9 - thruD9) / 2;
+      if (wall9 < 1) w.push(`Through-hole \u00d8${thruD9.toFixed(1)} leaves ${wall9.toFixed(2)} mm of hub wall (\u00d8${hubD9.toFixed(1)} hub) \u2014 below ~1 mm; thin-section machining and press-fit stress need review.`);
+      else if (wall9 < 2) w.push(`Thin-section hub: ${wall9.toFixed(1)} mm wall on the \u00d8${hubD9.toFixed(1)} hub \u2014 workable, verify fits and keyless torque transfer.`);
+      if (thruD9 >= 0.45 * p.rotorOD) w.push(`Through-hole \u00d8${thruD9.toFixed(1)} intrudes on the magnet-ring seat (\u2265 45% of rotor \u00d8${p.rotorOD}) \u2014 check the ${hyb ? "axial magnet ring ID and cup webs" : "ring magnet ID"} clear the bore.`);
+      if (thruD9 >= hubD9) w.push(`Through-hole \u00d8${thruD9.toFixed(1)} \u2265 hub \u00d8${hubD9.toFixed(1)} \u2014 no hub wall remains.`);
+    }
     const stiffS = Th * kE;                                          // N·m/rad at equilibrium
     const f0 = (1 / (2 * Math.PI)) * Math.sqrt(stiffS / Math.max(Jr, 1e-9)); // single-step natural freq
     step = { angle: stepA, stepsRev: 4 * kE, kind: hyb ? "hybrid" : "PM", wire, leads,
-      Th, Th1, Th2, detent: Td, Kt: KtPh, Rs, Ls, tau: tauS, rpmC: Math.max(rpmC2, 0), kE,
+      Th, Th1, Th2, detent: Td, Kt: KtPh, Rs, Ls, tau: tauS, rpmC: Math.max(rpmC2, 0), kE, hubD: hubD9, thruD: thruD9,
       teethPP, tPitch, BtBias, stiff: stiffS, f0, J: Jr, on2, thArr: thArr6, tArr: tArr6, tNxt: tNxt6, tDet: tDet6 };
     op = { n: 0, T: Th }; peakT = Th;
     Kt = KtPh;
@@ -1396,13 +1629,14 @@ function buildFemmLua(p, r) {
   const rtM = STEELS[p.rotSteel || p.steel] || stM;
   const mag = MAGNETS[p.mag] || Object.values(MAGNETS)[0];
   const mu0 = 4e-7 * Math.PI;
-  const HcAm = (mag.Br || 1.2) / (mu0 * (mag.mur || 1.05));          // A/m at 20 °C
+  const BrT9 = (mag.Br || 1.2) * (1 + ((mag.aBr || 0) / 100) * ((p.magTemp || 20) - 20)); // Br at design magnet temp
+  const HcAm = BrT9 / (mu0 * (mag.mur || 1.05));                   // A/m at p.magTemp
   const L = [];
   const P9 = (rr, a) => [ +(rr * Math.cos(a)).toFixed(4), +(rr * Math.sin(a)).toFixed(4) ];
   const node = (x, y) => L.push(`mi_addnode(${x},${y})`);
   const seg = (x1, y1, x2, y2) => L.push(`mi_addsegment(${x1},${y1},${x2},${y2})`);
   const arc = (x1, y1, x2, y2, deg) => L.push(`mi_addarc(${x1},${y1},${x2},${y2},${deg},2)`);
-  L.push('-- MotrSynth FEMM export: ' + Ns + ' slots / ' + poles + ' poles, stack ' + p.stackL + ' mm');
+  L.push('-- MotrWorks FEMM export: ' + Ns + ' slots / ' + poles + ' poles, stack ' + p.stackL + ' mm, magnets at ' + (p.magTemp || 20) + ' C');
   L.push('-- Open in FEMM, run this script (femm console: dofile). Solve, then torque:');
   L.push('--   mo_groupselectblock(1)  mo_blockintegral(22)   -- rotor group steady torque, N·m');
   L.push('-- With all circuits at 0 A, the airgap flux should match the analytical model (ksat-corrected Bg).');
@@ -1477,7 +1711,7 @@ function buildFemmLua(p, r) {
   L.push(`mi_addblocklabel(${gx},${gy})`); L.push(`mi_selectlabel(${gx},${gy})`);
   L.push(`mi_setblockprop("Air",1,0,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
   L.push(`mi_zoomnatural()`);
-  L.push(`mi_saveas("motrsynth-${Ns}s${poles}p.fem")`);
+  L.push(`mi_saveas("motrworks-${Ns}s${poles}p.fem")`);
   return L.join("\n") + "\n";
 }
 
@@ -1485,7 +1719,7 @@ function downloadFemm(p, r) {
   const blob = new Blob([buildFemmLua(p, r)], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = `motrsynth-${r.Ns}s${p.poles}p.lua`; a.click();
+  a.href = url; a.download = `motrworks-${r.Ns}s${p.poles}p.lua`; a.click();
   URL.revokeObjectURL(url);
 }
 

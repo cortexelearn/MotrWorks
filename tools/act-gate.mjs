@@ -9,7 +9,7 @@ globalThis.document = { getElementById: () => null, createElement: () => ({ styl
 globalThis.window = { addEventListener: () => {} };
 const html = readFileSync('index.html', 'utf8');
 const app = html.slice(html.indexOf('<script>/*APP*/') + 15, html.indexOf('</script>\n<script>/*BOOT*/')).replace(/<\\\/script/g, '</script');
-const M = new Function('React', app + '\nreturn { computeDesign, composeActuator, ActuatorView, PRESETS };')(globalThis.React);
+const M = new Function('React', app + '\nreturn { computeDesign, composeActuator, ActuatorView, PRESETS, designGearTrain };')(globalThis.React);
 const base = JSON.parse(readFileSync('/tmp/_base.json', 'utf8'));
 let fail = 0;
 const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fail = 1; };
@@ -65,5 +65,31 @@ try {
   ok(out.includes('Static holding'), 'holding row present');
 } catch (e2) { ok(false, 'SSR threw: ' + e2.message); }
 
+// gear synthesis physics
+{
+  const gt = M.designGearTrain({ agmaQ: 'Q9', presAng: 20, nPlanets: 3 }, { type: 'Planetary', st: 2, N: 25 }, 40);
+  const s0 = gt.stages[0];
+  const cons = s0.Zr === s0.Zs + 2 * s0.Zp && (s0.Zs + s0.Zr) % 3 === 0 && Math.abs(gt.Ntot - 25) / 25 < 0.08;
+  const blQ = M.designGearTrain({ agmaQ: 'Q13', presAng: 20, nPlanets: 3 }, { type: 'Planetary', st: 2, N: 25 }, 40).blOut < gt.blOut;
+  const backOk = gt.effB < gt.effF && gt.effB > 0;
+  const lewisOk = Number.isFinite(gt.TmaxOut) && gt.TmaxOut > 1 && gt.limStage >= 1;
+  const clr = (s0.Zs + s0.Zp) * Math.sin(Math.PI / 3) > s0.Zp + 2;   // neighbor-planet clearance
+  const meshId = Math.abs(s0.a - (s0.PDs + s0.PDp) / 2) < 0.01;      // carrier = center distance
+  const gShort = M.designGearTrain({ agmaQ: 'Q9', presAng: 20, nPlanets: 3 }, { type: 'Planetary', st: 2, N: 25, brg: 'radial' }, 40, 12);
+  const lenCap = gShort.TmaxOut < gt.TmaxOut * 0.7 && gShort.w.some((w9) => w9.includes('limits gear face'));
+  const all9 = cons && blQ && backOk && lewisOk && clr && meshId && lenCap;
+  console.log(`  ${all9 ? '\u2713' : '\u2717'} gear synthesis: Zs/Zp/Zr ${s0.Zs}/${s0.Zp}/${s0.Zr} \u00b7 \u03a3${gt.Ntot.toFixed(1)}:1 \u00b7 bl ${gt.blOut.toFixed(1)}\u2032 (Q-monotone ${blQ}) \u00b7 \u03b7 ${(gt.effF*100).toFixed(1)}/${(gt.effB*100).toFixed(1)}% \u00b7 Lewis ${gt.TmaxOut.toFixed(1)} N\u00b7m @${gt.limStage} \u00b7 clr ${clr} a-id ${meshId} len-cap ${lenCap}`);
+  if (!all9) fail = true;
+}
+// spur cluster: stepped modules, 12t shifted pinions, ladder fits, torque above uniform-m floor
+{
+  const gs = M.designGearTrain({ agmaQ: 'Q9', presAng: 20, nPlanets: 3 }, { type: 'Spur', st: 3, N: 20, brg: 'radial' }, 30.5, 0);
+  const stepped = gs.stages[2].m > gs.stages[0].m;
+  const fits = !gs.w.some((w9) => w9.includes('ladder span'));
+  const strong = gs.TmaxOut > 0.2;
+  const ok9 = stepped && fits && strong && gs.stages[0].Z1 === 12;
+  console.log(`  ${ok9 ? '\u2713' : '\u2717'} spur cluster: m ${gs.stages.map((s9) => s9.m).join('/')} (stepped ${stepped}) \u00b7 Tmax ${gs.TmaxOut.toFixed(2)} N\u00b7m \u00b7 fits ${fits}`);
+  if (!ok9) fail = true;
+}
 console.log(fail ? 'ACT GATE: FAIL' : 'ACT GATE: PASS');
 process.exitCode = fail;

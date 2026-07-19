@@ -1,4 +1,4 @@
-# MotrSynth — Module Audit Notes
+# MotrWorks — Module Audit Notes
 
 Audit of build `motrsynth-envelope-v4` (2026-07-14), updated after implementation of the
 five priority fixes in `motrsynth-fidelity-v5` (2026-07-14). Items marked **[#1]–[#5]** are
@@ -62,6 +62,76 @@ follow-on modifications each one opens up.
 
 ## 04-views.jsx — visualization
 - Cross-section, scope, envelope curves all render SSR-clean. Future: efficiency map over the n-T plane; sensitivity tornado (finite-difference on the pure engine is nearly free).
+
+## Audit resolution pass (2026-07-19, v57)
+- Resolved audit items A1–A5, B1–B5 (see docs/audit-v56.md resolution appendix): Lewis Y(Z)/Kγ/Kv/planet-idler check (caps down 25–35%, planet correctly limits), backlash mesh+mech split (28′ mid-band, shown split in-card), gear-dissipation row + ΔT warning, auto length GP-anchored to 6% lean, harmonic η(ratio), drag re-split (seal once) with η 89/83/77% by stages, back-drive breakaway row, MEC-mixing assumption line, FEMM magnets at design temp. B6/B7/B8 deferred pending bench anchors, stated in the appendix. New SSR baseline 163,678 (ledger line).
+
+## Stepper hollow rotor (2026-07-19, v56)
+- **Rotor definition gains Shaft/Hub OD (0 = auto 1.6× shaft) and Through-hole Ø (0 = none)** — thin-section ID pass-through rotors now model. Physics: rotor inertia subtracts the bore (r⁴-honest: a Ø8 hole in a Ø25 hybrid removes only 0.9% of J, single-step f₀ rises accordingly); holding torque untouched (the magnetic path doesn't run through the bore). Warnings: hub wall < 1 mm (machining/press-fit review) and < 2 mm (thin-section, verify fits), through-hole ≥ 45% of rotor Ø (magnet-ring seat intrusion — check ring ID / cup webs clear the bore), hole ≥ hub. Cross-section draws the hub ring and a dashed through-bore; both fields serialize and export in step results (hubD/thruD).
+
+## Spur stepped modules + housekeeping (2026-07-19, v55)
+- **Spur clusters now step module per stage** (promised in v50): modules scale ~√torque for balanced bending stress (e.g. 1.2″ 3-stage: m 0.15/0.25/0.4), with 12-tooth positively-shifted pinions per cluster practice (drawing note emitted). Torque caps rose 2–2.5× — 0.75″: 0.14→0.26, 1.2″: →0.35, 1.5″: →0.29 N·m — landing in real miniature-spur catalog territory. Ladder-span fit and Lewis limiting stage recompute per-stage; sections draw the per-stage geometry they already carried. act-gate asserts stepping, 12t pinions, fit, and the torque floor.
+- **GearFaceView removed** — dead since the v47 side-section replacement.
+
+## Field-pertinence pass (2026-07-19, v54)
+- **Phase sequence hidden where inert (user-caught on LATM):** `seq` only feeds the rotation-direction readout, which was already hidden for LATM/stepper/brake — the input itself now hides there too. Kept: BLDC/ACIM ("Phase sequence A-B-C/A-C-B") and brushed (its existing "Supply polarity Normal/Reversed" mapping). Hidden with a source comment stating why: single-winding LATM and brake have no sequence; the 2-phase stepper's direction is step-order, not a 3-phase sequence.
+- "Drive + lead R / phase" drops the "/ phase" for single-winding machines (LATM, brake).
+
+## Tcu clarity + LATM flux overlay (2026-07-19, v53)
+- **"Hot reference temp" relabeled** to "Performance temp (copper)" with an in-card note: wire tables and the L-L resistance target stay at 20 °C ambient per magnet-wire convention (the inverse solve is gated exact at 20 °C); this field only sets the copper temperature the performance model runs at (R × (1 + 0.393%/°C·ΔT) into the curves and hot-side rows).
+- **LATM flux visualization (user request):** PM gap flux now draws during the toggle animation — five arrows per pole face crossing the working gap (N outward red, S inward blue), riding the rotor. Where a pole face overlaps a sector whose conductor current direction drives the current half-stroke, arrows render heavy and a green band marks the torque zone — the concentration visibly migrates and flips as the rotor swings and polarity reverses. Caption clarified: ⊗/⊙ are conductor current directions per sector of the ONE toroidal winding (not separate coils), alternating by sector and flipping with drive.
+
+## Brushed anatomy in the composite (2026-07-19, v52)
+- **Motor-type-correct internals (user-caught):** the composite outline drew BLDC anatomy (stator coil heads flanking the stack) for every motor type. Brushed sources now draw the inside-out truth: stationary magnet arcs bonded to the housing ID (N red / S blue), the wound armature on the shaft with its end turns, and the commutator + brush at the rear. BLDC path unchanged. Also fixed the stale 0.42·OD note under the outline (now describes the built-up length rule).
+
+## Auto-length rebuild + section completeness (2026-07-19, v51)
+- **Auto gearhead length rebuilt bottom-up (user-caught waste):** the proportional 0.42·OD/stage rule ballooned at large OD (Ø165 3-stage: 244 mm of mostly air). New `gearheadAutoLen`: per-stage = 1.5×face + carrier + clearance, real bearing widths (radial 0.138·OD min 4 mm, double ×1.9, AC pair ×2.1), faceplate + interfaces. Results: Ø46 2st 49→35 mm (−28%), Ø101.6 3st 150→78 (−48%), Ø165 3st 244→116 (−52%); gears + carriers now fill their slots. designGearTrain's bearing block unified to the same widths so the length budget, Lewis face cap, and drawings all agree. Bench-calibrate the constants against your hardware — the rule is disclosed in the explainer.
+- **Harmonic auto = drop-in catalog size:** with OD in auto, the envelope snaps to the smallest HD-convention size that swallows the motor (NEMA23 Ø57 → size 17, Ø60) and the length comes straight from the size table + bearing + faceplate — no wasted space, per the HD/Sito catalogs.
+- **Side section now complete for all three trains:** harmonic draws its real architecture — flexspline cup wall running to the output diaphragm, grounded circular-spline block at the input end, elliptical wave-generator hub with bearing balls, "size N · cup length" callout, component-set dimension. Spur stages draw on their actual ladder axes (climbing one center distance per stage, dashed axis lines) in both the side section and the composite cutaway.
+- Intentional model change: envelope lengths shifted by design; gates updated in-commit (len-cap probe to 12 mm), full suite green.
+
+## Harmonic & spur fidelity (2026-07-19, v50)
+- **Harmonic, catalog-sized:** `HARMONIC_SIZES` table in the CSF/CSG size convention (8–40: OD, gear-set length, available ratios, rated + momentary-peak torque) — CLASS APPROXIMATIONS, flagged in-app to replace with the datasheet row. The synthesis picks the largest size fitting the envelope, snaps the ratio to that size's catalog set (warned), computes Zf = 2N / Zc = Zf+2, and the momentary peak becomes the torque cap — labeled "ratcheting limit, size class" instead of Lewis, feeding the chart line and margin row. Radial section is now the real component set: circular spline (toothed, grounded), flexspline following the ellipse, wave-generator bearing with balls on the elliptical race, mesh zones marked at the major axis.
+- **Spur, cluster-real:** multi-stage ladder synthesis — pinion on axis i drives the gear on axis i+1, module sized so the ladder of center distances spans the housing DIAMETER (input axis offset to the wall, as real spur heads are built); fine modules 0.1/0.15 added to the standard series; span check warns honestly. Radial section draws the cluster ladder with per-stage center-distance dimensions. Uniform module per cluster for now; stepping module up on output stages is the known next refinement.
+- **Presets:** HD size 14/20/25 (Ø2″/2.75″/3.35″, 50/100/80:1) + spur clusters 0.75″ 6:1/2st, 1.2″ 20:1/3st, 1.5″ 60:1/4st — all synthesis-validated (harmonic exact, spur within 2.5% with ✓ fit). Spur torque caps land in the honest miniature range (~0.14 N·m at these sizes — why planetaries exist).
+
+## Pinion wrap rendering (2026-07-19, v49)
+- **Sawtooth silhouettes removed (user direction):** pinion teeth now render as parallel axial flank lines whose vertical spacing follows the circular projection y = R·cos(θ) — lines bunch and darken toward the silhouette edges, reading as teeth wrapping the diameter. End-face tooth-tick ring (matched count) and center-drill dot stay; the stepped tip Ø from v48 unchanged. Same treatment in the 2D outline.
+
+## Stepped pinion (2026-07-19, v48)
+- **Pinion redrawn to match real hardware (user reference photo):** the gear portion is now its OWN stepped cylinder at a larger tip diameter than the shaft — new "Pinion tip Ø" field (0 = auto 1.35× shaft) — with fine knurl-density axial teeth on the silhouette, lengthwise flank lines, a 12-tick tooth ring on the end face, and a center-drill dot. The 2D outline steps the same way with its shoulder line. Caption calls out both diameters: "pinion shaft Ø0.31″ · pinion Ø0.43″ × 0.39″".
+- oshPinD serializes with the design; auto keeps prior files rendering sensibly.
+
+## Gearhead side section (2026-07-19, v47)
+- **Face view replaced (user feedback: "gives me nothing"):** the "Output face" radial card is gone; in its place, **Gearhead section — side**: a dedicated axial half-section of the gearhead at true scale. Sectioned housing walls (hatched), per-stage sun/planets/pins/carrier with S1…Sn labels (stage 1 at the motor), ring bands in the wall, the output bearing drawn at size with Ø callouts (race and bore) and pair/stack annotation, mounting tapped holes drawn entering the face they engage (fwd = output face, aft = rear) with thread hatching and a n× thread ⤓ depth callout, and dimension brackets underneath for the bearing block and every stage slot. PNG export (svg-ghsec).
+- Same JSX-text escape trap bit the new labels (brg Ø/bore Ø/hole callout) — caught in verification, wrapped in template literals. Edit-script rule reaffirmed: JSX TEXT needs real characters or {`…`}.
+- GearFaceView remains in code but unreferenced (candidate for removal next housekeeping pass).
+
+## Composite-outline cutaway (2026-07-19, v46)
+- **Cutaway internals in the axial composite view (user request, per cutaway reference):** the gearhead block now shows its insides at true scale from the synthesized geometry — per-stage sun (gold) and top/bottom planet sections with pins, carrier plates (bronze) on each stage's output side, ring bands grounded in the housing wall, stage 1 nearest the motor. The output bearing occupies its real block: races + ball sections top and bottom, one row for radial, two for double/AC pair, diagonal contact lines marking the angular-contact pair. Spur draws offset gear pairs; harmonic keeps the plain block (its cup section is a future pass).
+- **Literal-escape bug fixed (user-caught):** "Output face \u2014 radial" and "PNG \u2913" rendered raw — JSX text does not process \u escapes; real characters now. Lesson noted for edit scripts.
+- Verified: NaN-free across all train types and bearing variants; sun/carrier counts match stage count; default SSR baseline unchanged (163,378).
+
+## Gear detail pass II (2026-07-18, v45)
+- **Pinion rendering fixed (user-caught):** the dense radial ticks read as threads. Now: sawtooth tooth strips along the top/bottom silhouette (teeth run AXIALLY) with faint lengthwise flank lines, in both the iso and 2D outline; the output-face view shows the toothed cross-section radially.
+- **Drawing callouts per gear:** stage-1 table rows for Sun (with shift note) / Planet / Ring(internal) — Z, PD, tip Ø, root Ø (internal ring inverted: tip = PD−2m, root = PD+2.5m), module + DP, pressure angle, face, AGMA Q — what a gear drawing needs, ready to transcribe.
+- **Length limits torque:** gear face width is now capped by the axial budget — 0.62·(gearhead length − bearing block)/stages — so shrinking the envelope thins the gears and the Lewis cap follows (40 mm 2-stage: 19 mm length is fine, 14 mm halves the cap to 3.3 N·m, warned). Gated monotone.
+- **Tooth-yield on the charts:** the composite torque–speed AND current–torque charts draw a red dashed "tooth yield" line at the Lewis cap, axes scaled to show it.
+- **Output bearing:** Radial / 2× radial / Angular-contact pair — sets the envelope's bearing-block length (0.22/0.30/0.34·OD, radial = previous default so nothing shifts silently) and draws in the new view.
+- **Output-face radial view:** the BLDC-lamination-style companion to the mesh plane — housing wall, tapped pattern on its BC, pilot boss, output bearing (races + ball row, pair/stack annotated), and the shaft cross-section with its drive feature. PNG export.
+
+## Gear geometry corrections + presets (2026-07-17, v44)
+- **Drawing bug fixed (user-caught):** the planetary section drew planets at HALF the true carrier radius — center distance was divided twice — so they crashed the sun and floated off the ring. Carrier radius = a = (PDs+PDp)/2 now, gated as a mesh identity along with a + PDp/2 = PDr/2. Carrier spider arms added; caption states the grounded-ring power path ("sun Xt drives → carrier out · ring Yt grounded").
+- **Neighbor-interference constraint:** synthesis now rejects tooth sets where adjacent planets collide — (Zs+Zp)·sin(π/nP) must exceed Zp + 2.5. This is a real feasibility wall: 4 planets cap near 6.8:1/stage, 5 planets near 4:1 — two draft presets failed it honestly and were corrected.
+- **Gear presets (1–4″), all synthesis-validated:** 1″ 4:1/1st/3P, 1.6″ 25:1/2st/3P, 2.5″ 50:1/2st/3P, 3.2″ 64:1/3st/4P, 4″ 100:1/3st/4P — each hits its ratio within 0.2% with assembly + clearance satisfied.
+- **Stage recommendation:** entering a ratio checks the per-stage value against the train's practical window (planetary 3–10:1, spur 1.5–6, harmonic 30–160); in-window shows ✓, out-of-window recommends a count with a one-tap apply. Stage table rows add center distance a and planet-pin circle Ø.
+
+## Gear train deep-dive + output shaft (2026-07-17, v43)
+- **`designGearTrain(p, act, gOD)`** synthesizes real gear geometry from gearhead Ø, AGMA quality (Q7–Q13), pressure angle, and planet count. Planetary: searches Zs 14–48 for tooth sets satisfying Zr = Zs + 2·Zp and the (Zs+Zr) % nP assembly constraint, nearest the per-stage ratio (warns >6% off; <17t sun flags profile shift); module snapped to the standard series from ring PD ≈ 0.8·gOD; face 8·m. Spur: 15t pinion pairs in the envelope. Harmonic: catalog-level (flex/circular counts, near-zero backlash, ratchet-limited — stated, not Lewis).
+- **Refinement outputs:** output-shaft backlash (per-mesh AGMA allowance reflected through downstream ratios — output stage dominates; Q-monotone gated), forward AND back-driving efficiency (mesh sliding ∝ tooth counts + seal/churning drag; η_b ≈ 2 − 1/η_f per stage, self-locking detected), friction torque through the train at peak output, and a Lewis tooth-yield torque cap (380 MPa case-hardened, limiting stage named, color-coded margin vs peak). Constants land on the established catalog anchors (2-stage planetary ≈ 82% ≈ 0.9²).
+- **Gear cross-section view:** stage-1 section to scale — planetary ring/planets/sun with pitch-circle teeth ticks and carrier pins, spur pair, harmonic wave-gen schematic — plus a per-stage mini-table in the SVG and full stage table + refinement rows in the card. PNG export.
+- **Output shaft section:** Round / Keyed / D-flat / Pinion with OD, overall length from face, and feature length at tip (0 = auto), drawn in BOTH the 2D outline and the isometric (key rect, D chord, pinion teeth ticks), caption states style + Ø. Defaults preserve the previous keyed look.
+- act-gate extended: assembly/ratio constraints, Q-monotone backlash, η_back < η_fwd, Lewis finite + limiting stage; the ActuatorView SSR check caught (and we fixed) a field-name crash during development — the gates doing their job.
 
 ## FEA-light (2026-07-17, v41)
 - **Finding first:** the proposed Phase-1 magnetic-equivalent-circuit largely EXISTED — `satAux(Fext)` iterates Froelich tooth/stator-yoke/rotor-yoke MMF drops against the magnet load line with Carter's gap (→ ksat), and armature reaction already feeds the same solver at Imax (→ kIT bending the I–T chart). What was missing: exposure and the external-validation bridge.

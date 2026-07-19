@@ -1,4 +1,4 @@
-/* MotrSynth module 03 — DXF import: parser + lamination geometry analyzer */
+/* MotrWorks module 03 — DXF import: parser + lamination geometry analyzer */
 function parseDxf(text) {
   const lines = text.split(/\r\n|\r|\n/);
   const seqs = [], circles = [];

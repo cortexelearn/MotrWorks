@@ -1,4 +1,4 @@
-/* MotrSynth module 01 — shared: materials, wire tables, magnets, presets, theme, DXF export */
+/* MotrWorks module 01 — shared: materials, wire tables, magnets, presets, theme, DXF export */
 import React, { useMemo, useState, useEffect, useContext, createContext } from "react";
 
 const UnitCtx = createContext("in");

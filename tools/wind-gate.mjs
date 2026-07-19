@@ -44,7 +44,7 @@ for (const [wire, expect] of [["bip-ser", "loops back in series"], ["bip-par", "
   if (!ok) process.exitCode = 1;
 }
 const out = renderToString(React.createElement(M.MotorDesigner));
-console.log('default SSR:', out.length, out.length === 163378 ? '✓' : '(changed — check)');
+console.log('default SSR:', out.length, out.length === 163678 ? '✓' : '(changed — check)');
 // dump for raster
 writeFileSync('/tmp/br-wind.svg', sLap.replace('<svg ', '<svg style="background:#F8FAFC" '));
 const rS = M.computeDesign(pSt);
