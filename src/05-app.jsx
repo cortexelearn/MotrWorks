@@ -878,7 +878,7 @@ export default function MotorDesigner() {
   const [p, setP] = useState({
     slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
     yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0,
-    pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy",
+    pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy", turnBasis: "coil",
     conn: "wye", vref: "ll", motorType: "pm", ctrl: "foc", sense: "hall",
     mag: "N45SH", magT: 4, poleArc: 85, Top: 60,
     endMode: "auto", headH: 15, bobShape: "race", bobD: 30, bobWall: 1, bobWin: 16,
@@ -1530,7 +1530,8 @@ export default function MotorDesigner() {
                 <Num label="Coil span (0 = full)" unit="slots" v={p.span} set={s("span")} min={0} />
               </>
             )}
-            {!latmM && <Num label={stpM ? "Turns per pole (per strand)" : brkM ? "Coil turns (total)" : "Turns per coil"} v={p.turns} set={s("turns")} min={1} />}
+            {!latmM && <Num label={stpM ? "Turns per pole (per strand)" : brkM ? "Coil turns (total)" : brM && p.turnBasis === "slot" ? "Conductors per slot" : "Turns per coil"} v={p.turns} set={s("turns")} min={1} />}
+            {brM && <Pick label="Turns basis" v={p.turnBasis || "coil"} set={s("turnBasis")} opts={[{ v: "coil", t: "Per coil" }, { v: "slot", t: "Cond./slot" }]} />}
             <Num label="Magnet wire" unit="AWG" v={p.awg} set={s("awg")} min={8} max={40} step={0.5} />
             <Sel label="Insulation build" v={p.insBuild} set={s("insBuild")} opts={Object.keys(INS_BUILD)} />
             <Num label="Strands in hand" v={p.strands} set={s("strands")} min={1} />
@@ -2244,6 +2245,9 @@ export default function MotorDesigner() {
 
           <div className="card paper" style={{ marginTop: 14 }}>
             <h2>Bench calibration</h2>
+            <div className="hint" style={{ margin: "-2px 0 6px", fontSize: 11, opacity: 0.7 }}>
+              Enter R in mΩ and L in µH — a nameplate "M.H." is microhenries (µH), not milli (0.193 mH = 193 µH). Wrong-unit entries drive the cal factors far from 1.
+            </div>
             <Num label={brM ? "Measured R terminal" : "Measured R line-line"} unit="mΩ" v={p.mR} set={s("mR")} step={10} min={0} />
             <Num label={brM ? "Measured L terminal" : "Measured L line-line"} unit="µH" v={p.mL} set={s("mL")} step={10} min={0} />
             {(pm && !brM) && (

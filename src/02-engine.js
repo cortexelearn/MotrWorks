@@ -446,7 +446,10 @@ function computeDesign(p) {
   const aIns = (Math.PI / 4) * dIns * dIns;
 
   const layers = brushedM || p.pattern === "concentrated" ? 2 : p.layers; // brushed armature: double-layer (2 coil sides per slot)
-  const condPerSlot = layers * p.turns * p.strands;
+  // v58: "Turns basis" — shop armature drawings usually spec *conductors per slot*, but the tool otherwise reads the value as
+  // turns-per-coil and doubles Z across the double layer. slotBasis takes the entered number as conductors/slot directly.
+  const slotBasis = brushedM && p.turnBasis === "slot";
+  const condPerSlot = (slotBasis ? 1 : layers) * p.turns * p.strands;
   const fillGross = usableArea > 0 ? (condPerSlot * aIns) / usableArea : Infinity;   // insulated / usable (strict)
   const fillCu = usableArea > 0 ? (condPerSlot * aBare) / usableArea : Infinity;
   const fillInsSlot = slotArea > 0 ? (condPerSlot * aIns) / slotArea : Infinity;      // insulated / gross slot
@@ -539,7 +542,7 @@ function computeDesign(p) {
     if (tb > slotHalf && p.pattern === "concentrated")
       w.push(`Coil build ${tb.toFixed(1)} mm exceeds the ~${slotHalf.toFixed(1)} mm half-slot width — won't seat in the slot.`);
   } else if (p.endMode === "head") {
-    endSide = Math.sqrt(coilArc * coilArc + 4 * p.headH * p.headH) + 5; // rise + throw + nose
+    endSide = Math.sqrt(coilArc * coilArc + p.headH * p.headH) + 5; // throw + single-sided rise + nose (rise was double-counted as 2·headH pre-v58)
     MLTmm = 2 * p.stackL + 2 * endSide;
   } else { // auto
     endSide = 1.35 * coilArc + 10;
@@ -556,6 +559,14 @@ function computeDesign(p) {
   const cKe = calAct ? Math.max(p.calKKe || 1, 0.05) : 1;
   const cKt = calAct ? Math.max(p.calKKt || 1, 0.05) : 1;
   const cTd = calAct ? Math.max(p.calTd || 0, 0) : 0;
+  // v58: units-mismatch guard — a cal factor far from 1.0 almost always means a measured value was typed into the
+  // wrong-unit field (e.g. 0.9 Ω into the mΩ box → calKR ≈ 4e-4, or 193 into a mH box read as µH).
+  if (calAct) {
+    for (const [nm, kv, hint] of [["R", p.calKR, "mΩ vs Ω"], ["L", p.calKL, "µH vs mH"], ["Ke", p.calKKe, "V/krpm vs mV/krpm"], ["Kt", p.calKKt, "N·m/A vs mN·m/A"]]) {
+      if (kv > 0 && (kv < 0.1 || kv > 10))
+        w.push(`Calibration cal${nm} = ${kv} is far from 1.0 — check the measured entry's units (${hint}). A factor this size usually means a units mismatch, not a real correction.`);
+    }
+  }
   const Rphase =
     cKR * (RHO_CU * MLT * coilsPerPhase * p.turns * 1e6) / (aBare * p.strands * a * a); // ohm
   const Rll = p.conn === "wye" ? 2 * Rphase : (2 / 3) * Rphase;
@@ -698,13 +709,22 @@ function computeDesign(p) {
     ? (airgap * kcGap + geSat + p.magT / mag.mur) / 1000  // Carter gap + magnets + steel MMF drop
     : (airgap * kcGap) / 1000;
   const Lmag = (3 / Math.PI) * MU0 * ((D * L) / Math.max(dMagGap, 1e-5)) * Math.pow(kw * Nser, 2) / (poles * poles);
+  const LmagNR = (3 / Math.PI) * MU0 * ((D * L) / (p.statorID / 2000)) * Math.pow(kw * Nser, 2) / (poles * poles); // rotor removed: flux crosses the open bore
   const bAvgSlot = (Math.max(w1, 0) + Math.max(w2, 0)) / 2;
-  const lamSlot = bAvgSlot > 0 ? Math.max(hs, 0) / (3 * bAvgSlot) + p.tipH / Math.max(p.slotOpen, 0.1) : 1.5;
+  const lamSlot = bAvgSlot > 0 ? Math.max(hs, 0) / (3 * bAvgSlot) + p.tipH / Math.max(p.slotOpen, 0.1) : 1.5; // slot-body + tip/opening permeance
   const Lslot = ((4 * 3) / Ns) * MU0 * (p.stackL / 1000) * lamSlot * Nser * Nser;
-  const Lend = 0.3 * Lslot; // end-winding leakage, rule-of-thumb fraction
-  const Lph = cKL * (Lmag + Lslot + Lend);         // rotor installed
-  const LmagNR = (3 / Math.PI) * MU0 * ((D * L) / (p.statorID / 2000)) * Math.pow(kw * Nser, 2) / (poles * poles);
-  const LphNR = LmagNR + Lslot + Lend;             // rotor removed: flux must cross the open bore
+  // v58: end-winding leakage from the real end-turn path (endSide from the coil-build model), replacing the pre-v58 0.3×Lslot shortcut
+  // — that shortcut collapses whenever end turns are comparable to or longer than the stack (short-stack, high-pole machines).
+  const lEnd = (2 * (endSide > 0 ? endSide : 1.35 * coilArc + 10)) / 1000; // total end-turn path, both ends, m
+  const lamEnd = 0.47;                                                     // end-turn permeance coefficient (bench/FEMM-calibratable)
+  const Lend = ((4 * 3) / Ns) * MU0 * lEnd * lamEnd * Nser * Nser;
+  // v58: differential (airgap space-harmonic) leakage — first-order fractional-slot estimate, rises as slots/pole/phase → 0;
+  // ~0 with the rotor removed (bare-stator LCR). FEMM-calibratable; see audit B-series.
+  const qSpp = Ns / (3 * Math.max(poles, 1));
+  const sigmaD = Math.min(6, Math.pow(Math.max(1 / Math.max(qSpp, 1e-3) - 1, 0), 1.6));
+  const Ldiff = sigmaD * Lmag, LdiffNR = sigmaD * LmagNR;
+  const Lph = cKL * (Lmag + Ldiff + Lslot + Lend);         // rotor installed
+  const LphNR = cKL * (LmagNR + LdiffNR + Lslot + Lend);   // rotor removed (bare-stator LCR reading): leakage-dominated
   const Lll = p.conn === "wye" ? 2 * Lph : (2 / 3) * Lph;
   const LllNR = p.conn === "wye" ? 2 * LphNR : (2 / 3) * LphNR;
 

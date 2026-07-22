@@ -17957,7 +17957,10 @@ function computeDesign(p) {
     const aBare = (Math.PI / 4) * dBare * dBare; // mm²
     const aIns = (Math.PI / 4) * dIns * dIns;
     const layers = brushedM || p.pattern === "concentrated" ? 2 : p.layers; // brushed armature: double-layer (2 coil sides per slot)
-    const condPerSlot = layers * p.turns * p.strands;
+    // v58: "Turns basis" — shop armature drawings usually spec *conductors per slot*, but the tool otherwise reads the value as
+    // turns-per-coil and doubles Z across the double layer. slotBasis takes the entered number as conductors/slot directly.
+    const slotBasis = brushedM && p.turnBasis === "slot";
+    const condPerSlot = (slotBasis ? 1 : layers) * p.turns * p.strands;
     const fillGross = usableArea > 0 ? (condPerSlot * aIns) / usableArea : Infinity; // insulated / usable (strict)
     const fillCu = usableArea > 0 ? (condPerSlot * aBare) / usableArea : Infinity;
     const fillInsSlot = slotArea > 0 ? (condPerSlot * aIns) / slotArea : Infinity; // insulated / gross slot
@@ -18057,7 +18060,7 @@ function computeDesign(p) {
             w.push(`Coil build ${tb.toFixed(1)} mm exceeds the ~${slotHalf.toFixed(1)} mm half-slot width — won't seat in the slot.`);
     }
     else if (p.endMode === "head") {
-        endSide = Math.sqrt(coilArc * coilArc + 4 * p.headH * p.headH) + 5; // rise + throw + nose
+        endSide = Math.sqrt(coilArc * coilArc + p.headH * p.headH) + 5; // throw + single-sided rise + nose (rise was double-counted as 2·headH pre-v58)
         MLTmm = 2 * p.stackL + 2 * endSide;
     }
     else { // auto
@@ -18075,6 +18078,14 @@ function computeDesign(p) {
     const cKe = calAct ? Math.max(p.calKKe || 1, 0.05) : 1;
     const cKt = calAct ? Math.max(p.calKKt || 1, 0.05) : 1;
     const cTd = calAct ? Math.max(p.calTd || 0, 0) : 0;
+    // v58: units-mismatch guard — a cal factor far from 1.0 almost always means a measured value was typed into the
+    // wrong-unit field (e.g. 0.9 Ω into the mΩ box → calKR ≈ 4e-4, or 193 into a mH box read as µH).
+    if (calAct) {
+        for (const [nm, kv, hint] of [["R", p.calKR, "mΩ vs Ω"], ["L", p.calKL, "µH vs mH"], ["Ke", p.calKKe, "V/krpm vs mV/krpm"], ["Kt", p.calKKt, "N·m/A vs mN·m/A"]]) {
+            if (kv > 0 && (kv < 0.1 || kv > 10))
+                w.push(`Calibration cal${nm} = ${kv} is far from 1.0 — check the measured entry's units (${hint}). A factor this size usually means a units mismatch, not a real correction.`);
+        }
+    }
     const Rphase = cKR * (RHO_CU * MLT * coilsPerPhase * p.turns * 1e6) / (aBare * p.strands * a * a); // ohm
     const Rll = p.conn === "wye" ? 2 * Rphase : (2 / 3) * Rphase;
     // operating resistance: copper at winding temp + drive FETs / leads per phase
@@ -18228,13 +18239,22 @@ function computeDesign(p) {
         ? (airgap * kcGap + geSat + p.magT / mag.mur) / 1000 // Carter gap + magnets + steel MMF drop
         : (airgap * kcGap) / 1000;
     const Lmag = (3 / Math.PI) * MU0 * ((D * L) / Math.max(dMagGap, 1e-5)) * Math.pow(kw * Nser, 2) / (poles * poles);
+    const LmagNR = (3 / Math.PI) * MU0 * ((D * L) / (p.statorID / 2000)) * Math.pow(kw * Nser, 2) / (poles * poles); // rotor removed: flux crosses the open bore
     const bAvgSlot = (Math.max(w1, 0) + Math.max(w2, 0)) / 2;
-    const lamSlot = bAvgSlot > 0 ? Math.max(hs, 0) / (3 * bAvgSlot) + p.tipH / Math.max(p.slotOpen, 0.1) : 1.5;
+    const lamSlot = bAvgSlot > 0 ? Math.max(hs, 0) / (3 * bAvgSlot) + p.tipH / Math.max(p.slotOpen, 0.1) : 1.5; // slot-body + tip/opening permeance
     const Lslot = ((4 * 3) / Ns) * MU0 * (p.stackL / 1000) * lamSlot * Nser * Nser;
-    const Lend = 0.3 * Lslot; // end-winding leakage, rule-of-thumb fraction
-    const Lph = cKL * (Lmag + Lslot + Lend); // rotor installed
-    const LmagNR = (3 / Math.PI) * MU0 * ((D * L) / (p.statorID / 2000)) * Math.pow(kw * Nser, 2) / (poles * poles);
-    const LphNR = LmagNR + Lslot + Lend; // rotor removed: flux must cross the open bore
+    // v58: end-winding leakage from the real end-turn path (endSide from the coil-build model), replacing the pre-v58 0.3×Lslot shortcut
+    // — that shortcut collapses whenever end turns are comparable to or longer than the stack (short-stack, high-pole machines).
+    const lEnd = (2 * (endSide > 0 ? endSide : 1.35 * coilArc + 10)) / 1000; // total end-turn path, both ends, m
+    const lamEnd = 0.47; // end-turn permeance coefficient (bench/FEMM-calibratable)
+    const Lend = ((4 * 3) / Ns) * MU0 * lEnd * lamEnd * Nser * Nser;
+    // v58: differential (airgap space-harmonic) leakage — first-order fractional-slot estimate, rises as slots/pole/phase → 0;
+    // ~0 with the rotor removed (bare-stator LCR). FEMM-calibratable; see audit B-series.
+    const qSpp = Ns / (3 * Math.max(poles, 1));
+    const sigmaD = Math.min(6, Math.pow(Math.max(1 / Math.max(qSpp, 1e-3) - 1, 0), 1.6));
+    const Ldiff = sigmaD * Lmag, LdiffNR = sigmaD * LmagNR;
+    const Lph = cKL * (Lmag + Ldiff + Lslot + Lend); // rotor installed
+    const LphNR = cKL * (LmagNR + LdiffNR + Lslot + Lend); // rotor removed (bare-stator LCR reading): leakage-dominated
     const Lll = p.conn === "wye" ? 2 * Lph : (2 / 3) * Lph;
     const LllNR = p.conn === "wye" ? 2 * LphNR : (2 / 3) * LphNR;
     // armature-loaded saturation knockdown at the drive current limit
@@ -23374,7 +23394,7 @@ function MotorDesigner() {
     const [p, setP] = useState({
         slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
         yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0,
-        pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy",
+        pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy", turnBasis: "coil",
         conn: "wye", vref: "ll", motorType: "pm", ctrl: "foc", sense: "hall",
         mag: "N45SH", magT: 4, poleArc: 85, Top: 60,
         endMode: "auto", headH: 15, bobShape: "race", bobD: 30, bobWall: 1, bobWin: 16,
@@ -24044,7 +24064,8 @@ function MotorDesigner() {
                             latmM || stpM || brkM ? null : brM ? (React.createElement(Num, { label: "Coil throw (0 = full pitch)", unit: "slots", v: p.span, set: s("span"), min: 0 })) : p.pattern === "lap" && (React.createElement(React.Fragment, null,
                                 React.createElement(Pick, { label: "Layers", v: p.layers, set: s("layers"), opts: [{ v: 1, t: "1" }, { v: 2, t: "2" }] }),
                                 React.createElement(Num, { label: "Coil span (0 = full)", unit: "slots", v: p.span, set: s("span"), min: 0 }))),
-                            !latmM && React.createElement(Num, { label: stpM ? "Turns per pole (per strand)" : brkM ? "Coil turns (total)" : "Turns per coil", v: p.turns, set: s("turns"), min: 1 }),
+                            !latmM && React.createElement(Num, { label: stpM ? "Turns per pole (per strand)" : brkM ? "Coil turns (total)" : brM && p.turnBasis === "slot" ? "Conductors per slot" : "Turns per coil", v: p.turns, set: s("turns"), min: 1 }),
+                            brM && React.createElement(Pick, { label: "Turns basis", v: p.turnBasis || "coil", set: s("turnBasis"), opts: [{ v: "coil", t: "Per coil" }, { v: "slot", t: "Cond./slot" }] }),
                             React.createElement(Num, { label: "Magnet wire", unit: "AWG", v: p.awg, set: s("awg"), min: 8, max: 40, step: 0.5 }),
                             React.createElement(Sel, { label: "Insulation build", v: p.insBuild, set: s("insBuild"), opts: Object.keys(INS_BUILD) }),
                             React.createElement(Num, { label: "Strands in hand", v: p.strands, set: s("strands"), min: 1 }),
@@ -24945,6 +24966,7 @@ function MotorDesigner() {
                                 " Duty below 100% uses a two-node transient (winding rides the pulse factor over an averaging housing \u2014 valid while the cycle is short against the machine \u03C4). Altitude derating applies to the convection term. First-order: validate against a thermocouple before trusting margins.")),
                         React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                             React.createElement("h2", null, "Bench calibration"),
+                            React.createElement("div", { className: "hint", style: { margin: "-2px 0 6px", fontSize: 11, opacity: 0.7 } }, "Enter R in m\u03A9 and L in \u00B5H \u2014 a nameplate \"M.H.\" is microhenries (\u00B5H), not milli (0.193 mH = 193 \u00B5H). Wrong-unit entries drive the cal factors far from 1."),
                             React.createElement(Num, { label: brM ? "Measured R terminal" : "Measured R line-line", unit: "m\u03A9", v: p.mR, set: s("mR"), step: 10, min: 0 }),
                             React.createElement(Num, { label: brM ? "Measured L terminal" : "Measured L line-line", unit: "\u00B5H", v: p.mL, set: s("mL"), step: 10, min: 0 }),
                             (pm && !brM) && (React.createElement(React.Fragment, null,
