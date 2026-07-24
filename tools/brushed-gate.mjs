@@ -15,10 +15,13 @@ const fn = new Function('React', app + '\nreturn { computeDesign, BrushedSection
 const M = fn(React);
 
 // 540-class brushed: 24 mm armature in a 28 mm can, 2-pole ferrite-ish ring -> use N35 for test
+// v58.1: turns:25 is the shop spec = CONDUCTORS PER SLOT, so turnBasis:"slot". Read as turns-per-coil
+// it doubled Z and halved no-load to 2677 rpm — implausible for a 540 and the cause of this gate's
+// long-standing failure. Slot basis gives 5354 rpm.
 const p = {
   slots: 5, poles: 2, statorOD: 35, statorID: 25, rotorOD: 24, yoke: 4.5, toothW: 4.0,
   slotOpen: 2.0, tipH: 0.8, stackL: 30, liner: 0.2, slotR: 0.3, shaftD: 5,
-  pattern: "lap", layers: 2, span: 2, turns: 25, awg: 26, strands: 1, paths: 1, insBuild: "Heavy",
+  pattern: "lap", layers: 2, span: 2, turns: 25, turnBasis: "slot", awg: 26, strands: 1, paths: 1, insBuild: "Heavy",
   conn: "wye", vref: "ll", motorType: "brushed", ctrl: "foc", sense: "hall",
   mag: "N35", magT: 2.5, poleArc: 85, Top: 60,
   endMode: "auto", headH: 15, bobShape: "race", bobD: 30, bobWall: 1, bobWin: 16,

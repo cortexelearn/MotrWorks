@@ -25,11 +25,17 @@ const near = (got, want, tol, what) => {
 };
 
 const GOLD = [
-  { preset: 'NEMA 17 · 28 V · ~6 krpm',                 checks: { Kt: 0.048729, noLoad: 6720.3, Rll: 0.38536, peakT: 0.29237 } },
+  // v58.1 re-anchor — NEMA 17 is 12s14p: the star-of-slots tie-break fix moved kw 0.8935 -> 0.9330
+  // (the published value for 12s10p/12s14p double-layer concentrated), so Kt/peakT rise 4.4% and
+  // noLoad falls 4.2%. The new numbers are the correct ones.
+  // v58 re-anchor — ACIM peakT: the end-winding leakage fix raised stator leakage X1, dropping
+  // breakdown torque 4.7985 -> 4.2091 (-12.3%). ANALYTICAL ONLY, no ACIM bench data yet; replace
+  // with a measured breakdown value when a cage is characterised.
+  { preset: 'NEMA 17 · 28 V · ~6 krpm',                 checks: { Kt: 0.050883, noLoad: 6435.9, Rll: 0.38536, peakT: 0.30530 } },
   { preset: 'NEMA 23 · 28 V · ~3 krpm torquer',         checks: { Kt: 0.09901, noLoad: 3307.5, Rll: 0.23494 } },
   { preset: '4" direct-drive · 270 V · ~2.5 krpm',      checks: { Kt: 1.1303, noLoad: 2793.8, Rll: 2.1243 } },
   { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.014681, noLoad: 7025.1, Rll: 1.0409 } },
-  { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 4.7985 } },
+  { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 4.2091 } },
   { preset: 'NEMA 17 · 1.8° hybrid · bipolar',          checks: { Kt: 0.22844, Rll: 3.075, peakT: 0.48458 } },
   { preset: 'Brake 24 V · 60 mm · spring-applied',      checks: { Rll: 142.92, peakT: 3.6 } },
   { preset: 'LATM 1.5" · 28 V · SmCo 4-pole · 45° toggle', checks: { Kt: 0.054424, Rll: 118.35, peakT: 0.035021 } },

@@ -113,5 +113,6 @@
   "oshPinD": 0,
   "stpHubD": 0,
   "stpThruD": 0,
-  "turnBasis": "coil"
+  "turnBasis": "coil",
+  "brkFeScale": 100
 }

@@ -895,7 +895,7 @@ export default function MotorDesigner() {
     wbArborD: 8, wbChanW: 6, wbChanH: 5, wbFlange: 1.2, wbCoils: 6, wbJump: 25, wbSides: 2, wbMode: "fwd", wbRt: 0, wbRtip: 0.8, wbLay: "wild", wbHead: 0,
     brushV: 1.5, latmWind: 2,
     brkSprFree: 23.3, brkSprEng: 18.3, brkMu: 0.40, brkMuD: 0.32, brkFaces: 2, brkStroke: 0.3,
-    brkBore: 26, brkPole: 6, brkArm: 6, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
+    brkBore: 26, brkPole: 6, brkArm: 6, brkFeScale: 100, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
     brkPktID: 48, brkBossOD: 38, brkPktD: 18, brkBobID: 40.2, brkBobOD: 47, brkBobL: 15,
     stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, stpHubD: 0, stpThruD: 0, latmSect: 4, latmSpan: 60, latmTravel: 45,
     rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
@@ -1611,6 +1611,15 @@ export default function MotorDesigner() {
                 <Num label="Bobbin length (winding)" unit="mm" v={p.brkBobL} set={s("brkBobL")} step={0.5} />
                 <Num label="Armature thickness" unit="mm" v={p.brkArm} set={s("brkArm")} step={0.5} />
                 <Num label="Armature stroke (air gap)" unit="mm" v={p.brkStroke} set={s("brkStroke")} step={0.05} />
+                <Num label="Back-iron magnetic derate" unit="%" v={p.brkFeScale ?? 100} set={s("brkFeScale")} min={0} max={100} step={5} />
+                {r.brake && Number.isFinite(r.brake.murBody) && (
+                  <div className="kv"><span>Back-iron µr effective / nominal</span>
+                    <b>{r.brake.murBody.toFixed(0)} / {r.brake.murNom.toFixed(0)}{r.brake.feS < 99.9 ? ` · ${r.brake.feS.toFixed(0)}%` : " · full"}</b></div>
+                )}
+                <div className="hint" style={{ margin: "-2px 0 6px", fontSize: 11, opacity: 0.7 }}>
+                  100% = full catalog steel; 0% = non-magnetic (µr 1). Models permeability lost to machining/cold work,
+                  weld or plating heat, or wrong stock. Saturation B is composition-driven and is not scaled.
+                </div>
                 <Num label="Spring free height" unit="mm" v={p.brkSprFree} set={s("brkSprFree")} step={0.5} />
                 <Num label="Spring height, brake engaged" unit="mm" v={p.brkSprEng} set={s("brkSprEng")} step={0.5} />
                 {r.brake && <div className="kv"><span>Clamp force engaged / pulled-in · cavity</span>

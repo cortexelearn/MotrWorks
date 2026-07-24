@@ -50,3 +50,87 @@ All ten gates pass; SSR healthy at 164,043 chars (was 163,678). golden-gate anch
 ## Still deferred (bench/FEMM-dependent)
 B6 stepper mid-band resonance · B7 LATM end-of-travel fringing · B8 brushed armature reaction.
 New calibratable coefficients pending a FEMM solve: λ_end (end-winding permeance), σd (differential).
+
+---
+
+# v58.1 — star-of-slots fix + preset expansion (2026-07-23)
+
+## Winding-factor bug (found while vetting preset candidates)
+Slot→phase allocation used a greedy `Math.abs(c) > best` scan over the three phase axes. When a slot
+lands exactly between two axes (θ = 30° + k·60°, which happens for **every 12-slot machine** and for
+24s4p), the tie resolved on floating-point noise, producing **unbalanced phase allocations**:
+
+| combo | before | after | published kw |
+|---|---|---|---|
+| 12s10p | 3/5/4 slots, kw 0.9367 | 4/4/4, kw 0.9330 | 0.933 |
+| 12s14p | 5/5/2 slots, kw 0.8935 | 4/4/4, kw 0.9330 | 0.933 |
+
+Replaced with deterministic 60°-sector assignment (sectors CCW from −30°: A+, C−, B+, A−, C+, B−)
+plus a 1e-9 rad epsilon so boundary slots land CCW rather than on FP noise. 12s10p now yields the
+canonical `A+ A− B− B+ C+ C− A− A+ B+ B− C− C+`. Combos without exact ties (9s8p, 15s16p, 18s16p)
+are bit-identical to before. This also corrects the rendered winding diagrams, which share topLayer.
+
+Impact: the `NEMA 17 · 28 V` preset is 12s14p and was running **4.4% light on Kt**.
+
+## Golden-gate re-anchors
+- **NEMA 17**: Kt 0.048729→0.050883, noLoad 6720.3→6435.9, peakT 0.29237→0.30530 (kw fix; new values correct).
+- **ACIM peakT**: 4.7985→4.2091 (v58 end-winding leakage raised X1). **ANALYTICAL ONLY** — no ACIM
+  bench data; replace with a measured breakdown value when a cage is characterised. Band kept at ±1%
+  deliberately: it is a drift detector, and intentional model changes *should* trip it per this file's protocol.
+
+## Presets: 25 → 33
+PM 8→13, brushed 4→7. All validated error-free.
+
+| preset | why |
+|---|---|
+| 2" · 18s16p · 28 V | kw 0.945, GCD=2 → no UMP, cogging LCM 144. Best general-purpose FSCW. |
+| 1.6" · 9s8p · 28 V | most-published compact FSCW; GCD=1 → UMP, watch bearings |
+| 1.6" · 15s16p · Hiperco | **bench-validated hardware** (R 0.480 Ω, L 193 µH rotor-out) |
+| 3" · 24s22p · 270 V | large-frame, cogging LCM 264, no UMP |
+| NEMA 23 · 24s4p · chorded 5/6 | first preset demonstrating short-pitch harmonic cancellation |
+| Brushed 24 V · 12s2p | **bench-validated armature**, turnBasis = slot |
+| Brushed 24 V · 9s2p | odd-slot smooth commutation (all prior brushed presets were 5-slot) |
+| Brushed 48 V · 13s4p wave | first preset exercising wave winding (A2 = 2 regardless of poles) |
+
+## Known pre-existing gate failures (present in the uploaded v57, NOT introduced here)
+- **brushed-gate**: no-load 2677 vs expected 3000–40000. Root cause is the same conductors-vs-turns
+  ambiguity v58 fixed: the test design's `turns: 25` reads as conductors/slot. Setting
+  `turnBasis: 'slot'` yields 5354 rpm and passes. Left unchanged pending a decision.
+- **brk-gate**: asserts a warning containing "slip over" for `brkBobID: 34`, but that string does not
+  exist anywhere in the engine — the check was never implemented or was reworded. Left unchanged.
+
+---
+
+# v58.2 — gate repairs + brake back-iron derate (2026-07-23)
+
+## Both long-standing gate failures fixed (they pre-dated v57)
+- **brushed-gate**: the 540-class test design's `turns: 25` is a shop spec in *conductors per slot*;
+  read as turns-per-coil it doubled Z and gave 2677 rpm no-load (implausible for a 540). Added
+  `turnBasis: "slot"` → 5354 rpm, Kt 0.0189, Ra 0.387. Same root cause as the v58 bench discrepancy.
+- **brk-gate**: asserted a warning containing `"slip over"` for `brkBobID: 34`. The check *does* exist
+  (engine: "Winding-start Ø … won't clear the … boss") — it was reworded and the gate was never
+  updated, so the case had been failing on a stale needle. Needle changed to `"boss"`.
+
+**All ten gates now pass.**
+
+## Brake: back-iron magnetic derate (`brkFeScale`, %)
+New brake input, 0–100%, default 100. Interpolates the pot-core backiron between full catalog steel
+and air: `mur_eff = 1 + (mur_nominal − 1)·s`. Models permeability lost to machining/cold work, weld or
+plating heat, or simply wrong stock (a 303 body where 416 was intended). Enters the magnetic circuit
+through the iron-path equivalent gap `gFe = lFeB/mur_eff + lFeA/mur_arm`, so it directly loads pull
+force and release margin. Saturation B is composition-driven and is **not** scaled — at low derate the
+reluctance rise dominates, so the model stays self-consistent without it.
+
+Verified sweep on the 24 V · 60 mm preset:
+
+| derate | µr eff | F_pull (N) | release margin |
+|---|---|---|---|
+| 100% | 700 | 387 | 1.83 |
+| 60% | 420 | 330 | 1.56 |
+| 40% | 281 | 276 | 1.30 |
+| 20% | 141 | 174 | **0.82 — fails to release** |
+| 0% | 1 | 0 | 0.00 |
+
+Release margin crosses 1.0 between 40% and 20%, which is the useful design read: this brake tolerates
+roughly a 2.5× permeability loss before it stops releasing. A warning fires whenever the derate is
+below 100%, quoting effective vs nominal µr, and the effective/nominal µr is shown live in the panel.

@@ -59,7 +59,9 @@ const wcase = [
   ['overfull bobbin', { turns: 3000 }, "won't fit"],
   ['coil-pocket interference', { turns: 1200 }, 'interferes', true],
   ['tight clearance', { turns: 745 }, 'radial clearance'],
-  ['bobbin-boss fit', { brkBobID: 34 }, "slip over"],
+  // v58.1: engine wording is "won't clear the <n> mm boss" — the gate's old "slip over" needle
+  // never matched any string in the engine, so this case had been failing since the rewording.
+  ['bobbin-boss fit', { brkBobID: 34 }, "boss"],
   ['bobbin vs pocket depth', { brkBobL: 17 }, "seat in"],
   ['back web saturation', { brkPktD: 24 }, 'Back web', false],
   ['bad lining dims', { brkRi: 30 }, 'ID must be smaller', true],

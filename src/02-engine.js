@@ -466,14 +466,16 @@ function computeDesign(p) {
     p.pattern === "concentrated" ? 1 : Math.max(1, Math.round(p.span > 0 ? p.span : Ns / poles));
   const axes = [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3]; // A, B, C
   const topLayer = [];
+  // Star of slots: assign each slot to the nearest phase axis (or anti-axis) by 60° sector.
+  // Equivalent to max|cos(θ−axis)| but with a deterministic boundary rule — the pre-v58.1 greedy
+  // comparison resolved exact ties (θ = 30°+k·60°, e.g. every 12-slot machine) on float noise,
+  // producing unbalanced allocations like 12s10p → 3/5/4 and 12s14p → 5/5/2 instead of 4/4/4.
+  // Sectors CCW from −30°: A+, C−, B+, A−, C+, B−.
+  const SECT = [[0, 1], [2, -1], [1, 1], [0, -1], [2, 1], [1, -1]];
   for (let i = 0; i < Ns; i++) {
-    const th = i * gamma;
-    let best = 0, bp = 0, bs = 1;
-    for (let ph = 0; ph < 3; ph++) {
-      const c = Math.cos(th - axes[ph]);
-      if (Math.abs(c) > best) { best = Math.abs(c); bp = ph; bs = c >= 0 ? 1 : -1; }
-    }
-    topLayer.push({ phase: bp, sign: bs });
+    const th = ((i * gamma) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    const s6 = Math.floor((th + Math.PI / 6 + 1e-9) / (Math.PI / 3)) % 6; // +1e-9 rad: ties land CCW, not on FP noise
+    topLayer.push({ phase: SECT[s6][0], sign: SECT[s6][1] });
   }
   const botLayer = topLayer.map((_, i) => {
     const src = topLayer[(i - span + Ns * 10) % Ns];
@@ -829,13 +831,19 @@ function computeDesign(p) {
     const mu0b = 4e-7 * Math.PI;
     const bodyM = STEELS[p.statorMat] || { Bmax: 1.6, mur: 700 };   // backiron (pot core)
     const armM = STEELS[p.rotorMat] || bodyM;                        // sliding armature plate
+    // Back-iron magnetic derate: real pot cores lose permeability to machining/cold work, weld heat,
+    // plating bake, or plain wrong stock (a 303 body instead of 416). Scale interpolates the backiron
+    // between full catalog steel (100%) and air/austenitic (0%): mur_eff = 1 + (mur − 1)·s.
+    // Bsat is composition-driven and is NOT scaled — at low s the reluctance rise dominates anyway.
+    const feS = Math.min(Math.max(Number.isFinite(p.brkFeScale) ? p.brkFeScale : 100, 0), 100) / 100;
+    const murBody = 1 + ((bodyM.mur || 700) - 1) * feS;
     const Bsat = Math.min(bodyM.Bmax || 1.6, 2.1);
     const BsatA = Math.min(armM.Bmax || 1.6, 2.1);
     // iron path as equivalent extra gap, split by material: boss + web + rim in the backiron,
     // the radial run across the armature in its own steel
     const lFeB = (2 * pktD + (rOD - rThru) / 2) / 1000;
     const lFeA = ((rOD - rThru) / 2 + p.brkArm) / 1000;
-    const gFe = lFeB / Math.max(bodyM.mur || 700, 100) + lFeA / Math.max(armM.mur || 700, 100);
+    const gFe = lFeB / Math.max(murBody, 1) + lFeA / Math.max(armM.mur || 700, 100);
     const AarmMin = 2 * Math.PI * (rBoss / 1000) * (Math.max(p.brkArm, 0.5) / 1000); // tightest armature ring section
     const pullAt = (g) => {
       const Rtot = (g / (mu0b * Ain)) + (g / (mu0b * Aout)) + (gFe / (mu0b * Amin));
@@ -902,7 +910,7 @@ function computeDesign(p) {
       Bin: atGap.Bin, Bout: atGap.Bout, Barm: atSeat.Barm, Bback, NI, Rb, Ib, Pb, Ihold, Phold, eco, TcuB, RthB, Lb, tau: Lb / Math.max(Rb, 1e-6),
       Fclamp, Fcompr, sprL0, sprL1, sprCav,
       Vrel: Math.min(Vrel, 10 * p.Vdc), capT: capB, Ain: Ain * 1e6, Aout: Aout * 1e6,
-      hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, wireLen };
+      hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, wireLen, feS: feS * 100, murBody, murNom: bodyM.mur || 700 };
     op = { n: 0, T: Thold }; peakT = Thold; noLoad = 0;
     if (p.brkRi >= p.brkRo) err.push("Friction lining ID must be smaller than its OD.");
     if (2 * p.brkRo > p.statorOD - 1) w.push(`Lining \u00d8${(2 * p.brkRo).toFixed(1)} mm reaches or exceeds the \u00d8${p.statorOD} mm backiron — the disc normally sits inside the housing envelope.`);
@@ -912,6 +920,7 @@ function computeDesign(p) {
     if (tBack <= 0.5) err.push(`Pocket depth ${pktD} mm leaves ${tBack.toFixed(1)} mm of back web — the pocket breaks through the backiron.`);
     if (clr <= 0) err.push(`Wound coil Ø${coilOD.toFixed(1)} mm interferes with the pocket ID Ø${p.brkPktID} mm — fewer turns, finer wire, longer bobbin, or a bigger pocket.`);
     else if (clr < 0.5) w.push(`Wound coil Ø${coilOD.toFixed(1)} mm leaves only ${clr.toFixed(2)} mm radial clearance to the pocket ID — under the 0.5 mm assembly minimum.`);
+    if (feS < 0.999) w.push(`Back-iron magnetic derate at ${(feS * 100).toFixed(0)}% — effective \u00b5r ${murBody.toFixed(0)} vs ${(bodyM.mur || 700).toFixed(0)} nominal for ${p.statorMat}. Pull force and release margin below model this as extra reluctance; verify against a magnetised sample before release.`);
     if (p.brkBobID < p.brkBossOD + 0.2) w.push(`Winding-start \u00d8 ${p.brkBobID} mm won't clear the ${p.brkBossOD} mm boss — the barrel needs ≥ 0.2 mm over it.`);
     if (p.brkBobOD < p.brkBobID + 1) w.push("Winding window under 0.5 mm radial between the start and max-finish \u00d8 — no room for wire.");
     if (Number.isFinite(coilOD) && coilOD > p.brkBobOD + 0.05) w.push(`Wound coil \u00d8${coilOD.toFixed(1)} overruns the ${p.brkBobOD} mm bobbin flange — fewer turns, finer wire, or a taller flange.`);

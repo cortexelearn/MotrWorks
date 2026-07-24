@@ -278,6 +278,80 @@ const PRESETS = {
     Vdc: 270, Imax: 8, freq: 200, J: 5, seq: "ABC", endMode: "auto",
     statorMat: "Hiperco 50", rotorMat: "1018 steel (solid)",
   },
+  // kw 0.945, GCD=2 so no unbalanced magnetic pull; cogging LCM 144 (2x a 9s8p). Best general-purpose FSCW.
+  '2" · 18s16p · 28 V · low-cogging FSCW': {
+    slots: 18, poles: 16, statorOD: 50.8, statorID: 30, rotorOD: 29, yoke: 3.6,
+    toothW: 2.6, slotOpen: 1.5, tipH: 0.8, stackL: 25, liner: 0.2, shaftD: 6,
+    pattern: "concentrated", layers: 2, span: 0, turns: 11, awg: 22, strands: 1,
+    paths: 1, conn: "wye", motorType: "pm", ctrl: "foc", mag: "N45SH", magT: 2,
+    poleArc: 82, Top: 60, Vdc: 28, Imax: 8, freq: 600, J: 7,
+    seq: "ABC", endMode: "auto", statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+  },
+  // The most-published compact FSCW (q=0.375, kw 0.945). GCD=1 -> unbalanced magnetic pull; watch bearing life.
+  '1.6" · 9s8p · 28 V · high-kw compact': {
+    slots: 9, poles: 8, statorOD: 40, statorID: 23, rotorOD: 22, yoke: 3.2,
+    toothW: 3.4, slotOpen: 1.5, tipH: 0.7, stackL: 20, liner: 0.2, shaftD: 5,
+    pattern: "concentrated", layers: 2, span: 0, turns: 12, awg: 23, strands: 1,
+    paths: 1, conn: "wye", motorType: "pm", ctrl: "foc", mag: "N45SH", magT: 2,
+    poleArc: 82, Top: 60, Vdc: 28, Imax: 7, freq: 600, J: 7,
+    seq: "ABC", endMode: "auto", statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+  },
+  // Bench-validated hardware: R L-L 0.480 ohm, L L-L 193 uH measured rotor-out. kw 0.951, cogging LCM 240.
+  '1.6" · 15s16p · 28 V · Hiperco (bench-validated)': {
+    slots: 15, poles: 16, statorOD: 40.7416, statorID: 23.3426, rotorOD: 22.4028, yoke: 3.8608,
+    toothW: 1.651, slotOpen: 1.6, tipH: 0.5334, stackL: 7.112, liner: 0.2032, slotR: 2.159,
+    shaftD: 8.0518, pattern: "concentrated", layers: 2, span: 0, turns: 14, awg: 27,
+    strands: 2, paths: 1, conn: "wye", motorType: "pm", ctrl: "six", sense: "hall",
+    mag: "N45SH", magT: 1.7272, poleArc: 72, Top: 60, Vdc: 20, Imax: 8,
+    freq: 400, J: 7, seq: "ACB", endMode: "head", headH: 5.08, statorMat: "Hiperco 50",
+    rotorMat: "416 SS (solid)", Tcu: 100,
+  },
+  // Large-frame FSCW: cogging LCM 264 and no UMP (GCD=2). Good for direct-drive gimbal/actuator.
+  '3" · 24s22p · 270 V · low-ripple direct drive': {
+    slots: 24, poles: 22, statorOD: 76.2, statorID: 48, rotorOD: 47, yoke: 4.5,
+    toothW: 3.4, slotOpen: 1.8, tipH: 0.9, stackL: 35, liner: 0.25, shaftD: 10,
+    pattern: "concentrated", layers: 2, span: 0, turns: 22, awg: 23, strands: 1,
+    paths: 1, conn: "wye", motorType: "pm", ctrl: "foc", mag: "N45SH", magT: 2.5,
+    poleArc: 82, Top: 60, Vdc: 270, Imax: 6, freq: 600, J: 6,
+    seq: "ABC", endMode: "auto", statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+  },
+  // Distributed lap, short-pitched 5 of 6 slots — the classic chording that cancels 5th/7th EMF harmonics.
+  'NEMA 23 · 24s4p · 28 V · chorded 5/6': {
+    slots: 24, poles: 4, statorOD: 57, statorID: 32, rotorOD: 31, yoke: 4.5,
+    toothW: 2.4, slotOpen: 1.6, tipH: 0.8, stackL: 45, liner: 0.25, shaftD: 8,
+    pattern: "lap", layers: 2, span: 5, turns: 7, awg: 21, strands: 1,
+    paths: 1, conn: "wye", motorType: "pm", ctrl: "foc", mag: "N45SH", magT: 2.5,
+    poleArc: 85, Top: 60, Vdc: 28, Imax: 10, freq: 300, J: 6.5,
+    seq: "ABC", endMode: "auto", statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+  },
+  // Bench-validated armature. Turns basis = conductors/slot (shop drawing convention).
+  'Brushed 24 V · 12s2p · SmCo (bench-validated)': {
+    slots: 12, poles: 2, statorOD: 32.004, statorID: 21.1328, rotorOD: 20.7518, yoke: 3.16484,
+    toothW: 1.8542, slotOpen: 0.762, tipH: 0.762, stackL: 31.0134, liner: 0.1778, slotR: 0.4318,
+    shaftD: 3.556, pattern: "lap", layers: 2, span: 6, turns: 21, turnBasis: "slot",
+    awg: 28.5, strands: 1, paths: 1, conn: "wye", motorType: "brushed", mag: "N45SH",
+    magT: 1.2954, poleArc: 64.45, Top: 60, Vdc: 24, Imax: 12, freq: 100,
+    J: 6, seq: "ABC", endMode: "auto", headH: 15, brushV: 0.5, statorMat: "M15 (29 ga)",
+    rotorMat: "1018 steel (solid)", Tcu: 25,
+  },
+  // Odd-slot 9-segment armature: lower cogging and smoother commutation than the 5-slot economy builds.
+  'Brushed 24 V · 9s2p · smooth commutation': {
+    slots: 9, poles: 2, statorOD: 45, statorID: 28, rotorOD: 27, yoke: 3.4,
+    toothW: 3.6, slotOpen: 1.2, tipH: 0.8, stackL: 32, liner: 0.2, shaftD: 5,
+    pattern: "lap", layers: 2, span: 4, turns: 30, turnBasis: "slot", awg: 25,
+    strands: 1, paths: 1, conn: "wye", motorType: "brushed", mag: "N45SH", magT: 2,
+    poleArc: 80, Top: 60, Vdc: 24, Imax: 8, freq: 100, J: 6,
+    seq: "ABC", endMode: "auto", brushV: 1.0, statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+  },
+  // Wave winding: A2 = 2 paths regardless of pole count -> higher voltage, lower current than lap.
+  'Brushed 48 V · 13s4p wave · high-voltage': {
+    slots: 13, poles: 4, statorOD: 63.5, statorID: 40, rotorOD: 39, yoke: 5.0,
+    toothW: 3.0, slotOpen: 1.4, tipH: 0.9, stackL: 40, liner: 0.25, shaftD: 8,
+    pattern: "wave", layers: 2, span: 0, turns: 26, turnBasis: "slot", awg: 24,
+    strands: 1, paths: 1, conn: "wye", motorType: "brushed", mag: "N45SH", magT: 2.5,
+    poleArc: 80, Top: 60, Vdc: 48, Imax: 8, freq: 100, J: 6,
+    seq: "ABC", endMode: "auto", brushV: 1.5, statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+  },
 };
 
 const awgBareDia = (awg) => 0.127 * Math.pow(92, (36 - awg) / 39); // mm
