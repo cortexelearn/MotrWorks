@@ -625,7 +625,7 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
 }
 
 /* ---- Actuator module: composes the motor & brake designs open in their tabs through a gearhead ---- */
-function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
+function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, exportActuator, importActuator, ioMsg, impPanel }) {
   const motorT = p.actMotor === "brushed" ? "brushed" : p.actMotor === "stepper" ? "stepper" : "pm";
   const motorP = typeMem.current[motorT]
     ? { ...typeMem.current[motorT], motorType: motorT }
@@ -655,6 +655,16 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
           <Pick label="Machine type" v={p.motorType} set={switchType}
             opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }, { v: "bobbin", t: "Winding" }]} />
           <div className="note">Composite actuator: the motor and brake designs open in their tabs, driven through a multi-stage gearhead, presented at the output shaft.</div>
+          <div className="iobar" style={{ marginTop: 8 }}>
+            <button className="btn" onClick={exportActuator}>Export actuator .json</button>
+            <label className="btn ghost">
+              Import…
+              <input type="file" accept=".json,application/json" onChange={importActuator} />
+            </label>
+          </div>
+          <div className="note" style={{ marginTop: 2 }}>Module-scoped file: gearing, composition, output shaft, mounting, finishes. Motor and brake designs travel in their own tabs' .json files.</div>
+          {ioMsg && <div className="iomsg">{ioMsg}</div>}
+          {impPanel}
         </div>
         <div className="card" style={{ marginTop: 14 }}>
           <h2>Composition</h2>
@@ -676,6 +686,15 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
             ["gbType", "gbRatio", "gbStages", "gbOD", "nPlanets"].forEach((k9) => s(k9)(g9[k9]));
           }} opts={["(pick)", ...Object.keys(GEAR_PRESETS)]} />
           <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11", "Q13"]} />
+          <Sel label="Gear material / hardness" v={GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF} set={s("gbMat")} opts={Object.keys(GEAR_MATS)} />
+          {(() => { const g8 = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF]; return (
+            <>
+              <div className="kv"><span>Tooth bending allowable</span><b>{g8.sig} MPa</b></div>
+              <div className="hint" style={{ margin: "-2px 0 6px", fontSize: 11, opacity: 0.7 }}>
+                {g8.note}. Sets the Lewis tooth-yield torque cap for spur/planetary stages; harmonic capacity is ratcheting-limited and unaffected.
+              </div>
+            </>
+          ); })()}
           <Pick label="Pressure angle" v={p.presAng} set={s("presAng")} opts={[{ v: 20, t: "20°" }, { v: 25, t: "25°" }]} />
           {p.gbType === "Planetary" && <Num label="Planets per stage" v={p.nPlanets} set={s("nPlanets")} min={2} max={6} />}
           <Pick label="Output bearing" v={p.gbBrg} set={s("gbBrg")}
@@ -783,7 +802,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
               {gt.w.map((w9, i9) => <div className="warn" key={i9}>{w9}</div>)}
             </div>
             <div className="note">
-              Synthesized from gearhead Ø, {gt.agmaQ}, {gt.presAng}° pressure angle{gt.nP && gt.stages[0] && gt.stages[0].Zr ? `, ${gt.nP} planets (ring–sun assembly constraint enforced)` : ""}.
+              Synthesized from gearhead Ø, {gt.agmaQ}, {gt.presAng}° pressure angle, {gt.gbMat} ({gt.sigAllow} MPa allowable){gt.nP && gt.stages[0] && gt.stages[0].Zr ? `, ${gt.nP} planets (ring–sun assembly constraint enforced)` : ""}.
               Backlash: per-mesh allowance reflected through downstream ratios — the output stage dominates.
               Efficiency: mesh sliding (tooth-count dependent) + seal/churning drag; back-drive reverses the
               torque-proportional losses (η_b ≈ 2 − 1/η_f per stage). Tooth cap is Lewis bending at 380 MPa
@@ -888,7 +907,7 @@ export default function MotorDesigner() {
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
     calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
-    agmaQ: "Q9", presAng: 20, nPlanets: 3, gbBrg: "radial",
+    agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
     mntStyle: "face", mntThread: "4-40", mntN: 4, mntBCD: 0, mntFlgOD: 0, mntFlgT: 3, mntDir: "fwd", mntGap: 5, mntPilotOD: 0, mntPilotT: 0,
     finGb: "Matte steel", finMot: "Aluminum", finBrk: "Black anodized",
@@ -1054,6 +1073,46 @@ export default function MotorDesigner() {
     setIoMsg("Design exported.");
   };
   const finMigrate = (v9) => (v9 === "Iridescent alum" ? "Iridite (chem film)" : v9);
+  // Actuator-scoped IO: the composite module owns only gearing/composition/output-shaft/mounting/finish
+  // fields. The motor & brake tabs keep their own full-design import/export; importing a full design
+  // file HERE applies only these fields, so a saved motor never gets dragged in through the actuator tab.
+  const ACT_KEYS = ["actMotor", "actBrake", "gbType", "gbRatio", "gbStages", "gbEff", "gbOD", "gbLen", "gbBrg",
+    "agmaQ", "gbMat", "presAng", "nPlanets", "oshType", "oshOD", "oshLen", "oshFeat", "oshPinD",
+    "mntStyle", "mntThread", "mntN", "mntBCD", "mntFlgOD", "mntFlgT", "mntDir", "mntGap", "mntPilotOD", "mntPilotT",
+    "finGb", "finMot", "finBrk"];
+  const exportActuator = () => {
+    const sub = {}; ACT_KEYS.forEach((k) => { if (k in p) sub[k] = p[k]; });
+    const payload = { tool: "motrworks", scope: "actuator", version: 10, saved: new Date().toISOString(), units: us, actuator: sub };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement("a");
+    el.href = url;
+    el.download = `actuator-${String(p.gbType || "gb").toLowerCase()}-${p.gbRatio}to1.json`;
+    el.click();
+    URL.revokeObjectURL(url);
+    setIoMsg("Actuator module exported — gearing, composition, output shaft, mounting, finishes.");
+  };
+  const importActuator = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const j = JSON.parse(rd.result);
+        const raw = j && j.actuator ? j.actuator : j && j.design ? j.design : j; // scoped file, full design, or bare
+        const src = {}; ACT_KEYS.forEach((k) => { if (raw && k in raw) src[k] = raw[k]; });
+        const diffs = Object.keys(p).filter((k) => k in src && typeof src[k] === typeof p[k] && src[k] !== p[k])
+          .map((k) => ({ k, from: p[k], to: src[k] }));
+        if (!diffs.length) { setIoMsg(`${f.name}: no actuator-module fields differ from the current design.`); return; }
+        setIoMsg("");
+        setPendImp({ name: f.name + " → actuator fields only", src, units: j && j.units, diffs });
+      } catch {
+        setIoMsg("Could not read that file — expected JSON exported from this tool.");
+      }
+    };
+    rd.readAsText(f);
+    e.target.value = "";
+  };
   const [pendImp, setPendImp] = useState(null);
   // autosave + undo: guarded so restricted browsers (blocked localStorage) degrade silently
   const LSK = "motrworks-autosave-v1", LSK_OLD = "motrsynth-autosave-v1";
@@ -1294,7 +1353,7 @@ export default function MotorDesigner() {
       )}
 
       <div className="grid">
-        {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} />
+        {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} exportActuator={exportActuator} importActuator={importActuator} ioMsg={ioMsg} impPanel={impPanel} />
           : wbM ? <BobbinView p={p} s={s} us={us} switchType={switchType} exportDesign={exportDesign} importDesign={importDesign} ioMsg={ioMsg} impPanel={impPanel} /> : <>
         {/* ============ inputs ============ */}
         <div>

@@ -57,6 +57,28 @@ const BRAKE_MATS = {
 };
 const BARS = { "Cast aluminum": 3.2e-8, "Copper": 1.72e-8 };
 
+/* Gear material / hardness condition → allowable bending stress (MPa) for the Lewis tooth-yield cap.
+   Values follow AGMA 2001-D04 sat (Grade 1 unless noted) and classic Lewis allowables for the
+   non-ferrous/plastic entries; hardness condition is part of the identity because sat is
+   hardness-driven for through-hardened steels (≈ 0.533·HB + 88 MPa, Grade 1). */
+const GEAR_MAT_DEF = "Carburized 8620/9310 (58\u201362 HRC)";
+const GEAR_MATS = {
+  "Carburized 8620/9310 (58\u201362 HRC)":      { sig: 380, note: "AGMA Gr.1 case-carburized \u2014 the default the tool has always assumed" },
+  "Carburized 9310 VAR aero Gr.2 (58\u201364 HRC)": { sig: 450, note: "vacuum-arc-remelt aero quality, certified case depth/cleanliness" },
+  "Induction-hardened 4340 (\u224850 HRC)":     { sig: 345, note: "tooth-flank hardened, tougher core" },
+  "Nitrided 4140 / Nitralloy (50 HRC case)": { sig: 330, note: "thin hard case \u2014 fine pitches; no distortion from quench" },
+  "Custom 455 SS aged H950 (\u224848 HRC)":    { sig: 330, note: "premium age-hardened martensitic SS \u2014 above 17-4's strength class with full corrosion resistance" },
+  "17-4 PH H900 (44 HRC)":                    { sig: 300, note: "corrosion-resistant precipitation-hardened SS" },
+  "Through-hardened 4140/4340 (38\u201342 HRC)": { sig: 285, note: "quench & temper, no case" },
+  "416 SS hardened (\u224840 HRC)":            { sig: 270, note: "free-machining martensitic SS" },
+  "Sintered PM steel FL-4405 HT":             { sig: 240, note: "typical MIM/PM miniature-gearhead planet stock" },
+  "303/304 SS annealed":                      { sig: 165, note: "corrosion-driven choice \u2014 soft; expect the Lewis cap to govern" },
+  "1018 / mild steel normalized":             { sig: 150, note: "unhardened prototype stock" },
+  "Bronze / brass (SAE 660)":                 { sig: 80,  note: "wormwheel & bushing-grade non-ferrous" },
+  "Aluminum 7075-T6":                         { sig: 65,  note: "light-duty only \u2014 poor fatigue in gear teeth" },
+  "Acetal (Delrin)":                          { sig: 34,  note: "quiet light-duty plastic; derate further above 60 \u00b0C" },
+};
+
 /* Curated starting points. Envelope sizes follow NEMA-frame conventions
    (17 = 1.7", 23 = 2.3", 34 = 3.4" mounting face); buses are MIL-STD-704
    style 28 VDC and 270 VDC. Each is a complete, self-consistent design that
@@ -443,7 +465,10 @@ function designGearTrain(p, act, gODin, gLenIn) {
   const jQ = AGMA_J[p.agmaQ] ?? AGMA_J["Q9"];
   const pa = (Math.max(p.presAng || 20, 14.5) * Math.PI) / 180;
   const mu = 0.06;                                                   // lubricated steel sliding
-  const sigAllow = 380;                                              // MPa, case-hardened bending fatigue
+  // v58.4: tooth-bending allowable from the selected gear material/hardness condition
+  // (was hardcoded 380 MPa case-hardened). Governs the Lewis torque cap below.
+  const gmat = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF];
+  const sigAllow = gmat.sig;
   const Y9 = 0.308;                                                  // Lewis form, ~18–30 t @20°
   const stages = [], w = [];
   let effF = 1, effB = 1, blOut = 0, TmaxOut = Infinity, limStage = 0;
@@ -589,7 +614,8 @@ function designGearTrain(p, act, gODin, gLenIn) {
   else if (uTarget < win[0] * 0.98 && st > 1) w.push(`Per-stage ratio ${uTarget.toFixed(2)}:1 is below the practical window \u2014 ${recSt} stage${recSt > 1 ? "s" : ""} would suffice for ${act.N}:1.`);
   const stOk = uTarget >= win[0] * 0.98 && uTarget <= win[1] * 1.02;
   return { type, st, nP, stages, Ntot, effF, effB, selfLock, blOut, blGear, blMech, Tbd, KvMax, TmaxOut, limStage, w, recSt, win, stOk, gLen, brgF,
-    agmaQ: p.agmaQ || "Q9", presAng: p.presAng || 20, gOD };
+    agmaQ: p.agmaQ || "Q9", presAng: p.presAng || 20, gOD,
+    gbMat: GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF, sigAllow, gbMatNote: gmat.note };
 }
 
 function composeActuator(mr, br, cfg) {
@@ -5843,7 +5869,7 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
 }
 
 /* ---- Actuator module: composes the motor & brake designs open in their tabs through a gearhead ---- */
-function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
+function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, exportActuator, importActuator, ioMsg, impPanel }) {
   const motorT = p.actMotor === "brushed" ? "brushed" : p.actMotor === "stepper" ? "stepper" : "pm";
   const motorP = typeMem.current[motorT]
     ? { ...typeMem.current[motorT], motorType: motorT }
@@ -5873,6 +5899,16 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
           <Pick label="Machine type" v={p.motorType} set={switchType}
             opts={[{ v: "pm", t: "BLDC" }, { v: "brushed", t: "Brushed" }, { v: "latm", t: "LATM" }, { v: "stepper", t: "Step" }, { v: "induction", t: "ACIM" }, { v: "brake", t: "Brake" }, { v: "actuator", t: "Actuator" }, { v: "bobbin", t: "Winding" }]} />
           <div className="note">Composite actuator: the motor and brake designs open in their tabs, driven through a multi-stage gearhead, presented at the output shaft.</div>
+          <div className="iobar" style={{ marginTop: 8 }}>
+            <button className="btn" onClick={exportActuator}>Export actuator .json</button>
+            <label className="btn ghost">
+              Import…
+              <input type="file" accept=".json,application/json" onChange={importActuator} />
+            </label>
+          </div>
+          <div className="note" style={{ marginTop: 2 }}>Module-scoped file: gearing, composition, output shaft, mounting, finishes. Motor and brake designs travel in their own tabs' .json files.</div>
+          {ioMsg && <div className="iomsg">{ioMsg}</div>}
+          {impPanel}
         </div>
         <div className="card" style={{ marginTop: 14 }}>
           <h2>Composition</h2>
@@ -5894,6 +5930,15 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
             ["gbType", "gbRatio", "gbStages", "gbOD", "nPlanets"].forEach((k9) => s(k9)(g9[k9]));
           }} opts={["(pick)", ...Object.keys(GEAR_PRESETS)]} />
           <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11", "Q13"]} />
+          <Sel label="Gear material / hardness" v={GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF} set={s("gbMat")} opts={Object.keys(GEAR_MATS)} />
+          {(() => { const g8 = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF]; return (
+            <>
+              <div className="kv"><span>Tooth bending allowable</span><b>{g8.sig} MPa</b></div>
+              <div className="hint" style={{ margin: "-2px 0 6px", fontSize: 11, opacity: 0.7 }}>
+                {g8.note}. Sets the Lewis tooth-yield torque cap for spur/planetary stages; harmonic capacity is ratcheting-limited and unaffected.
+              </div>
+            </>
+          ); })()}
           <Pick label="Pressure angle" v={p.presAng} set={s("presAng")} opts={[{ v: 20, t: "20°" }, { v: 25, t: "25°" }]} />
           {p.gbType === "Planetary" && <Num label="Planets per stage" v={p.nPlanets} set={s("nPlanets")} min={2} max={6} />}
           <Pick label="Output bearing" v={p.gbBrg} set={s("gbBrg")}
@@ -6001,7 +6046,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults }) {
               {gt.w.map((w9, i9) => <div className="warn" key={i9}>{w9}</div>)}
             </div>
             <div className="note">
-              Synthesized from gearhead Ø, {gt.agmaQ}, {gt.presAng}° pressure angle{gt.nP && gt.stages[0] && gt.stages[0].Zr ? `, ${gt.nP} planets (ring–sun assembly constraint enforced)` : ""}.
+              Synthesized from gearhead Ø, {gt.agmaQ}, {gt.presAng}° pressure angle, {gt.gbMat} ({gt.sigAllow} MPa allowable){gt.nP && gt.stages[0] && gt.stages[0].Zr ? `, ${gt.nP} planets (ring–sun assembly constraint enforced)` : ""}.
               Backlash: per-mesh allowance reflected through downstream ratios — the output stage dominates.
               Efficiency: mesh sliding (tooth-count dependent) + seal/churning drag; back-drive reverses the
               torque-proportional losses (η_b ≈ 2 − 1/η_f per stage). Tooth cap is Lewis bending at 380 MPa
@@ -6106,7 +6151,7 @@ export default function MotorDesigner() {
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
     calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
-    agmaQ: "Q9", presAng: 20, nPlanets: 3, gbBrg: "radial",
+    agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
     mntStyle: "face", mntThread: "4-40", mntN: 4, mntBCD: 0, mntFlgOD: 0, mntFlgT: 3, mntDir: "fwd", mntGap: 5, mntPilotOD: 0, mntPilotT: 0,
     finGb: "Matte steel", finMot: "Aluminum", finBrk: "Black anodized",
@@ -6272,6 +6317,46 @@ export default function MotorDesigner() {
     setIoMsg("Design exported.");
   };
   const finMigrate = (v9) => (v9 === "Iridescent alum" ? "Iridite (chem film)" : v9);
+  // Actuator-scoped IO: the composite module owns only gearing/composition/output-shaft/mounting/finish
+  // fields. The motor & brake tabs keep their own full-design import/export; importing a full design
+  // file HERE applies only these fields, so a saved motor never gets dragged in through the actuator tab.
+  const ACT_KEYS = ["actMotor", "actBrake", "gbType", "gbRatio", "gbStages", "gbEff", "gbOD", "gbLen", "gbBrg",
+    "agmaQ", "gbMat", "presAng", "nPlanets", "oshType", "oshOD", "oshLen", "oshFeat", "oshPinD",
+    "mntStyle", "mntThread", "mntN", "mntBCD", "mntFlgOD", "mntFlgT", "mntDir", "mntGap", "mntPilotOD", "mntPilotT",
+    "finGb", "finMot", "finBrk"];
+  const exportActuator = () => {
+    const sub = {}; ACT_KEYS.forEach((k) => { if (k in p) sub[k] = p[k]; });
+    const payload = { tool: "motrworks", scope: "actuator", version: 10, saved: new Date().toISOString(), units: us, actuator: sub };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement("a");
+    el.href = url;
+    el.download = `actuator-${String(p.gbType || "gb").toLowerCase()}-${p.gbRatio}to1.json`;
+    el.click();
+    URL.revokeObjectURL(url);
+    setIoMsg("Actuator module exported — gearing, composition, output shaft, mounting, finishes.");
+  };
+  const importActuator = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const j = JSON.parse(rd.result);
+        const raw = j && j.actuator ? j.actuator : j && j.design ? j.design : j; // scoped file, full design, or bare
+        const src = {}; ACT_KEYS.forEach((k) => { if (raw && k in raw) src[k] = raw[k]; });
+        const diffs = Object.keys(p).filter((k) => k in src && typeof src[k] === typeof p[k] && src[k] !== p[k])
+          .map((k) => ({ k, from: p[k], to: src[k] }));
+        if (!diffs.length) { setIoMsg(`${f.name}: no actuator-module fields differ from the current design.`); return; }
+        setIoMsg("");
+        setPendImp({ name: f.name + " → actuator fields only", src, units: j && j.units, diffs });
+      } catch {
+        setIoMsg("Could not read that file — expected JSON exported from this tool.");
+      }
+    };
+    rd.readAsText(f);
+    e.target.value = "";
+  };
   const [pendImp, setPendImp] = useState(null);
   // autosave + undo: guarded so restricted browsers (blocked localStorage) degrade silently
   const LSK = "motrworks-autosave-v1", LSK_OLD = "motrsynth-autosave-v1";
@@ -6512,7 +6597,7 @@ export default function MotorDesigner() {
       )}
 
       <div className="grid">
-        {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} />
+        {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} exportActuator={exportActuator} importActuator={importActuator} ioMsg={ioMsg} impPanel={impPanel} />
           : wbM ? <BobbinView p={p} s={s} us={us} switchType={switchType} exportDesign={exportDesign} importDesign={importDesign} ioMsg={ioMsg} impPanel={impPanel} /> : <>
         {/* ============ inputs ============ */}
         <div>

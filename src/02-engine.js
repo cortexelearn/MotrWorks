@@ -81,7 +81,10 @@ function designGearTrain(p, act, gODin, gLenIn) {
   const jQ = AGMA_J[p.agmaQ] ?? AGMA_J["Q9"];
   const pa = (Math.max(p.presAng || 20, 14.5) * Math.PI) / 180;
   const mu = 0.06;                                                   // lubricated steel sliding
-  const sigAllow = 380;                                              // MPa, case-hardened bending fatigue
+  // v58.4: tooth-bending allowable from the selected gear material/hardness condition
+  // (was hardcoded 380 MPa case-hardened). Governs the Lewis torque cap below.
+  const gmat = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF];
+  const sigAllow = gmat.sig;
   const Y9 = 0.308;                                                  // Lewis form, ~18–30 t @20°
   const stages = [], w = [];
   let effF = 1, effB = 1, blOut = 0, TmaxOut = Infinity, limStage = 0;
@@ -227,7 +230,8 @@ function designGearTrain(p, act, gODin, gLenIn) {
   else if (uTarget < win[0] * 0.98 && st > 1) w.push(`Per-stage ratio ${uTarget.toFixed(2)}:1 is below the practical window \u2014 ${recSt} stage${recSt > 1 ? "s" : ""} would suffice for ${act.N}:1.`);
   const stOk = uTarget >= win[0] * 0.98 && uTarget <= win[1] * 1.02;
   return { type, st, nP, stages, Ntot, effF, effB, selfLock, blOut, blGear, blMech, Tbd, KvMax, TmaxOut, limStage, w, recSt, win, stOk, gLen, brgF,
-    agmaQ: p.agmaQ || "Q9", presAng: p.presAng || 20, gOD };
+    agmaQ: p.agmaQ || "Q9", presAng: p.presAng || 20, gOD,
+    gbMat: GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF, sigAllow, gbMatNote: gmat.note };
 }
 
 function composeActuator(mr, br, cfg) {

@@ -58,6 +58,28 @@ const BRAKE_MATS = {
 };
 const BARS = { "Cast aluminum": 3.2e-8, "Copper": 1.72e-8 };
 
+/* Gear material / hardness condition → allowable bending stress (MPa) for the Lewis tooth-yield cap.
+   Values follow AGMA 2001-D04 sat (Grade 1 unless noted) and classic Lewis allowables for the
+   non-ferrous/plastic entries; hardness condition is part of the identity because sat is
+   hardness-driven for through-hardened steels (≈ 0.533·HB + 88 MPa, Grade 1). */
+const GEAR_MAT_DEF = "Carburized 8620/9310 (58\u201362 HRC)";
+const GEAR_MATS = {
+  "Carburized 8620/9310 (58\u201362 HRC)":      { sig: 380, note: "AGMA Gr.1 case-carburized \u2014 the default the tool has always assumed" },
+  "Carburized 9310 VAR aero Gr.2 (58\u201364 HRC)": { sig: 450, note: "vacuum-arc-remelt aero quality, certified case depth/cleanliness" },
+  "Induction-hardened 4340 (\u224850 HRC)":     { sig: 345, note: "tooth-flank hardened, tougher core" },
+  "Nitrided 4140 / Nitralloy (50 HRC case)": { sig: 330, note: "thin hard case \u2014 fine pitches; no distortion from quench" },
+  "Custom 455 SS aged H950 (\u224848 HRC)":    { sig: 330, note: "premium age-hardened martensitic SS \u2014 above 17-4's strength class with full corrosion resistance" },
+  "17-4 PH H900 (44 HRC)":                    { sig: 300, note: "corrosion-resistant precipitation-hardened SS" },
+  "Through-hardened 4140/4340 (38\u201342 HRC)": { sig: 285, note: "quench & temper, no case" },
+  "416 SS hardened (\u224840 HRC)":            { sig: 270, note: "free-machining martensitic SS" },
+  "Sintered PM steel FL-4405 HT":             { sig: 240, note: "typical MIM/PM miniature-gearhead planet stock" },
+  "303/304 SS annealed":                      { sig: 165, note: "corrosion-driven choice \u2014 soft; expect the Lewis cap to govern" },
+  "1018 / mild steel normalized":             { sig: 150, note: "unhardened prototype stock" },
+  "Bronze / brass (SAE 660)":                 { sig: 80,  note: "wormwheel & bushing-grade non-ferrous" },
+  "Aluminum 7075-T6":                         { sig: 65,  note: "light-duty only \u2014 poor fatigue in gear teeth" },
+  "Acetal (Delrin)":                          { sig: 34,  note: "quiet light-duty plastic; derate further above 60 \u00b0C" },
+};
+
 /* Curated starting points. Envelope sizes follow NEMA-frame conventions
    (17 = 1.7", 23 = 2.3", 34 = 3.4" mounting face); buses are MIL-STD-704
    style 28 VDC and 270 VDC. Each is a complete, self-consistent design that

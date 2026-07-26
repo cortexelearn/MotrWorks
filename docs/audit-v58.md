@@ -134,3 +134,41 @@ Verified sweep on the 24 V · 60 mm preset:
 Release margin crosses 1.0 between 40% and 20%, which is the useful design read: this brake tolerates
 roughly a 2.5× permeability loss before it stops releasing. A warning fires whenever the derate is
 below 100%, quoting effective vs nominal µr, and the effective/nominal µr is shown live in the panel.
+
+---
+
+# v58.3 — actuator module-scoped .json import/export (2026-07-23)
+
+The actuator tab previously had no file IO at all (the sidebar Files card belongs to the winding
+module). It now has its own, deliberately **module-scoped**: the payload carries only the 30 fields
+the composite module owns — composition (`actMotor`, `actBrake`), gearing (`gbType/Ratio/Stages/Eff/
+OD/Len/Brg`, `agmaQ`, `presAng`, `nPlanets`), output shaft (`osh*`), mounting (`mnt*`), finishes
+(`fin*`) — under a `scope: "actuator"` envelope (`actuator-planetary-10to1.json`).
+
+Import accepts three shapes and filters ALL of them to the actuator key list: a scoped actuator file,
+a full-design file (only its actuator fields apply — a saved motor can never be dragged in through
+the actuator tab), or a bare object. Reuses the existing diff-preview/confirm panel, now rendered in
+the actuator tab. Motor and brake designs continue to travel in their own tabs' full-design .json.
+
+Verified: 30/30 fields round-trip; full-design import leaks zero motor fields (slots/poles/turns/
+awg/magT/Vdc/stackL/motorType all filtered); all ten gates pass; SSR 164,043.
+
+---
+
+# v58.4 — gearhead material / hardness condition (2026-07-24)
+
+The Lewis tooth-yield cap had `sigAllow = 380` MPa hardcoded — every gearhead was silently assumed
+case-carburized. New **Gear material / hardness** selector (`gbMat`) in the actuator gearing card,
+13 conditions with AGMA 2001-D04-style bending allowables (Grade 1 basis; hardness is part of the
+identity since sat is hardness-driven for through-hardened steels, ≈ 0.533·HB + 88 MPa):
+
+carburized 8620/9310 380 (default — identical to prior behavior) · 9310 VAR aero Gr.2 450 ·
+induction 4340 345 · nitrided 330 · Custom 455 aged H950 330 · 17-4 H900 300 · through-hard 4140 285 · 416 hard 270 ·
+sintered PM 240 · 303/304 annealed 165 · 1018 150 · bronze 80 · 7075-T6 65 · acetal 34.
+
+Verified: the torque cap scales exactly linearly with the allowable (TmaxOut ratio = sig/380 to 3
+decimals across all 13 on the planetary test case). Aero Gr.2 buys +18% capacity; annealed 303 costs
+−57%; Delrin −91%. Harmonic capacity remains ratcheting-limited and is unaffected (stated in the UI
+hint). Selection + allowable shown live, echoed in the synthesis provenance note, exported in the
+actuator-scoped .json (`ACT_KEYS` + `gbMat`), and carried in the gear result (`gt.gbMat`,
+`gt.sigAllow`). Default preserves all golden anchors.
