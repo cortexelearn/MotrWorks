@@ -243,3 +243,21 @@ that a 0.60"/end head is physically unable to cross a throw-11 span of 3.74".
 
 Deployment verification: v59.1 index.html is ~1,234 KB; Coil results "Lay" row must read
 "wires per layer · layers (per-strand)" on the 12s8p design.
+
+---
+
+# v59.2 — head reach floor: throw always has teeth (2026-08-06)
+
+v59.1's reach check only WARNED that an override head couldn't cross the span — it still computed the
+impossible coil, so throw 16 with a pinned 0.60" head changed nothing, and throw 3 vs 8 at a pinned
+2" head solved identically (both geometry-governed by the same fictional heads). The fix: head wire
+length per end is FLOORED at the span arc it must traverse. An under-entry is raised to the floor
+(flagged, with the entered value quoted), in both solve and tool-known fit numbers.
+
+Result on the 12s8p (0.60" entered): throw 2/3 → target-governed 4.640 Ω (floored heads still under
+the target-R geometry — correct); throw 8 → Ø2.846" / 6.93 Ω; throw 16 → Ø4.575" / 10.94 Ω.
+Real R verified monotone in throw across 1–16. Heads above the floor are respected as entered
+(2" at throw 3 → Ø2.389" / 5.875 Ω, +26.6% vs target, as v59.1 showed).
+
+Governance transparency: new "Arbor candidates — target R · geometry · insertion" row shows all
+three diameters with the governor underlined, so which constraint is binding is visible at a glance.

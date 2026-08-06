@@ -475,14 +475,18 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
                 <div className="kv"><span>Real R at solved arbor (L-L / coil, 20 °C{sol.kRw !== 1 ? ", cal" : ""})</span>
                   <b style={{ color: sol.RcT > 0 && sol.RllReal > p.wbRt * 1.005 ? "#B45309" : undefined }}>
                     {fmt(sol.RllReal, 3)} / {fmt(sol.RcReal, 3)} Ω{sol.RcT > 0 ? ` · ${sol.RllReal > p.wbRt * 1.005 ? "+" : ""}${fmt((sol.RllReal / Math.max(p.wbRt, 1e-9) - 1) * 100, 1)}% vs target` : ""}</b></div>
+                {sol.RcT > 0 && <div className="kv"><span>Arbor candidates — target R · geometry · insertion</span>
+                  <b>{[["R", sol.DaR], ["geo", sol.DaGeo], ["ins", sol.DaIns]].map(([t9, v9], i9) => (
+                    <span key={t9}>{i9 > 0 ? " · " : ""}<span style={Math.abs(v9 - sol.Da) < 0.03 ? { textDecoration: "underline" } : { opacity: 0.6 }}>{dl9(v9)}</span></span>
+                  ))} — largest governs</b></div>}
                 {sol.throwArc > 0 && <div className="kv"><span>Coil span arc (throw {p.wbThrow} slots)</span><b>{dl9(sol.throwArc)}</b></div>}
                 <div className="kv"><span>Lay ({sol.perStrand ? "per-strand, wild hand wind" : "square bundle"})</span>
                   <b>{sol.perStrand ? `${sol.tplW} wires/layer · ${sol.LwW} layers` : `${sol.tpl} turns/layer · ${sol.layers} layers`} · {dl9(sol.build)} build</b></div>
               </div>
               {sol.reachShort && <div className="warn">
-                Entered coil head {dl9(sol.Lhead)}/end is SHORTER than the throw-{p.wbThrow} span arc ({dl9(sol.spanArc)}) —
-                the head cannot reach the return slot, so this coil is unwindable as specified. Scheme auto suggests {dl9(sol.headAuto)}/end
-                (1.25×span); clear the override (0) to let throw drive the heads, arbor, and resistance.</div>}
+                Entered coil head {dl9(sol.LheadEnt)}/end can't cross the throw-{p.wbThrow} span ({dl9(sol.spanArc)}) —
+                head RAISED to the {dl9(sol.Lhead)} reach floor, and the solved arbor / real R above include it.
+                Scheme auto suggests {dl9(sol.headAuto)}/end (1.25×span); clear the override (0) for throw-driven heads.</div>}
               {sol.RcT > 0 && sol.DaR > 0 && sol.Da > sol.DaR + 0.005 && <div className="warn">
                 Target R would allow Ø{dl9(sol.DaR)}, but {sol.DaGeo >= sol.DaIns ? "stack + heads need" : "insertion needs"} Ø{dl9(sol.Da)} —
                 the larger governs, and real R runs {fmt((sol.RllReal / Math.max(p.wbRt, 1e-9) - 1) * 100, 1)}% above target (row above).
