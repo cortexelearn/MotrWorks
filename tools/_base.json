@@ -115,5 +115,7 @@
   "stpThruD": 0,
   "turnBasis": "coil",
   "brkFeScale": 100,
-  "gbMat": "Carburized 8620/9310 (58–62 HRC)"
+  "gbMat": "Carburized 8620/9310 (58–62 HRC)",
+  "wbMR": 0,
+  "wbMRTemp": 23
 }

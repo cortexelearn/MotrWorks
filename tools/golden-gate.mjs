@@ -55,10 +55,14 @@ console.log('Winding tooling');
 {
   const p0 = { ...base, motorType: 'bobbin', slotR: 0, stackL: 25, statorOD: 41, statorID: 26, slots: 8,
     toothW: 3.6, yoke: 2.6, tipH: 0.8, slotOpen: 1.6, liner: 0.2, turns: 30, awg: 26, strands: 1,
-    insBuild: 'Heavy', Tcu: 100, wbCoils: 6, wbMode: 'inv', wbRt: 2.0, conn: 'wye', wbStyle: 'tooth' };
+    insBuild: 'Heavy', Tcu: 100, wbCoils: 6, wbMode: 'inv', wbRt: 5.0, conn: 'wye', wbStyle: 'tooth' };
+  // v58.5 re-anchor: the old 2.0 Ω target wanted a Ø10.5 arbor — BELOW this stator's Ø27.6
+  // insertion floor — and the pre-fix solver shipped that impossible tool, so the old anchor
+  // certified a coil whose ID sat under the tooth tips. 5.0 Ω is achievable (Ø30.3 > floor);
+  // the exact round trip remains the physics invariant. bob-gate covers the clamp behavior.
   const sol = M.solveBobbin(p0);
   const b = M.computeBobbin({ ...p0, wbArborD: sol.Da, wbChanW: sol.chW, wbChanH: sol.chH, wbJump: sol.jumpEst, wbFlange: sol.flgEst });
-  near(2 * (6 * b.R20c + sol.Rjump), 2.0, 0.03, 'L-L round trip (wye, 6 coils/ph)');
+  near(2 * (6 * b.R20c + sol.Rjump), 5.0, 0.03, 'L-L round trip (wye, 6 coils/ph)');
 }
 
 // FEA-light: MEC saturation curve + FEMM export structure

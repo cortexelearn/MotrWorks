@@ -53,11 +53,18 @@ try {
 } catch (e2) { ok(false, 'SSR threw: ' + e2.message); }
 console.log('inverse mode');
 {
-  const pI = { ...p0, wbMode: 'inv', wbRt: 2.0, conn: 'wye', wbStyle: 'tooth', wbCoils: 6 };
+  // v58.5: an ACHIEVABLE target (arbor above the Ø27.6 insertion floor) must round-trip exactly...
+  const pI = { ...p0, wbMode: 'inv', wbRt: 5.0, conn: 'wye', wbStyle: 'tooth', wbCoils: 6 };
   const sol = M.solveBobbin(pI);
   const bI = M.computeBobbin({ ...pI, wbArborD: sol.Da, wbChanW: sol.chW, wbChanH: sol.chH, wbJump: sol.jumpEst, wbFlange: sol.flgEst });
   const RllBack = 2 * (6 * bI.R20c + sol.Rjump);                       // wye: two phase strings in series
-  ok(Math.abs(RllBack - 2.0) < 0.06, `L-L round trip (wye, 6 coils/ph): solved arbor Ø${sol.Da} → L-L ${RllBack.toFixed(3)} Ω (asked 2.000)`);
+  ok(Math.abs(RllBack - 5.0) < 0.15, `L-L round trip (wye, 6 coils/ph): solved arbor Ø${sol.Da} → L-L ${RllBack.toFixed(3)} Ω (asked 5.000)`);
+  ok(Math.abs(sol.RllReal - RllBack) < 0.1, `solver's own real-R report agrees (${sol.RllReal.toFixed(3)} Ω)`);
+  // ...and an UNACHIEVABLE target (2 Ω wants Ø10.5) must clamp to the insertion floor and say so —
+  // the pre-v58.5 solver shipped the impossible Ø10.5 arbor (coil ID under the tooth tips).
+  const sLo = M.solveBobbin({ ...pI, wbRt: 2.0 });
+  ok(Math.abs(sLo.Da - sLo.DaIns) < 0.05 && sLo.DaR < sLo.DaIns, `unachievable 2 Ω clamps to insertion floor Ø${sLo.DaIns} (target-R arbor Ø${sLo.DaR})`);
+  ok(sLo.RllReal > 4 && /insertion/.test(sLo.basis), `real R above target reported (${sLo.RllReal.toFixed(3)} Ω, basis: insertion rule)`);
   ok(sol.jumpEst > 4 && sol.flgEst >= 0.8, `tool constants estimated from the lamination (jumper ${sol.jumpEst} mm, flange ${sol.flgEst} mm)`);
   ok(bI.build <= sol.chH && bI.tpl >= 1, `solved channel holds the wind (${bI.tpl}/layer × ${bI.layers})`);
   const sol0 = M.solveBobbin({ ...pI, wbRt: 0 });

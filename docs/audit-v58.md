@@ -172,3 +172,38 @@ decimals across all 13 on the planetary test case). Aero Gr.2 buys +18% capacity
 hint). Selection + allowable shown live, echoed in the synthesis provenance note, exported in the
 actuator-scoped .json (`ACT_KEYS` + `gbMat`), and carried in the gear result (`gt.gbMat`,
 `gt.sigAllow`). Default preserves all golden anchors.
+
+---
+
+# v58.5 — winding-bobbin calibration pass (2026-08-06)
+
+Driven by real bench hardware: a wound 4-coil stick (43t AWG 27×2 on a measured Ø1.8915" arbor)
+with string R measured 2.374–2.387 Ω (avg 2.378 @ ~23 °C).
+
+## Solve-mode race condition — exactly as suspected
+With a target R entered, `solveBobbin` OVERWROTE the arbor with the target-R value, discarding both
+the geometry arbor (the only term coil-head edits feed) and the insertion floor. Consequences: head
+edits were inert with a target set, and an unachievable target shipped a physically impossible tool
+(the golden/bob gates' old round-trip case asked 2 Ω on a stator whose insertion floor is Ø27.6 —
+the solver returned Ø10.5, a coil ID under the tooth tips, and the gate ANCHORED it).
+
+Now: `Da = max(target-R arbor, geometry arbor, insertion floor)` — target R is a starting point;
+whichever governs is named in the basis line; and a new "Real R at solved arbor" row (L-L / per-coil,
+with % vs target) moves live as heads are edited. Gates re-anchored to an achievable 5 Ω round trip
+(closes to 0.01%) plus explicit clamp assertions.
+
+Tool-known mode is unchanged by design: with a real tool, R is set by the arbor — head edits
+redistribute the fixed perimeter between legs and heads (stack-fit readout); the note now says so.
+
+## Wild multi-strand lay — per-strand model (bench-validated)
+Measured MLT implies a 2.84 mm radial build — below even the precise-bundle model (3.62) and far
+under the wild-bundle model (4.42). Resolution: hand-fed strands settle INDIVIDUALLY, not as round
+Ø·√n bundles. New model for wild + strands>1: individual wires at 0.866 hex nest ×1.04 scramble
+(single-point calibrated to this stick). Prediction 2.409 vs 2.378 measured (+1.3%, was +3.3%).
+Wild single-strand and precise lays unchanged. Channel capacity made consistent (per-strand rows).
+
+## Bench calibration card (bobbin module)
+New inputs: measured string R (Ω) + copper temp (`wbMR`, `wbMRTemp`). Derived wind factor
+kRw = measured/predicted (×0.9869 on the bench stick) is shown, compensates the R rows, and scales
+the Coil-spec solve so target-R arbors track actual shop coils (lower-R winds → larger solved arbor).
+Factors beyond ±10% flag a probable units/temperature mismatch.

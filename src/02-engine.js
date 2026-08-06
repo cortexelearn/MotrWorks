@@ -286,9 +286,20 @@ function solveBobbin(p) {
   const layers = Math.ceil(N / tpl);
   const wild = (p.wbLay || "wild") !== "precise";
   const chW = +((tpl * dEff) / 0.98 + 0.1).toFixed(2);
-  const build = wild
-    ? (layers <= 1 ? dEff : dEff * layers * 1.08)
-    : dEff * (1 + (layers - 1) * 0.866);
+  // v58.5: wild multi-strand hand winding settles the strands INDIVIDUALLY, not as round bundles —
+  // bench (4-coil stick, 43t AWG 27×2): measured build implies individual-wire near-hex packing,
+  // 2.9 mm vs the bundle model's 4.4 mm. Single-point calibrated ×1.04 scramble allowance.
+  const buildOf = (chW9) => {
+    if (wild && st > 1) {
+      const tplW = Math.max(Math.floor((0.98 * chW9) / dIns), 1);
+      const Lw = Math.ceil((N * st) / tplW);
+      return dIns * (1 + (Lw - 1) * 0.866) * 1.04;
+    }
+    const tpl9 = Math.max(Math.floor((0.98 * chW9) / dEff), 1);
+    const L9 = Math.ceil(N / tpl9);
+    return wild ? (L9 <= 1 ? dEff : dEff * L9 * 1.08) : dEff * (1 + (L9 - 1) * 0.866);
+  };
+  const build = buildOf(chW);
   const chH = +(dEff * layers * (wild ? 1.08 : 1) * 1.12 + 0.2).toFixed(2); // clears the crossover worst
   // lamination-derived tool constants
   const Ns = Math.max(Math.round(p.slots), 3);
@@ -306,19 +317,40 @@ function solveBobbin(p) {
   const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto9.toFixed(1);
   const perim = 2 * (Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1) + 2 * Lhead;
   const DaGeo = +((perim / Math.PI) - build).toFixed(2);             // arbor that yields exactly stack + heads
-  let Da = Math.max(DaGeo, DaIns), RcT = 0, Rjump = 0;
+  let Da = Math.max(DaGeo, DaIns), RcT = 0, DaR = 0;
   let basis = DaGeo >= DaIns ? "stator geometry (2\u00b7stack + 2\u00b7heads)" : "insertion rule (geometry coil would be under the tips)";
+  // bench calibration: measured string R on the CURRENT tool vs prediction → per-shop wind factor,
+  // scales the MLT the target-R budget buys so solved diameters track your actual coils
+  let kRw = 1;
+  if (p.wbMR > 0 && p.wbArborD > 0) {
+    const cb9 = computeBobbin(p);
+    const pred9 = cb9.R20s * cb9.RhotF(Number.isFinite(p.wbMRTemp) ? p.wbMRTemp : 20);
+    if (pred9 > 0) kRw = p.wbMR / pred9;
+  }
+  const Rjump = (RHO_CU * ((nC + 1) * jumpEst / 1000) * 1e6) / (aBare * st);
   if (p.wbRt > 0) {
     const Rph = p.conn === "delta" ? p.wbRt * 1.5 : p.wbRt / 2;      // L-L → per phase
-    Rjump = (RHO_CU * ((nC + 1) * jumpEst / 1000) * 1e6) / (aBare * st);
-    RcT = Math.max((Rph - Rjump) / nC, 1e-6);                        // per-coil budget after jumper copper
-    const MLTmm = (RcT * aBare * st) / (RHO_CU * 1e3 * N);           // required mean turn
-    Da = +(MLTmm / Math.PI - build).toFixed(2);
-    basis = `target R (${p.conn === "delta" ? "delta" : "wye"} L-L \u2192 ${RcT.toFixed(3)} \u03a9/coil)`;
+    RcT = Math.max((Rph - kRw * Rjump) / nC, 1e-6);                  // per-coil budget after jumper copper
+    const MLTmm = (RcT * aBare * st) / (RHO_CU * 1e3 * N) / kRw;     // mean turn the budget buys (cal-scaled)
+    DaR = +(MLTmm / Math.PI - build).toFixed(2);
+    // v58.5: the target-R arbor no longer OVERWRITES the geometry/insertion arbors (that made coil-head
+    // edits inert with a target set). Target R is a starting point — the largest requirement governs,
+    // and head iteration moves the real R away from target, reported below.
+    Da = +Math.max(DaR, DaGeo, DaIns).toFixed(2);
+    basis = Da <= DaR + 0.005
+      ? `target R (${p.conn === "delta" ? "delta" : "wye"} L-L \u2192 ${RcT.toFixed(3)} \u03a9/coil)`
+      : (DaGeo >= DaIns
+        ? "stator geometry (2\u00b7stack + 2\u00b7heads) \u2014 needs more than the target-R arbor; real R runs above target"
+        : "insertion rule \u2014 needs more than the target-R arbor; real R runs above target");
   }
+  // real resistance at the solved arbor (cal-compensated) — this is what head iteration moves
+  const MLTre = Math.PI * (Da + build);
+  const RcReal = kRw * (RHO_CU * ((MLTre * N) / 1000) * 1e6) / (aBare * st);
+  const RphReal = nC * RcReal + kRw * Rjump;
+  const RllReal = p.conn === "delta" ? (2 / 3) * RphReal : 2 * RphReal;
   const throwArc = p.wbStyle === "lap" ? +((Math.max(p.wbThrow, 1) * Math.PI * d1) / Ns).toFixed(1) : 0;
-  return { Da, DaIns, DaGeo, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
-    jumpEst, flgEst, RcT, Rjump, throwArc };
+  return { Da, DaIns, DaGeo, DaR, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
+    jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal };
 }
 
 function computeBobbin(p) {
@@ -332,14 +364,24 @@ function computeBobbin(p) {
   const tpl = Math.max(Math.floor((0.98 * chW) / dEff), 1);          // turns per layer across the channel
   const layers = Math.ceil(p.turns / tpl);
   const wild = (p.wbLay || "wild") !== "precise";                    // shop default: wild wind for insertion
-  // lay model — precise: rows nest at 0.866; wild: the first layer lays clean on the arbor, but
-  // crossovers after it kill the nesting (rows stack at ~1.0·dEff) and add a ~8% random bump
-  const build = wild
-    ? (layers <= 1 ? dEff : dEff * layers * 1.08)
-    : dEff * (1 + (layers - 1) * 0.866);
-  const buildX = dEff * layers * (wild ? 1.08 : 1);                  // crossover worst case
+  // lay model — precise (machine lay): bundles nest at 0.866. Wild multi-strand (hand wind): the
+  // strands settle INDIVIDUALLY, not as round bundles — bench-validated on a 4-coil stick
+  // (43t AWG 27×2: measured build ≈ individual-wire hex packing, ×1.04 scramble allowance; the
+  // bundle model overstated build 4.4 vs 2.9 mm and string R by +3%). Wild single-strand keeps
+  // the crossover-stacking model.
+  const perStrand = wild && st > 1;
+  const tplW9 = Math.max(Math.floor((0.98 * chW) / dIns), 1);        // wires per layer, individual lay
+  const LwW9 = Math.ceil((p.turns * st) / tplW9);
+  const build = perStrand
+    ? dIns * (1 + (LwW9 - 1) * 0.866) * 1.04
+    : wild
+      ? (layers <= 1 ? dEff : dEff * layers * 1.08)
+      : dEff * (1 + (layers - 1) * 0.866);
+  const buildX = perStrand ? build * 1.06 : dEff * layers * (wild ? 1.08 : 1); // crossover worst case
   const coilOD = arbor + 2 * build;
-  const capCh = Math.max(Math.floor(tpl * Math.max(Math.floor((0.98 * chH) / (dEff * 0.866) - 0.15), 1) * (wild ? 0.8 : 1)), 1); // channel capacity
+  const capCh = perStrand
+    ? Math.max(Math.floor((tplW9 * Math.max(Math.floor((0.98 * chH) / (dIns * 0.9)), 1)) / st), 1)
+    : Math.max(Math.floor(tpl * Math.max(Math.floor((0.98 * chH) / (dEff * 0.866) - 0.15), 1) * (wild ? 0.8 : 1)), 1); // channel capacity
   if (Math.max(build, buildX) > chH) w.push(`Winding build ${Math.max(build, buildX).toFixed(2)} mm (${wild ? "wild wind" : "crossover worst"}) overtops the ${chH} mm flange — wire will not stay in the channel. Fewer turns, finer wire, or a taller flange.`);
   else if (build > 0.9 * chH) w.push(`Build ${build.toFixed(2)} mm is within 10% of the ${chH} mm flange — no margin for lay error.`);
   if (p.turns > capCh) w.push(`Channel holds ~${capCh} turns of this bundle (${tpl}/layer) — asked ${p.turns}.`);
@@ -396,8 +438,14 @@ function computeBobbin(p) {
     }
   }
   const lenTool = nC * chW + (nC + 1) * flg;                         // arbor stack length
+  // bench calibration: measured string R (at its temperature) vs prediction → per-shop wind factor
+  const mrT = Number.isFinite(p.wbMRTemp) ? p.wbMRTemp : 20;
+  const predAtMeasT = R20s * Rhot(mrT);
+  const kRw = p.wbMR > 0 && predAtMeasT > 0 ? p.wbMR / predAtMeasT : 1;
   return { err, warn: w, dBare, dIns, dEff, tpl, layers, build, buildX, coilOD, capCh,
-    MLT: MLTb, lenCoil, lenString, R20c, R20s, RhotF: Rhot, mCu, mPhase, slot, lenTool, wild,
+    MLT: MLTb, lenCoil, lenString, R20c, R20s, RhotF: Rhot, mCu, mPhase, slot, lenTool, wild, perStrand,
+    tplW: tplW9, LwW: LwW9,
+    kRw, predAtMeasT, R20cC: kRw * R20c, R20sC: kRw * R20s,
     Lhead, LheadAuto, perim, stackFit,
     flangeOD: arbor + 2 * chH };
 }

@@ -472,6 +472,9 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
                 <div className="kv"><span>Flange Ø / est. thickness</span><b>{dl9(b.flangeOD)} / {dl9(sol.flgEst)}</b></div>
                 <div className="kv"><span>Est. inter-coil jumper (from lamination)</span><b>{dl9(sol.jumpEst)}</b></div>
                 {sol.RcT > 0 && <div className="kv"><span>Per-coil R budget (after jumpers)</span><b>{fmt(sol.RcT, 3)} Ω</b></div>}
+                <div className="kv"><span>Real R at solved arbor (L-L / coil, 20 °C{sol.kRw !== 1 ? ", cal" : ""})</span>
+                  <b style={{ color: sol.RcT > 0 && sol.RllReal > p.wbRt * 1.005 ? "#B45309" : undefined }}>
+                    {fmt(sol.RllReal, 3)} / {fmt(sol.RcReal, 3)} Ω{sol.RcT > 0 ? ` · ${sol.RllReal > p.wbRt * 1.005 ? "+" : ""}${fmt((sol.RllReal / Math.max(p.wbRt, 1e-9) - 1) * 100, 1)}% vs target` : ""}</b></div>
                 {sol.throwArc > 0 && <div className="kv"><span>Coil span arc (throw {p.wbThrow} slots)</span><b>{dl9(sol.throwArc)}</b></div>}
                 <div className="kv"><span>Lay (square bundle)</span><b>{sol.tpl} turns/layer · {sol.layers} layers · {dl9(sol.build)} build</b></div>
               </div>
@@ -566,7 +569,7 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
           <h2>Coil results</h2>
           <div className="tbl">
             <div className="kv"><span>Wire (bare / insulated / bundle)</span><b>Ø{b.dBare.toFixed(3)} / {b.dIns.toFixed(3)} / {b.dEff.toFixed(3)} mm</b></div>
-            <div className="kv"><span>Lay: turns per layer · layers</span><b>{b.tpl} · {b.layers}</b></div>
+            <div className="kv"><span>Lay: {b.perStrand ? "wires per layer · layers (per-strand)" : "turns per layer · layers"}</span><b>{b.perStrand ? `${b.tplW} · ${b.LwW}` : `${b.tpl} · ${b.layers}`}</b></div>
             <div className="kv"><span>Build (nested / crossover worst)</span>
               <b style={{ color: b.buildX > p.wbChanH ? "#DC2626" : "#059669" }}>{b.build.toFixed(2)} / {b.buildX.toFixed(2)} of {p.wbChanH} mm</b></div>
             <div className="kv"><span>Coil heads (per end) · stack fit</span>
@@ -577,6 +580,8 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
             <div className="kv"><span>String: {p.wbCoils} coils + jumpers</span><b>{b.lenString.toFixed(2)} m · {(b.mCu * 1000).toFixed(0)} g Cu</b></div>
             <div className="kv"><span>R per coil (20 / {p.Tcu} °C)</span><b>{fmt(b.R20c, 3)} / {fmt(b.R20c * b.RhotF(p.Tcu), 3)} Ω</b></div>
             <div className="kv"><span>R string, series (20 / {p.Tcu} °C)</span><b>{fmt(b.R20s, 3)} / {fmt(b.R20s * b.RhotF(p.Tcu), 3)} Ω</b></div>
+            {b.kRw !== 1 && <div className="kv"><span>R compensated · bench cal ×{fmt(b.kRw, 4)}</span>
+              <b>{fmt(b.R20cC, 3)} coil / {fmt(b.R20sC, 3)} string @ 20 °C</b></div>}
             {b.wild && (() => {
               const bP9 = computeBobbin({ ...pEff, wbLay: "precise" });
               const dOD9 = b.coilOD - bP9.coilOD, dR9 = bP9.R20c > 0 ? (b.R20c / bP9.R20c - 1) * 100 : 0;
@@ -588,10 +593,10 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
             <div className="kv"><span>Magnet wire per motor (3 phases)</span>
               <b>{us === "in" ? (b.mPhase * 3 * 2.20462).toFixed(3) + " lb" : (b.mPhase * 3).toFixed(3) + " kg"}</b></div>
             {b.wild && <div className="note" style={{ marginTop: 4 }}>
-              Wild wind modeled: the first layer lays clean on the arbor, then crossovers kill the row nesting
-              (~1.0·wire Ø stacking + 8% bump vs 0.866 nested) and channel capacity derates ×0.8 — the coil OD,
-              mean turn, resistance, and wire weight above all carry that penalty. Switch to Precise lay to see
-              the ideal wind.</div>}
+              {b.perStrand
+                ? "Wild multi-strand modeled per-strand: hand-fed strands settle individually into near-hex packing (0.866 nest ×1.04 scramble) — bench-validated against a wound 4-coil stick; the round-bundle model overstated build and R. "
+                : "Wild wind modeled: the first layer lays clean on the arbor, then crossovers kill the row nesting (~1.0·wire Ø stacking + 8% bump vs 0.866 nested) and channel capacity derates ×0.8. "}
+              With a known tool, R is set by the arbor — coil-head edits redistribute the fixed perimeter between legs and heads (watch stack fit); to size a tool from heads and target R, use Coil spec → tool dims.</div>}
             {b.slot && Number.isFinite(b.slot.fill) && (
               <div className="kv"><span>Slot fill ({b.slot.sides} side{b.slot.sides > 1 ? "s" : ""}/slot, lined)</span>
                 <b style={{ color: b.slot.fill > 0.42 ? "#DC2626" : b.slot.fill > 0.35 ? "#D97706" : "#059669" }}>{(b.slot.fill * 100).toFixed(0)}%</b></div>
@@ -602,6 +607,24 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
           <div className="note">
             Knowledge here stops at the stator drawing: fill, slot-opening feed, and channel capacity are
             verified; no rotor is assumed, so nothing performance-level (Ke, torque, speed) is claimed.
+          </div>
+        </div>
+        <div className="card" style={{ marginTop: 14 }}>
+          <h2>Bench calibration</h2>
+          <Num label="Measured string R (coils + jumpers)" unit="Ω" v={p.wbMR} set={s("wbMR")} step={0.01} min={0} />
+          <Num label="Measured at (copper temp)" unit="°C" v={p.wbMRTemp} set={s("wbMRTemp")} step={1} />
+          {p.wbMR > 0 && (
+            <div className="tbl" style={{ marginTop: 6 }}>
+              <div className="kv"><span>Predicted at {p.wbMRTemp} °C · measured</span><b>{fmt(b.predAtMeasT, 3)} · {fmt(p.wbMR, 3)} Ω</b></div>
+              <div className="kv"><span>Wind factor (measured / predicted)</span>
+                <b style={{ color: Math.abs(b.kRw - 1) > 0.1 ? "#DC2626" : "#059669" }}>×{fmt(b.kRw, 4)} ({b.kRw >= 1 ? "+" : ""}{fmt((b.kRw - 1) * 100, 1)}%)</b></div>
+            </div>
+          )}
+          <div className="note">
+            0 = off. The factor captures your shop's actual lay vs the model on THIS tool; it compensates the
+            R rows above and scales the Coil-spec solve so target-R arbors track your real coils. Enter the
+            string reading straight off the meter with its copper temperature — the 0.393%/°C correction is applied.
+            {p.wbMR > 0 && Math.abs(b.kRw - 1) > 0.1 ? " A factor this far from 1.0 usually means a units or temperature mismatch, not a real wind difference." : ""}
           </div>
         </div>
       </div>
@@ -911,7 +934,7 @@ export default function MotorDesigner() {
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
     mntStyle: "face", mntThread: "4-40", mntN: 4, mntBCD: 0, mntFlgOD: 0, mntFlgT: 3, mntDir: "fwd", mntGap: 5, mntPilotOD: 0, mntPilotT: 0,
     finGb: "Matte steel", finMot: "Aluminum", finBrk: "Black anodized",
-    wbArborD: 8, wbChanW: 6, wbChanH: 5, wbFlange: 1.2, wbCoils: 6, wbJump: 25, wbSides: 2, wbMode: "fwd", wbRt: 0, wbRtip: 0.8, wbLay: "wild", wbHead: 0,
+    wbArborD: 8, wbChanW: 6, wbChanH: 5, wbFlange: 1.2, wbCoils: 6, wbJump: 25, wbSides: 2, wbMode: "fwd", wbRt: 0, wbRtip: 0.8, wbLay: "wild", wbHead: 0, wbMR: 0, wbMRTemp: 23,
     brushV: 1.5, latmWind: 2,
     brkSprFree: 23.3, brkSprEng: 18.3, brkMu: 0.40, brkMuD: 0.32, brkFaces: 2, brkStroke: 0.3,
     brkBore: 26, brkPole: 6, brkArm: 6, brkFeScale: 100, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
