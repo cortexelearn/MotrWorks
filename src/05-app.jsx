@@ -476,12 +476,19 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
                   <b style={{ color: sol.RcT > 0 && sol.RllReal > p.wbRt * 1.005 ? "#B45309" : undefined }}>
                     {fmt(sol.RllReal, 3)} / {fmt(sol.RcReal, 3)} Ω{sol.RcT > 0 ? ` · ${sol.RllReal > p.wbRt * 1.005 ? "+" : ""}${fmt((sol.RllReal / Math.max(p.wbRt, 1e-9) - 1) * 100, 1)}% vs target` : ""}</b></div>
                 {sol.throwArc > 0 && <div className="kv"><span>Coil span arc (throw {p.wbThrow} slots)</span><b>{dl9(sol.throwArc)}</b></div>}
-                <div className="kv"><span>Lay (square bundle)</span><b>{sol.tpl} turns/layer · {sol.layers} layers · {dl9(sol.build)} build</b></div>
+                <div className="kv"><span>Lay ({sol.perStrand ? "per-strand, wild hand wind" : "square bundle"})</span>
+                  <b>{sol.perStrand ? `${sol.tplW} wires/layer · ${sol.LwW} layers` : `${sol.tpl} turns/layer · ${sol.layers} layers`} · {dl9(sol.build)} build</b></div>
               </div>
-              {sol.Da < Math.max(sol.DaIns, sol.DaGeo) - 0.25 && <div className="warn">
-                Target resistance demands a smaller arbor than {sol.DaGeo > sol.DaIns ? "the stack + heads require" : "insertion allows"} —
-                the coil would be too short to reach around the stack. Fewer turns, finer wire, more strands,
-                or accept Ø{dl9(Math.max(sol.DaIns, sol.DaGeo))} and a higher L-L.</div>}
+              {sol.reachShort && <div className="warn">
+                Entered coil head {dl9(sol.Lhead)}/end is SHORTER than the throw-{p.wbThrow} span arc ({dl9(sol.spanArc)}) —
+                the head cannot reach the return slot, so this coil is unwindable as specified. Scheme auto suggests {dl9(sol.headAuto)}/end
+                (1.25×span); clear the override (0) to let throw drive the heads, arbor, and resistance.</div>}
+              {sol.RcT > 0 && sol.DaR > 0 && sol.Da > sol.DaR + 0.005 && <div className="warn">
+                Target R would allow Ø{dl9(sol.DaR)}, but {sol.DaGeo >= sol.DaIns ? "stack + heads need" : "insertion needs"} Ø{dl9(sol.Da)} —
+                the larger governs, and real R runs {fmt((sol.RllReal / Math.max(p.wbRt, 1e-9) - 1) * 100, 1)}% above target (row above).
+                Shorter heads / smaller throw, fewer turns, or finer wire recover the target.</div>}
+              <div className="note" style={{ marginTop: 4 }}>A coil-head override pins head length — throw then only sets the span drawing and the
+                reach check. With head = 0 (auto), throw drives the heads and therefore the solved arbor and real R.</div>
               <div className="note">Flange thickness and jumper allowance are estimated from the lamination and
                 winding scheme (same-phase coils land every Ns/coils slots — the jumper spans that arc at the
                 mean slot Ø, +25% lay slack); the L-L target converts through the connection and series string

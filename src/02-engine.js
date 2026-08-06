@@ -315,6 +315,10 @@ function solveBobbin(p) {
     ? 1.25 * (Math.max(p.wbThrow, 1) * Math.PI * dm) / Ns
     : p.toothW + 0.8 * Math.max(wmS, 0) + 3;
   const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto9.toFixed(1);
+  // reach check: a lap coil's head must traverse the throw span — an override shorter than the span
+  // arc is physically unwindable (the head can't reach the return slot), whatever R it implies
+  const spanArc9 = (p.wbStyle || "tooth") === "lap" ? (Math.max(p.wbThrow, 1) * Math.PI * dm) / Ns : 0;
+  const reachShort = p.wbHead > 0 && spanArc9 > 0 && p.wbHead < spanArc9;
   const perim = 2 * (Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1) + 2 * Lhead;
   const DaGeo = +((perim / Math.PI) - build).toFixed(2);             // arbor that yields exactly stack + heads
   let Da = Math.max(DaGeo, DaIns), RcT = 0, DaR = 0;
@@ -349,8 +353,12 @@ function solveBobbin(p) {
   const RphReal = nC * RcReal + kRw * Rjump;
   const RllReal = p.conn === "delta" ? (2 / 3) * RphReal : 2 * RphReal;
   const throwArc = p.wbStyle === "lap" ? +((Math.max(p.wbThrow, 1) * Math.PI * d1) / Ns).toFixed(1) : 0;
+  const perStrand9 = wild && st > 1;
+  const tplW9s = perStrand9 ? Math.max(Math.floor((0.98 * chW) / dIns), 1) : 0;
   return { Da, DaIns, DaGeo, DaR, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
-    jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal };
+    jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal,
+    spanArc: +spanArc9.toFixed(1), reachShort, headAuto: +headAuto9.toFixed(1),
+    perStrand: perStrand9, tplW: tplW9s, LwW: perStrand9 ? Math.ceil((N * st) / tplW9s) : 0 };
 }
 
 function computeBobbin(p) {
@@ -394,6 +402,9 @@ function computeBobbin(p) {
     ? 1.25 * (Math.max(p.wbThrow, 1) * Math.PI * dmH) / NsH          // diamond head over the throw arc
     : p.toothW + 0.8 * Math.max(wmH, 0) + 3;                        // around one tooth + bend radii
   const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto.toFixed(1);      // per end
+  const spanArcH = (p.wbStyle || "tooth") === "lap" ? (Math.max(p.wbThrow, 1) * Math.PI * dmH) / NsH : 0;
+  if (p.wbHead > 0 && spanArcH > 0 && p.wbHead < spanArcH)
+    w.push(`Entered coil head ${(p.wbHead).toFixed(1)} mm/end is SHORTER than the throw-${Math.max(p.wbThrow, 1)} span arc (${spanArcH.toFixed(1)} mm) — the head cannot reach the return slot; this coil is unwindable as specified. Scheme auto suggests ${headAuto.toFixed(1)} mm/end (1.25\u00d7span). Clear the override (0) for throw-driven heads.`);
   const LheadAuto = +headAuto.toFixed(1);
   const stk9 = Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1;
   const perim = 2 * stk9 + 2 * Lhead;                                // what the inserted coil must measure

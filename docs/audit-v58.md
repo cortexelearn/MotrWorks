@@ -220,3 +220,26 @@ v58.4 screenshot surfaced post-delivery. Contents relative to v58.4 (the last co
 - Golden/bob gate round-trip re-anchor (old anchor certified a physically impossible tool) + clamp assertions
 - Winding-arbor caption reflects the active lay model
 Deployment check: 12s8p design → Coil results "Lay" row reads "wires per layer · layers (per-strand) 10 · 9".
+
+---
+
+# v59.1 — throw/head precedence + reach check (2026-08-06)
+
+Post-v59 screenshots showed throw and 12" head edits not moving the solve. Fingerprint analysis
+(solved arbor 1.817" = the wild-BUNDLE build number, reproducible only by the pre-v58.5 engine;
+v59 gives 1.856" per-strand) proved the deployment was still serving the old file. But the test also
+exposed a real gap: with a coil-head OVERRIDE entered, throw legitimately cannot move the solve
+(the override pins head wire length; throw only redraws the span) — and nothing said so, nor flagged
+that a 0.60"/end head is physically unable to cross a throw-11 span of 3.74".
+
+- New reach check (solve + tool-known): lap head override shorter than the throw span arc →
+  "unwindable as specified" warning quoting the span and the 1.25×span auto suggestion. Note the
+  head field is WIRE LENGTH per end, not axial stick-out (bench 12s8p: real heads ≈1.18"/end of wire).
+- New governance warning replaces the v58-era dead one: when geometry/insertion out-governs the
+  target-R arbor, states both diameters and the real-R overshoot %.
+- Precedence note under the solve card: head=0 (auto) lets throw drive heads → arbor → real R
+  (throw 3/5/11 → 4.80/6.06/9.81 Ω on the 12s8p); an override pins heads and throw is drawing-only.
+- Solve card lay row now shows the per-strand lay when active (was mislabeled "square bundle").
+
+Deployment verification: v59.1 index.html is ~1,234 KB; Coil results "Lay" row must read
+"wires per layer · layers (per-strand)" on the 12s8p design.

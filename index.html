@@ -17913,6 +17913,10 @@ function solveBobbin(p) {
         ? 1.25 * (Math.max(p.wbThrow, 1) * Math.PI * dm) / Ns
         : p.toothW + 0.8 * Math.max(wmS, 0) + 3;
     const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto9.toFixed(1);
+    // reach check: a lap coil's head must traverse the throw span — an override shorter than the span
+    // arc is physically unwindable (the head can't reach the return slot), whatever R it implies
+    const spanArc9 = (p.wbStyle || "tooth") === "lap" ? (Math.max(p.wbThrow, 1) * Math.PI * dm) / Ns : 0;
+    const reachShort = p.wbHead > 0 && spanArc9 > 0 && p.wbHead < spanArc9;
     const perim = 2 * (Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1) + 2 * Lhead;
     const DaGeo = +((perim / Math.PI) - build).toFixed(2); // arbor that yields exactly stack + heads
     let Da = Math.max(DaGeo, DaIns), RcT = 0, DaR = 0;
@@ -17948,8 +17952,12 @@ function solveBobbin(p) {
     const RphReal = nC * RcReal + kRw * Rjump;
     const RllReal = p.conn === "delta" ? (2 / 3) * RphReal : 2 * RphReal;
     const throwArc = p.wbStyle === "lap" ? +((Math.max(p.wbThrow, 1) * Math.PI * d1) / Ns).toFixed(1) : 0;
+    const perStrand9 = wild && st > 1;
+    const tplW9s = perStrand9 ? Math.max(Math.floor((0.98 * chW) / dIns), 1) : 0;
     return { Da, DaIns, DaGeo, DaR, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
-        jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal };
+        jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal,
+        spanArc: +spanArc9.toFixed(1), reachShort, headAuto: +headAuto9.toFixed(1),
+        perStrand: perStrand9, tplW: tplW9s, LwW: perStrand9 ? Math.ceil((N * st) / tplW9s) : 0 };
 }
 function computeBobbin(p) {
     const w = [], err = [];
@@ -17995,6 +18003,9 @@ function computeBobbin(p) {
         ? 1.25 * (Math.max(p.wbThrow, 1) * Math.PI * dmH) / NsH // diamond head over the throw arc
         : p.toothW + 0.8 * Math.max(wmH, 0) + 3; // around one tooth + bend radii
     const Lhead = p.wbHead > 0 ? p.wbHead : +headAuto.toFixed(1); // per end
+    const spanArcH = (p.wbStyle || "tooth") === "lap" ? (Math.max(p.wbThrow, 1) * Math.PI * dmH) / NsH : 0;
+    if (p.wbHead > 0 && spanArcH > 0 && p.wbHead < spanArcH)
+        w.push(`Entered coil head ${(p.wbHead).toFixed(1)} mm/end is SHORTER than the throw-${Math.max(p.wbThrow, 1)} span arc (${spanArcH.toFixed(1)} mm) — the head cannot reach the return slot; this coil is unwindable as specified. Scheme auto suggests ${headAuto.toFixed(1)} mm/end (1.25\u00d7span). Clear the override (0) for throw-driven heads.`);
     const LheadAuto = +headAuto.toFixed(1);
     const stk9 = Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1;
     const perim = 2 * stk9 + 2 * Lhead; // what the inserted coil must measure
@@ -22983,20 +22994,36 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
                                 " slots)"),
                             React.createElement("b", null, dl9(sol.throwArc))),
                         React.createElement("div", { className: "kv" },
-                            React.createElement("span", null, "Lay (square bundle)"),
+                            React.createElement("span", null,
+                                "Lay (",
+                                sol.perStrand ? "per-strand, wild hand wind" : "square bundle",
+                                ")"),
                             React.createElement("b", null,
-                                sol.tpl,
-                                " turns/layer \u00B7 ",
-                                sol.layers,
-                                " layers \u00B7 ",
+                                sol.perStrand ? `${sol.tplW} wires/layer · ${sol.LwW} layers` : `${sol.tpl} turns/layer · ${sol.layers} layers`,
+                                " \u00B7 ",
                                 dl9(sol.build),
                                 " build"))),
-                    sol.Da < Math.max(sol.DaIns, sol.DaGeo) - 0.25 && React.createElement("div", { className: "warn" },
-                        "Target resistance demands a smaller arbor than ",
-                        sol.DaGeo > sol.DaIns ? "the stack + heads require" : "insertion allows",
-                        " \u2014 the coil would be too short to reach around the stack. Fewer turns, finer wire, more strands, or accept \u00D8",
-                        dl9(Math.max(sol.DaIns, sol.DaGeo)),
-                        " and a higher L-L."),
+                    sol.reachShort && React.createElement("div", { className: "warn" },
+                        "Entered coil head ",
+                        dl9(sol.Lhead),
+                        "/end is SHORTER than the throw-",
+                        p.wbThrow,
+                        " span arc (",
+                        dl9(sol.spanArc),
+                        ") \u2014 the head cannot reach the return slot, so this coil is unwindable as specified. Scheme auto suggests ",
+                        dl9(sol.headAuto),
+                        "/end (1.25\u00D7span); clear the override (0) to let throw drive the heads, arbor, and resistance."),
+                    sol.RcT > 0 && sol.DaR > 0 && sol.Da > sol.DaR + 0.005 && React.createElement("div", { className: "warn" },
+                        "Target R would allow \u00D8",
+                        dl9(sol.DaR),
+                        ", but ",
+                        sol.DaGeo >= sol.DaIns ? "stack + heads need" : "insertion needs",
+                        " \u00D8",
+                        dl9(sol.Da),
+                        " \u2014 the larger governs, and real R runs ",
+                        fmt((sol.RllReal / Math.max(p.wbRt, 1e-9) - 1) * 100, 1),
+                        "% above target (row above). Shorter heads / smaller throw, fewer turns, or finer wire recover the target."),
+                    React.createElement("div", { className: "note", style: { marginTop: 4 } }, "A coil-head override pins head length \u2014 throw then only sets the span drawing and the reach check. With head = 0 (auto), throw drives the heads and therefore the solved arbor and real R."),
                     React.createElement("div", { className: "note" }, "Flange thickness and jumper allowance are estimated from the lamination and winding scheme (same-phase coils land every Ns/coils slots \u2014 the jumper spans that arc at the mean slot \u00D8, +25% lay slack); the L-L target converts through the connection and series string with jumper copper deducted."))) : (React.createElement(React.Fragment, null,
                     React.createElement(Num, { label: "Arbor \u00D8 (winding surface)", unit: "mm", v: p.wbArborD, set: s("wbArborD"), step: 0.5, min: 1 }),
                     React.createElement(Num, { label: "Channel width", unit: "mm", v: p.wbChanW, set: s("wbChanW"), step: 0.5, min: 0.5 }),
