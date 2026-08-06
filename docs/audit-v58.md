@@ -207,3 +207,16 @@ New inputs: measured string R (Ω) + copper temp (`wbMR`, `wbMRTemp`). Derived w
 kRw = measured/predicted (×0.9869 on the bench stick) is shown, compensates the R rows, and scales
 the Coil-spec solve so target-R arbors track actual shop coils (lower-R winds → larger solved arbor).
 Factors beyond ±10% flag a probable units/temperature mismatch.
+
+---
+
+# v59 — release roll-up (2026-08-06)
+
+Identical physics to v58.5 as delivered; re-versioned so the deployed artifact is unambiguous after a
+v58.4 screenshot surfaced post-delivery. Contents relative to v58.4 (the last confirmed deployment):
+- Bobbin solve-mode arbor governance fix (target R = starting point; heads/throw move real R, reported)
+- Wild multi-strand per-strand lay model (bench-validated on the 4-coil stick, +1.3% vs measured)
+- Bobbin bench-calibration card (wbMR/wbMRTemp → wind factor, compensates R rows, scales the solve)
+- Golden/bob gate round-trip re-anchor (old anchor certified a physically impossible tool) + clamp assertions
+- Winding-arbor caption reflects the active lay model
+Deployment check: 12s8p design → Coil results "Lay" row reads "wires per layer · layers (per-strand) 10 · 9".

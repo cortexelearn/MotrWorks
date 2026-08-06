@@ -560,8 +560,9 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
           </div>
           <ArborView p={pEff} b={b} us={us} />
           <div className="note">
-            Sequential channels, one coil each. Copper drawn at the nested build; the strand bundle is treated
-            as an effective Ø of wire × √strands — a lay-dependent first-order figure. Tool length includes a
+            Sequential channels, one coil each. Copper drawn at the nested build; {b.perStrand
+              ? "wild multi-strand is modeled per-strand (hand-fed wires settle individually, bench-validated) rather than as round bundles"
+              : "the strand bundle is treated as an effective Ø of wire × √strands — a lay-dependent first-order figure"}. Tool length includes a
             flange between and outside every channel.
           </div>
         </div>
