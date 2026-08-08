@@ -53,8 +53,8 @@ Tabs: BLDC · Brushed · LATM · Step · ACIM · Brake · Actuator · Winding.
   still branded "MotrSynth"). Not built, not tested, not loaded. Do not edit it and do not read it
   as current behavior. Removal is a housekeeping decision for the owner, not a side effect.
 
-Build byproducts `_appsrc.tsx` / `_appsrc.js` are written to the repo root and are untracked;
-there is no `.gitignore`. Do not commit them.
+Build byproducts `_appsrc.tsx` / `_appsrc.js` are written to the repo root by `build.py` and are
+covered by `.gitignore`. Do not commit them.
 
 ## Build
 
@@ -96,8 +96,14 @@ Run from the repo root:
 `brk-tune3.mjs` and `brk-render.mjs` are tuning/rendering utilities, not gates. There is no CI —
 no `.github/` workflows exist. Gates are run by hand.
 
-**Before release:** rebuild, regenerate the concat file, run all 14 compute gates and all 6 e2e
-tests green, then commit `src/` + `index.html` + `src/motor-designer.concat.jsx` together.
+**Before release:** rebuild, regenerate the concat file, then run all 14 compute gates and all 6
+e2e tests. **The full 20-test suite passes on `main` as of the v59.2 baseline — treat any failure
+as a real regression, not as expected noise.** Commit `src/` + `index.html` +
+`src/motor-designer.concat.jsx` together.
+
+One known cosmetic wart: `wind-gate.mjs` prints `default SSR: <n> (changed — check)` because it
+compares against an older hardcoded baseline. It still exits 0. Do not "fix" it by re-anchoring
+unless you have a reason to touch that gate.
 
 ## Deployment
 

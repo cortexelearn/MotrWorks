@@ -25,11 +25,11 @@ let ok = opts.length > 0 && opts.every(o => !/Brushed|LATM|ACIM|induction/i.test
 console.log(`BLDC presets: ${opts.length} listed · pm-only: ${ok ? '✓' : '✗ ' + opts.join(' | ')}`);
 if (!ok) process.exitCode = 1;
 
-// Brushed
+// Brushed — count re-anchored to 7 at v58.1 (PM 8->13, brushed 4->7); filtering test unchanged
 await clickSeg('Brushed'); await page.waitForTimeout(200); await openPresets();
 opts = await presetOpts();
-ok = opts.length === 4 && opts.every(o => o.startsWith('Brushed'));
-console.log(`Brushed presets: ${opts.length} listed (expect 4, all Brushed): ${ok ? '✓' : '✗ ' + opts.join(' | ')}`);
+ok = opts.length === 7 && opts.every(o => o.startsWith('Brushed'));
+console.log(`Brushed presets: ${opts.length} listed (expect 7, all Brushed): ${ok ? '✓' : '✗ ' + opts.join(' | ')}`);
 if (!ok) process.exitCode = 1;
 
 // LATM: default auto-load + 3 presets

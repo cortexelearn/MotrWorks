@@ -1,0 +1,3 @@
+# build.py transpile byproducts (written to the repo root, never shipped)
+_appsrc.tsx
+_appsrc.js
