@@ -1398,7 +1398,25 @@ function computeDesign(p) {
     return (1 - efFe) * Math.pow(b, 1.8) * (fe / 60) + efFe * b * b * Math.pow(fe / 60, 2);
   };
   const Pfe = latmE || brkE ? 0 : (mYoke * feTerm(By) + mTeeth * feTerm(Bt)) * stM.w;
-  const eta = Pout > 0 ? Pout / (Pout + Pcu + Pfe) : 0;
+
+  // ---- AC copper (skin/proximity) and windage at the rated point ----
+  // (moved above eta in v59.6 — both were computed and returned but never entered the
+  // loss chain, so efficiency ignored high-frequency copper and air drag it already knew)
+  const feOp = op && p.motorType === "pm" ? (op.n * poles) / 120 : p.freq;
+  let acFr = 1;
+  if (feOp > 0 && dBare > 0) {
+    const delta = Math.sqrt(RHO_CU / (Math.PI * feOp * 4e-7 * Math.PI)) * 1000; // skin depth, mm
+    const xi = dBare / delta;
+    const NlL = Math.ceil(Math.sqrt(Math.max(condPerSlot, 1)));
+    acFr = Math.min(1 + ((5 * NlL * NlL - 1) / 45) * Math.pow(xi, 4), 4);
+  }
+  const Pwind = op ? 0.01 * Math.PI * 1.2 * Math.pow((op.n * 2 * Math.PI) / 60, 3) * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000) : 0;
+
+  // efficiency with the full loss set: DC copper scaled by the Dowell AC factor at the
+  // operating electrical frequency, iron, and windage (rotating machines only — the
+  // brake's "loss" is its hold power and LATM stall duty has no Pout)
+  const acF9 = latmE || brkE ? 1 : acFr;
+  const eta = Pout > 0 ? Pout / (Pout + Pcu * acF9 + Pfe + Pwind) : 0;
 
   // ---- backdriven BEMF waveform (PM): harmonic synthesis from pole-arc flux + per-harmonic winding factors ----
   let bemf = null;
@@ -1487,16 +1505,7 @@ function computeDesign(p) {
   if (p.motorType === "induction" && Eph > Vph) w.push("Back-EMF exceeds supply phase voltage — lower turns, B̂g, or frequency.");
   if (q < 0.25) w.push("Slots per pole per phase is very low (q = " + q.toFixed(2) + ").");
 
-  // ---- AC copper (skin/proximity) and windage at the rated point ----
-  const feOp = op && p.motorType === "pm" ? (op.n * poles) / 120 : p.freq;
-  let acFr = 1;
-  if (feOp > 0 && dBare > 0) {
-    const delta = Math.sqrt(RHO_CU / (Math.PI * feOp * 4e-7 * Math.PI)) * 1000; // skin depth, mm
-    const xi = dBare / delta;
-    const NlL = Math.ceil(Math.sqrt(Math.max(condPerSlot, 1)));
-    acFr = Math.min(1 + ((5 * NlL * NlL - 1) / 45) * Math.pow(xi, 4), 4);
-  }
-  const Pwind = op ? 0.01 * Math.PI * 1.2 * Math.pow((op.n * 2 * Math.PI) / 60, 3) * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000) : 0;
+  // (acFr / Pwind moved above eta — see the loss chain before the BEMF section)
 
   // ---- lumped thermal: Cu -> lamination -> housing -> ambient, steady state + periodic duty ----
   // duty model: square-wave power, housing node averages (valid for cycle « machine tau),
@@ -1582,24 +1591,45 @@ function computeDesign(p) {
     }
     therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   } else {
+    // v59.6: heat input now matches the Pcu discrimination above — this branch used the
+    // 3-phase winding model (3·Iph²·Rphase) for EVERY machine that landed here, including
+    // the 2-phase stepper (which holds 1–2 phases at Imax through its own Rs, a different
+    // winding with a different MLT) and the brake (whose loss is the released coil's
+    // hold power at the economizer voltage, self-limiting as the coil heats).
+    const RextO = Math.max(p.Rext, 0) / 1000;
+    const stpTh = stpE && step, brkTh = brkE && brake;
+    const tcoF = 1 + 0.00393 * (p.Tcu - 20);
+    const kPh = stpTh ? (step.on2 ? 2 : 1) : brkTh ? 1 : 3;      // energized circuits
+    const phN = stpTh ? 2 : brkTh ? 1 : 3;                       // circuits carrying copper mass
+    const R20a = stpTh ? Math.max((step.Rs - RextO) / tcoF, 1e-6)
+      : brkTh ? Math.max((brake.Rb - RextO) / tcoF, 1e-6)
+      : Rphase;
+    const IofT = (Rh9) => brkTh ? (brake.eco * p.Vdc) / Math.max(Rh9, 1e-6)
+      : stpTh ? Math.max(p.Imax, 0) : Iph;
     let Tc = p.Tamb + 40;
     for (let it3 = 0; it3 < 10; it3++) {
-      const Rh3 = Rphase * (1 + 0.00393 * (Tc - 20)) + Math.max(p.Rext, 0) / 1000;
-      const Pc3 = 3 * Iph * Iph * Rh3;
+      const Rh3 = R20a * (1 + 0.00393 * (Tc - 20)) + RextO;
+      const I3 = IofT(Rh3);
+      const Pc3 = kPh * I3 * I3 * Rh3;
       Tc = p.Tamb + Pc3 * (RthCu + RthOut) + Pfe * RthOut;
     }
-    const RhMax = Rphase * (1 + 0.00393 * (p.TcuMax - 20)) + Math.max(p.Rext, 0) / 1000;
+    const RhMax = R20a * (1 + 0.00393 * (p.TcuMax - 20)) + RextO;
     const PcuAllow = Math.max((p.TcuMax - p.Tamb - Pfe * RthOut) / (RthCu + RthOut), 0);
-    const Icont = Math.sqrt(PcuAllow / (3 * Math.max(RhMax, 1e-6)));
-    const mCu = 8960 * 3 * MLT * coilsPerPhase * Math.max(p.turns, 1) * Math.max(p.strands, 1) * aBare * 1e-6;
+    const Icont = Math.sqrt(PcuAllow / (kPh * Math.max(RhMax, 1e-6)));
+    // copper mass: brake from its actual wire length; stepper first-order on the shared
+    // MLT (its true MLTs is branch-local) — mass only shapes the duty transient, not steady state
+    const mCu = brkTh
+      ? 8960 * brake.wireLen * Math.max(p.strands, 1) * aBare * 1e-6
+      : 8960 * phN * MLT * coilsPerPhase * Math.max(p.turns, 1) * Math.max(p.strands, 1) * aBare * 1e-6;
     const tauW = mCu * CP_CU * RthCu, tauM = (mCu * CP_CU + coreMass * CP_FE) * RthOut;
     let TcuDuty = null;
     if (duty9 < 1) {
       const pf = pulseF(tauW);
       let Td = p.Tamb + 30;
       for (let it4 = 0; it4 < 8; it4++) {
-        const Rh4 = Rphase * (1 + 0.00393 * (Td - 20)) + Math.max(p.Rext, 0) / 1000;
-        const Pc4 = 3 * Iph * Iph * Rh4;
+        const Rh4 = R20a * (1 + 0.00393 * (Td - 20)) + RextO;
+        const I4 = IofT(Rh4);
+        const Pc4 = kPh * I4 * I4 * Rh4;
         Td = p.Tamb + (Pc4 + Pfe) * duty9 * RthOut + Pc4 * RthCu * pf;
       }
       TcuDuty = Td;

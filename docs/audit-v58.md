@@ -361,3 +361,35 @@ are bench-measured; replace with catalog rows when a target unit is chosen.
 Gate/test bookkeeping in the same commit: brk-preset-gate expects 5 presets and carries the
 270 V unit's computed baseline bands; the three e2e preset-count assertions (stepper 6,
 LATM 4, brake 5) updated. CLAUDE.md preset count 33 → 38. Full suite green.
+
+---
+
+# v59.6 — losses the model already knew, now in the chain (2026-08-13)
+
+Two physics refinements from the engine audit, both chosen because they are pure corrections
+to the existing loss bookkeeping and move NO golden-gate anchor (Kt/noLoad/Rll/peakT are all
+upstream of them). Suite green before and after.
+
+- **AC copper factor and windage now enter efficiency.** `acFr` (a proper Dowell-style
+  skin/proximity factor) and `Pwind` were computed and returned but never used — eta was
+  Pout/(Pout+Pcu+Pfe) with DC copper only. The block moved above the loss summation and
+  eta is now Pout/(Pout + Pcu·acFr + Pfe + Pwind). Effect at the presets: NEMA 17 BLDC
+  eta 81.1% (acFr 1.013), 4" high-temp 94.0% — sub-1% shifts at these frequencies,
+  honest divergence at 400 Hz+ designs.
+- **The generic thermal branch now heats each machine with its own copper.** It applied
+  the 3-phase model (3·Iph²·Rphase) to everything that reached it — including the 2-phase
+  stepper (real hold: 1–2 phases at Imax through its own Rs, temperature-iterated) and
+  the brake (real loss: the released coil at economizer voltage, self-limiting hot).
+  Stepper thermals moved substantially: NEMA 17 1.8° held-on 90 °C, NEMA 34 98 °C —
+  numbers a stepper datasheet would recognize. Brake copper mass now from its actual
+  wire length. Tcont was already un-anchored; no gate carries these values.
+- **Consequence caught by the corrected model:** the v59.5 0.9° NEMA 23 preset's scaled
+  winding (31t AWG 25, Rs 3.9 Ω) would have held 157 °C at its 2.8 A rating — physically
+  inconsistent with the current class. Rewound 20t AWG 23 (Rs 1.58 Ω hot): 70 °C held-on,
+  Kt 0.583, holding 2.31 N·m, squarely in the 23HM 0.9° catalog band. The wrong-model
+  version had looked fine — this is exactly why the thermal fix matters.
+
+Deliberately NOT done tonight (each moves anchors and deserves owner sign-off; see the
+engine-audit list): computed magnet leakage in place of the fixed 0.9, Carter's coefficient
+for the stepper/cogging gaps, brushed saturation iteration, ACIM deep-bar + real X2,
+drag-corrected PM no-load intercept, two-harmonic stepper permeance model.

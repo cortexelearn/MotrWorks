@@ -191,7 +191,7 @@ const PRESETS = {
   'NEMA 23 · 0.9° hybrid · bipolar': {
     slots: 8, poles: 2, statorOD: 55, statorID: 39, rotorOD: 38.9, yoke: 3.6, toothW: 5.5,
     slotOpen: 2.2, tipH: 1, stackL: 45, liner: 0.25, slotR: 0.3, shaftD: 6.35,
-    pattern: "concentrated", layers: 2, span: 0, turns: 31, awg: 25, strands: 1, paths: 1, conn: "wye",
+    pattern: "concentrated", layers: 2, span: 0, turns: 20, awg: 23, strands: 1, paths: 1, conn: "wye",
     motorType: "stepper", stpKind: "hybrid", stpNr: 100, stpWire: "bip-ser", stpOn: 2,
     mag: "N35", magT: 3, poleArc: 85, Top: 60, Vdc: 24, Imax: 2.8, freq: 100, J: 6,
     seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
