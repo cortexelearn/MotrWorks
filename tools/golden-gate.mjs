@@ -34,7 +34,11 @@ const GOLD = [
   { preset: 'NEMA 17 · 28 V · ~6 krpm',                 checks: { Kt: 0.050883, noLoad: 6435.9, Rll: 0.38536, peakT: 0.30530 } },
   { preset: 'NEMA 23 · 28 V · ~3 krpm torquer',         checks: { Kt: 0.09901, noLoad: 3307.5, Rll: 0.23494 } },
   { preset: '4" direct-drive · 270 V · ~2.5 krpm',      checks: { Kt: 1.1303, noLoad: 2793.8, Rll: 2.1243 } },
-  { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.014681, noLoad: 7025.1, Rll: 1.0409 } },
+  // v59.9 re-anchor — drag-corrected no-load: the model's own iron + windage torque is now
+  // subtracted from the curve, so no-load sits where EM torque just covers drag instead of
+  // the pure V/Ke intercept. Ferrite 2-pole at 7 krpm: 7025.1 -> 6937.3 (-1.25%). The PM
+  // rows moved less than the 91-point curve grid and keep their anchors.
+  { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.014681, noLoad: 6937.3, Rll: 1.0409 } },
   { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 4.2091 } },
   { preset: 'NEMA 17 · 1.8° hybrid · bipolar',          checks: { Kt: 0.22844, Rll: 3.075, peakT: 0.48458 } },
   { preset: 'Brake 24 V · 60 mm · spring-applied',      checks: { Rll: 142.92, peakT: 3.6 } },

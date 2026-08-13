@@ -1436,10 +1436,11 @@ function computeDesign(p) {
   // eddy fraction at the 1.5 T / 60 Hz calibration point (thin CoFe low, solid steel high).
   // Reduces exactly to mass·w at 60 Hz / 1.5 T, diverges correctly at 400 Hz+ electrical.
   const efFe = Number.isFinite(stM.ef) ? stM.ef : 0.30;
-  const feTerm = (B) => {
+  const feTermF = (B, f9) => {
     const b = Math.min(B, 2.4) / 1.5;
-    return (1 - efFe) * Math.pow(b, 1.8) * (fe / 60) + efFe * b * b * Math.pow(fe / 60, 2);
+    return (1 - efFe) * Math.pow(b, 1.8) * (f9 / 60) + efFe * b * b * Math.pow(f9 / 60, 2);
   };
+  const feTerm = (B) => feTermF(B, fe);
   const Pfe = latmE || brkE ? 0 : (mYoke * feTerm(By) + mTeeth * feTerm(Bt)) * stM.w;
 
   // ---- AC copper (skin/proximity) and windage at the rated point ----
@@ -1455,11 +1456,34 @@ function computeDesign(p) {
   }
   const Pwind = op ? 0.01 * Math.PI * 1.2 * Math.pow((op.n * 2 * Math.PI) / 60, 3) * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000) : 0;
 
-  // efficiency with the full loss set: DC copper scaled by the Dowell AC factor at the
-  // operating electrical frequency, iron, and windage (rotating machines only — the
-  // brake's "loss" is its hold power and LATM stall duty has no Pout)
+  // v59.9: drag-corrected curve and no-load (PM + brushed) — the pure V/Ke intercept
+  // ignores the iron and windage the model itself computes. Subtract the model's own
+  // drag torque (Pfe(n)+Pwind(n))/ω from the curve; the no-load point moves to where
+  // electromagnetic torque only just covers drag. Pure power balance, no new empirics.
+  // Skipped when a bench drag calibration (cTd) is active — the measured drag already
+  // contains iron + windage, and applying both would double-count.
+  if ((p.motorType === "pm" || brushedM) && !(calAct && cTd > 0) && curve.length > 1 && noLoad > 0) {
+    const TdragAt = (n9) => {
+      if (!(n9 > 1)) return 0;
+      const w9 = (n9 * 2 * Math.PI) / 60;
+      const fe9 = (n9 * poles) / 120;
+      const Pfe9 = (mYoke * feTermF(By, fe9) + mTeeth * feTermF(Bt, fe9)) * stM.w;
+      const Pw9 = 0.01 * Math.PI * 1.2 * Math.pow(w9, 3) * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000);
+      return (Pfe9 + Pw9) / w9;
+    };
+    curve = curve.map((c9) => ({ ...c9, T: Math.max(c9.T - TdragAt(c9.n), 0) }));
+    let nz9 = 0;
+    for (const c9 of curve) if (c9.T > 0) nz9 = Math.max(nz9, c9.n);
+    if (nz9 > 0) noLoad = Math.min(noLoad, nz9);
+    if (op) op = { ...op, T: Math.max(op.T - TdragAt(op.n), 0) };
+    // stall drag is zero, so peakT is untouched by construction
+  }
+
+  // efficiency with the full loss set: NET shaft power over input power — op.T is now
+  // net of iron/windage drag, so Pin = PoutN + Pfe + Pwind + Pcu·acFr counts each loss once
   const acF9 = latmE || brkE ? 1 : acFr;
-  const eta = Pout > 0 ? Pout / (Pout + Pcu * acF9 + Pfe + Pwind) : 0;
+  const PoutN = (op ? op.T : 0) * wShaft;
+  const eta = PoutN > 0 ? PoutN / (PoutN + Pcu * acF9 + Pfe + Pwind) : 0;
 
   // ---- backdriven BEMF waveform (PM): harmonic synthesis from pole-arc flux + per-harmonic winding factors ----
   let bemf = null;
@@ -1691,7 +1715,7 @@ function computeDesign(p) {
     dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve,
     skewDeg, ksk, skewSlant, skewArc,
     Nser, MLT, Rphase, Rll, Iph, Iline: IlineOut, Istall, Vph, Arms,
-    Trated, nSync, nShaft, Pout, Pcu, eta, Eph, Ke, Kt, VphAvail,
+    Trated, nSync, nShaft, Pout: PoutN, Pcu, eta, Eph, Ke, Kt, VphAvail,
     rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
     mag, BrT, HcJT, HcJmin, demagT, kcGap, BgAvg, B1, BgEff, Hdemag, demagMargin,
     cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,

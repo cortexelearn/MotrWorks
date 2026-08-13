@@ -451,3 +451,27 @@ multiplicative on model output, so any model refinement shifts the *implied* fac
 captured before v59.8 remain valid as measurements; re-derive kKe/kKt against the current
 model before using them to judge model error — especially the LATM set, whose baseline
 moved +4.1% here. Full suite green (14 gates + 6 e2e).
+
+---
+
+# v59.9 — no-load where drag says it is (2026-08-13)
+
+Second anchor-moving refinement. The PM/brushed no-load point was the pure V/Ke intercept —
+zero-loss physics from a model that computes its own iron and windage losses two hundred
+lines later. Now the model's drag torque (Pfe(n) + Pwind(n))/ω is subtracted from the whole
+torque-speed curve (frequency-resolved Steinmetz via the new feTermF(B, f)), so no-load sits
+where electromagnetic torque just covers drag, the rated point is net shaft torque, and
+efficiency is Pout_net/Pin with each loss counted exactly once (the old eta divided gross
+torque by gross-plus-losses — a subtle double standard). Pure power balance, no new
+empirics. Skipped whenever a bench drag calibration (cTd) is active, since measured drag
+already contains iron + windage and applying both would double-count.
+
+Anchors: brushed 12 V ferrite 7 krpm noLoad 7025.1 → 6937.3 (−1.25% — a ferrite 2-pole at
+7 krpm carries real iron drag). The three PM rows moved less than the 91-point curve grid
+and keep their anchors; stall peakT is untouched by construction (drag → 0 at stall).
+
+Recorded for the owner while re-anchoring: the NEMA 23 torquer row has computed
+Kt 0.098617 / noLoad 3320.6 vs its written anchors 0.09901 / 3307.5 (±0.4%, inside the
+band) since BEFORE this branch — verified by probing the v59.2 baseline build. A pre-v59.2
+intentional change evidently moved it without re-anchoring. Left as-is deliberately; worth
+folding into the next re-anchor pass or checking against the bench set.
