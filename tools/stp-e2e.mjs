@@ -1,10 +1,11 @@
 import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
 const require = createRequire('/home/claude/.npm-global/lib/node_modules/playwright/');
 const { chromium } = require('playwright');
 const browser = await chromium.launch();
 const page = await browser.newPage();
 page.on('pageerror', e => { console.log('PAGE ERROR:', e.message); process.exitCode = 1; });
-await page.goto('file:///home/claude/motrsynth/index.html');
+await page.goto(pathToFileURL('index.html').href); // repo-root index.html, portable across platforms
 await page.waitForSelector('header.hd', { timeout: 15000 });
 
 const clickSeg = (label) => page.evaluate((lbl) => {

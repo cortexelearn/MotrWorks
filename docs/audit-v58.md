@@ -261,3 +261,39 @@ Real R verified monotone in throw across 1–16. Heads above the floor are respe
 
 Governance transparency: new "Arbor candidates — target R · geometry · insertion" row shows all
 three diameters with the governor underlined, so which constraint is binding is visible at a glance.
+
+---
+
+# v59.3 — actuator drawings: one axial truth + the buried internals (2026-08-13)
+
+Actuator-tab drawing pass, driven by a full-view audit. The headline find: the composite outline
+has ALWAYS drawn its gearhead as an empty box — the per-stage cutaway internals were painted
+first and the opaque housing rect after, burying them. Housing (and ring band) now paint before
+the shafts and internals. Related honesty fixes, all from data already in props:
+
+- New shared `gearAxial(gt, gLen)` partition (04-views): output bearing block, then one slot per
+  stage weighted by that stage's synthesized need (kF·face + 3.7 mm carrier/web — the same weights
+  `gearheadAutoLen` uses). GearheadSection internals + dimension brackets, ActuatorOutline
+  internals + housing grooves, and ActuatorIso grooves all draw from it, so the external stage
+  dividers now land exactly on the internal gear sets (they previously used an unrelated
+  0.22/0.78 length split) and per-stage slots are no longer uniform.
+- Through-shaft fixed in both section views: the output shaft now stops in the output stage's
+  carrier and the motor shaft at the input-stage sun — a multi-stage train has no through shaft.
+- Stepper motor sources render as steppers in the outline (stator + two toothed rotor cups with
+  the axial magnet for hybrids, PM ring for can-stack) and are labeled "hybrid/PM stepper" —
+  previously they drew and were labeled as BLDC.
+- The outline's brake is a real pot-core half-section from the Brake tab's own dimensions
+  (rim/boss/web backiron, coil in its pocket, springs on the spring circle, annular armature,
+  lined disc per 1/2-face architecture, hub) instead of three generic rectangles.
+- GearheadSection stage brackets stagger on two rows (proportional slots could collide);
+  its caption and the iso's overflow-prone caption are each split into two lines.
+- ActuatorView now computes `designGearTrain`/`actEnvelope` once (was twice per render, one
+  memoized and one not) and passes the train to the iso for the groove positions.
+
+Toolchain portability (CB_Tower/Windows dev): `build.py` IO is explicit UTF-8/LF (Windows
+defaults would mojibake the source and CRLF-corrupt the /*APP*/ markers) and pins
+`--alwaysStrict` so the emit keeps its `"use strict";` prologue across tsc versions —
+byte-identical rebuild verified against the committed artifact before any source change.
+The six e2e scripts take their file:// URL from `pathToFileURL('index.html')` (cwd = repo
+root, per the run instructions) instead of the hardcoded /home/claude path. Full suite
+(14 compute gates + 6 e2e) verified green on Windows before and after this change.

@@ -3612,6 +3612,28 @@ function actEnvelope(motorP, brakeP, act, withBrk, gbOD, gbLen) {
   return { modOD, stk, ovh, Lm, gOD, Lg, hasB, bOD, Lb, shD, oShD, Ltot: Lg + Lm + Lb };
 }
 
+/* axial partition of the gearhead (mm): output bearing block first, then one slot per
+   stage sized in proportion to that stage's synthesized need (kF·face + carrier/web —
+   the same weights gearheadAutoLen builds the auto length from). The section views,
+   the outline/iso stage grooves, and the dimension brackets all draw from THIS, so the
+   external dividers always land on the internal gear sets. slots[i] is stage i+1's
+   axial length; xs[i] is its output-side edge measured from the output face (stage 1
+   sits nearest the motor). Harmonic units are one component set: slots = [usable]. */
+function gearAxial(gt, gLen) {
+  const brgL = (gt.brgF || 0.22) * gt.gOD;
+  const usable = Math.max(gLen - brgL, 2);
+  if (!gt.stages.length || gt.stages[0].harmonic) return { brgL, slots: [usable], xs: [brgL] };
+  const kF = gt.stages[0].Z1 ? 1.35 : 1.5;
+  const wts = Array.from({ length: gt.st }, (_, i9) => {
+    const s9 = gt.stages[Math.min(i9, gt.stages.length - 1)];
+    return kF * Math.max(s9.F || 1, 1) + 3.7;
+  });
+  const sum = wts.reduce((a9, b9) => a9 + b9, 0);
+  const slots = wts.map((w9) => (usable * w9) / sum);
+  const xs = slots.map((_, i9) => brgL + slots.slice(i9 + 1).reduce((a9, b9) => a9 + b9, 0));
+  return { brgL, slots, xs };
+}
+
 const ISO_FINISHES = {
   "Polished steel":   { h: ["#F5F8FB", "#C6D0DB", "#57636F"], sp: 0.34 },
   "Matte steel":      { h: ["#DDE3EA", "#AEB9C5", "#66707C"], sp: 0.10 },
@@ -3686,7 +3708,8 @@ function GearheadSection({ gt, brg, mnt, oShD, us }) {
   const k = Math.min((W - 120) / gLen, (H - 118) / gOD);
   const x0 = 58, yC = 108;                                        // output face at x0, motor to the right
   const R = (d9) => (d9 / 2) * k;
-  const brgL = (gt.brgF || 0.22) * gOD, slotL = Math.max((gLen - brgL) / gt.st, 2);
+  const ax = gearAxial(gt, gLen);
+  const brgL = ax.brgL;
   const s1 = gt.stages[0];
   const planetary = !!s1.Zr;
   const ringOut = planetary ? R(s1.PDr) + 2.5 * s1.m * k : R(gOD) - 5;
@@ -3702,12 +3725,14 @@ function GearheadSection({ gt, brg, mnt, oShD, us }) {
   // output face plate
   const faceT = Math.max(0.07 * gOD, 2) * k;
   els.push(<rect key="fp" x={x0 - faceT} y={yC - R(gOD)} width={faceT} height={2 * R(gOD)} fill="#C2CAD4" stroke="#334155" strokeWidth="1" />);
-  // through shaft line
-  els.push(<rect key="sh" x={x0 - faceT} y={yC - R(oShD)} width={gLen * k + faceT} height={2 * R(oShD)} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" opacity="0.55" />);
-  // stages: stage 1 nearest the MOTOR (right)
+  // output shaft: through the bearing block into the output stage's carrier —
+  // it does NOT run the length of the train (each stage has its own sun)
+  const shL9 = brgL + (s1.harmonic ? 2 : (ax.slots[gt.st - 1] || 2) * 0.55);
+  els.push(<rect key="sh" x={x0 - faceT} y={yC - R(oShD)} width={shL9 * k + faceT} height={2 * R(oShD)} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" opacity="0.55" />);
+  // stages: stage 1 nearest the MOTOR (right), each in its own proportional slot
   for (let i9 = 0; i9 < gt.st; i9++) {
     const s9 = gt.stages[Math.min(i9, gt.stages.length - 1)];
-    const xs = brgL + (gt.st - 1 - i9) * slotL;
+    const xs = ax.xs[i9], slotL = ax.slots[i9];
     const F9 = Math.min(s9.F || slotL * 0.6, slotL * 0.72);
     const xg = x0 + (xs + (slotL - F9) / 2) * k, wg = F9 * k;
     if (planetary) {
@@ -3785,9 +3810,11 @@ function GearheadSection({ gt, brg, mnt, oShD, us }) {
     }
     els.push(<text key="tl" x={x0 - faceT - 3} y={yC - R(bcd) - 7} textAnchor="start" className="dim">{`${nB}\u00d7 ${m9.thread} ${aft ? 'aft' : 'fwd'} \u2913 ${dl(1.5 * holeD)} deep`}</text>);
   }
-  // dimension brackets: bearing block + each stage slot
-  const yD = yC + R(gOD) + 22;
-  const dim9 = (xa, L9, lab, key) => {
+  // dimension brackets: bearing block + each stage slot, on alternating rows so
+  // narrow proportional slots can't overlap their neighbours' labels
+  const yD0 = yC + R(gOD) + 22;
+  const dim9 = (xa, L9, lab, key, row9) => {
+    const yD = yD0 + (row9 || 0) * 13;
     els.push(<g key={key}>
       <line x1={x0 + xa * k} y1={yD} x2={x0 + (xa + L9) * k} y2={yD} stroke="#64748B" strokeWidth="0.8" />
       <line x1={x0 + xa * k} y1={yD - 3} x2={x0 + xa * k} y2={yD + 3} stroke="#64748B" strokeWidth="0.8" />
@@ -3795,9 +3822,9 @@ function GearheadSection({ gt, brg, mnt, oShD, us }) {
       <text x={x0 + (xa + L9 / 2) * k} y={yD - 4} textAnchor="middle" className="dim">{lab}</text>
     </g>);
   };
-  dim9(0, brgL, `brg ${dl(brgL)}`, 'db');
-  if (s1.harmonic) dim9(brgL, Math.max(gLen - brgL, 1), `component set ${dl(Math.max(gLen - brgL, 1))}`, 'dh');
-  else for (let i9 = 0; i9 < gt.st; i9++) dim9(brgL + i9 * slotL, slotL, `${dl(slotL)}`, 'ds' + i9);
+  dim9(0, brgL, `brg ${dl(brgL)}`, 'db', 0);
+  if (s1.harmonic) dim9(brgL, Math.max(gLen - brgL, 1), `component set ${dl(Math.max(gLen - brgL, 1))}`, 'dh', 1);
+  else for (let i9 = 0; i9 < gt.st; i9++) dim9(ax.xs[i9], ax.slots[i9], `${dl(ax.slots[i9])}`, 'ds' + i9, ((gt.st - 1 - i9) % 2) ? 0 : 1);
   const stLabels = [];
   for (let i9 = 0; i9 < gt.st; i9++) stLabels.push('S' + (gt.st - i9));
   return (
@@ -3805,8 +3832,11 @@ function GearheadSection({ gt, brg, mnt, oShD, us }) {
       <style>{SVGCSS}</style>
       <line x1={x0 - faceT - 14} y1={yC} x2={x0 + gLen * k + 14} y2={yC} stroke="#94A3B8" strokeWidth="0.7" strokeDasharray="9 3 2 3" />
       {els}
-      <text x={x0 + (gLen * k) / 2} y={H - 6} textAnchor="middle" className="dim">
-        {`output \u25c2 ${stLabels.join(' \u25c2 ')} \u25c2 motor \u00b7 ring grounded in housing \u00b7 bearing ${brg === 'acpair' ? 'AC pair' : brg === 'double' ? '2\u00d7 radial' : 'radial'}`}
+      <text x={x0 + (gLen * k) / 2} y={H - 16} textAnchor="middle" className="dim">
+        {`output \u25c2 ${stLabels.join(' \u25c2 ')} \u25c2 motor`}
+      </text>
+      <text x={x0 + (gLen * k) / 2} y={H - 5} textAnchor="middle" className="dim">
+        {`ring grounded in housing \u00b7 bearing ${brg === 'acpair' ? 'AC pair' : brg === 'double' ? '2\u00d7 radial' : 'radial'}`}
       </text>
     </svg>
   );
@@ -3932,7 +3962,7 @@ function GearSection({ g, us }) {
 /* ---- isometric (oblique) render of the composite actuator: shaded cylinders with machined
    detail — flanges, bolt circles, parting lines, keyed shaft, specular + ground shadow —
    scaled to the same envelope as the 2D outline, output toward the viewer ---- */
-function ActuatorIso({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, fin }) {
+function ActuatorIso({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, fin, gt }) {
   const dl = (mm) => (us === "in" ? (mm / 25.4).toFixed(2) + "\u2033" : Math.round(mm) + " mm");
   const env = actEnvelope(motorP, brakeP, act, withBrk, gbOD, gbLen);
   const { modOD, Lm, gOD, Lg, hasB, bOD, Lb, oShD, Ltot } = env;
@@ -4051,7 +4081,12 @@ function ActuatorIso({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, fin }
       {cyl(xm, Lm, modOD, FM.h, {
         parts: [0.1, 0.9], spec: FM.sp, label: `motor \u00d8${dl(modOD)} \u00d7 ${dl(Lm)}` })}
       {(() => {
-        const grooveXs = Array.from({ length: act.st - 1 }, (_, i9) => X0 + (Lg * 0.22 + ((Lg * 0.78) / act.st) * (i9 + 1)) * k);
+        // stage-divider grooves at the REAL internal stage boundaries (shared
+        // gearAxial partition) so they line up with the section views; the old
+        // even split remains only as a fallback when no train is synthesized
+        const grooveXs = gt && gt.stages && gt.stages.length && !gt.stages[0].harmonic
+          ? gearAxial(gt, Lg).xs.slice(0, -1).map((xb9) => X0 + xb9 * k)
+          : Array.from({ length: act.st - 1 }, (_, i9) => X0 + (Lg * 0.22 + ((Lg * 0.78) / act.st) * (i9 + 1)) * k);
         const hueG = FG.h, hueF = FG.h, spG = FG.sp;
         if (aft) {
           const xF = gap9, xR = gap9 + flgT;                         // flange span within the gearhead length
@@ -4105,12 +4140,12 @@ function ActuatorIso({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, fin }
         }
         return null;
       })()}
-      <text x={W / 2} y={H - 10} textAnchor="middle" className="dim">
-        {`overall ${dl(Ltot)} + ${dl(shLen + fwdT + (hasPilot ? pilT : 0))} ${(o9.type || "key")} shaft \u00d8${dl(shOD)}${(o9.type || "key") === "pinion" ? ` \u00b7 pinion \u00d8${dl(pinD)} \u00d7 ${dl(featL)}` : ""}` +
-          (hasPilot ? ` \u00b7 pilot \u00d8${dl(pilOD)} \u00d7 ${dl(pilT)}` : "") +
-          (aft ? ` \u00b7 flange \u00d8${dl(flgOD)} \u00d7 ${dl(flgT)} at ${dl(gap9)} aft of face (boss \u00d8${dl(gOD)})` : "") +
-          (flanged && !aft ? ` & flange` : "") +
-          (bolts ? ` \u00b7 ${bolts.n}\u00d7 ${m9.thread} on \u00d8${dl(bolts.bcdMM)} BC` : "")}</text>
+      <text x={W / 2} y={H - 20} textAnchor="middle" className="dim">
+        {`overall ${dl(Ltot)} + ${dl(shLen + fwdT + (hasPilot ? pilT : 0))} ${(o9.type || "key")} shaft \u00d8${dl(shOD)}${(o9.type || "key") === "pinion" ? ` \u00b7 pinion \u00d8${dl(pinD)} \u00d7 ${dl(featL)}` : ""}${flanged && !aft ? ` & flange` : ""}`}</text>
+      <text x={W / 2} y={H - 8} textAnchor="middle" className="dim">
+        {(hasPilot ? `pilot \u00d8${dl(pilOD)} \u00d7 ${dl(pilT)}` : "") +
+          (aft ? `${hasPilot ? " \u00b7 " : ""}flange \u00d8${dl(flgOD)} \u00d7 ${dl(flgT)} at ${dl(gap9)} aft of face (boss \u00d8${dl(gOD)})` : "") +
+          (bolts ? `${hasPilot || aft ? " \u00b7 " : ""}${bolts.n}\u00d7 ${m9.thread} on \u00d8${dl(bolts.bcdMM)} BC` : "")}</text>
     </svg>
   );
 }
@@ -4151,19 +4186,37 @@ function ActuatorOutline({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, g
       <style>{SVGCSS}</style>
       <text x={W / 2} y={14} textAnchor="middle" className="dim">
         {`output \u2039 ${act.type.toLowerCase()} ${act.st}-stage ${act.N}:1 \u203a motor${hasB ? " \u203a brake" : ""} — typical proportions`}</text>
-      {/* centerline + through shaft */}
+      {/* centerline + shafts: with a synthesized train the output shaft stops in the
+          output stage's carrier and the motor shaft stops at the input-stage sun —
+          a multi-stage train has no through shaft. Fallback: the old single bar. */}
       <line x1={16} y1={yC} x2={W - 12} y2={yC} stroke="#94A3B8" strokeWidth="0.7" strokeDasharray="9 3 2 3" />
-      <rect x={X0} y={yC - (shD / 2) * k} width={(Ltot) * k} height={shD * k} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
+      {/* gearhead housing + ring band FIRST so the shafts and cutaway internals paint
+          on top of it (they were silently buried when the housing was drawn last) */}
+      {blk(0, Lg, gOD, "#B9C2CE", "g")}
+      <rect x={X0} y={yC - R(gOD)} width={Lg * k} height={5} fill="#8A97A8" />
+      <rect x={X0} y={yC + R(gOD) - 5} width={Lg * k} height={5} fill="#8A97A8" />
+      {gt && gt.stages && gt.stages.length > 0 ? (() => {
+        const axS = gearAxial(gt, Lg);
+        const harm = !!gt.stages[0].harmonic;
+        const outL = axS.brgL + (harm ? 2 : (axS.slots[gt.st - 1] || 2) * 0.55);
+        const inX = harm ? axS.brgL + (Lg - axS.brgL) * 0.65 : (axS.xs[0] || axS.brgL) + 0.4 * (axS.slots[0] || 2);
+        return <g>
+          <rect x={X0} y={yC - (shD / 2) * k} width={outL * k} height={shD * k} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
+          <rect x={X0 + inX * k} y={yC - (shD / 2) * k} width={(Ltot - inX) * k} height={shD * k} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
+        </g>;
+      })() : (
+        <rect x={X0} y={yC - (shD / 2) * k} width={(Ltot) * k} height={shD * k} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
+      )}
       {gt && gt.stages && gt.stages.length > 0 && (() => {
         // cutaway internals inside the gearhead block: per-stage gear sets, carriers,
         // ring bands, and the output bearing occupying its block (drawn at true scale)
-        const brgL = (gt.brgF || 0.22) * gOD;                     // bearing block at the output end
-        const slotL = Math.max((Lg - brgL) / gt.st, 2);
+        const ax9 = gearAxial(gt, Lg);                            // shared partition — grooves use it too
+        const brgL = ax9.brgL;                                    // bearing block at the output end
         const els9 = [];
         const planetary = !!gt.stages[0].Zr;
         for (let i9 = 0; i9 < gt.st; i9++) {
           const s9 = gt.stages[Math.min(i9, gt.stages.length - 1)];
-          const xs = brgL + (gt.st - 1 - i9) * slotL;             // stage 1 nearest the motor
+          const xs = ax9.xs[i9], slotL = ax9.slots[i9];           // stage 1 nearest the motor
           const F9 = Math.min(s9.F || slotL * 0.6, slotL * 0.72);
           const xg = X0 + (xs + (slotL - F9) / 2) * k, wg = F9 * k;
           if (planetary) {
@@ -4251,12 +4304,12 @@ function ActuatorOutline({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, g
           })()}
         </g>;
       })()}
-      {/* gearhead: housing, stage dividers, ring band */}
-      {blk(0, Lg, gOD, "#B9C2CE", "g")}
-      <rect x={X0} y={yC - R(gOD)} width={Lg * k} height={5} fill="#8A97A8" />
-      <rect x={X0} y={yC + R(gOD) - 5} width={Lg * k} height={5} fill="#8A97A8" />
-      {Array.from({ length: act.st - 1 }, (_, i9) => {
-        const xd = X0 + (Lg * 0.22 + ((Lg * 0.78) / act.st) * (i9 + 1)) * k;
+      {/* stage dividers + label over the internals */}
+      {(gt && gt.stages && gt.stages.length > 0 && !gt.stages[0].harmonic
+        ? gearAxial(gt, Lg).xs.slice(0, -1)
+        : Array.from({ length: act.st - 1 }, (_, i9) => Lg * 0.22 + ((Lg * 0.78) / act.st) * (i9 + 1))
+      ).map((xb9, i9) => {
+        const xd = X0 + xb9 * k;
         return <line key={"st" + i9} x1={xd} y1={yC - R(gOD) + 5} x2={xd} y2={yC + R(gOD) - 5} stroke="#64748B" strokeWidth="0.8" strokeDasharray="4 3" />;
       })}
       <text x={X0 + (Lg / 2) * k} y={yC - R(gOD) * 0.45} textAnchor="middle" className="wnum">{act.type.toLowerCase()}</text>
@@ -4281,23 +4334,100 @@ function ActuatorOutline({ motorP, brakeP, act, withBrk, us, gbOD, gbLen, mnt, g
           <rect x={xc9 + ovh * k * 0.7} y={yC - R(modOD * 0.26)} width={comW} height={2 * R(modOD * 0.26)} fill="#B06A38" stroke="#334155" strokeWidth="0.6" />
           <rect x={xc9 + ovh * k * 0.7 + comW * 0.15} y={yC - R(modOD * 0.44)} width={comW * 0.7} height={R(modOD * 0.16)} fill="#3A4350" stroke="#1F2937" strokeWidth="0.5" />
         </g>;
+      })() : motorP.motorType === "stepper" ? (() => {
+        // hybrid/PM stepper anatomy: stator stack with short end turns, rotor as two
+        // toothed cup sections with the axial magnet sandwiched between (hybrid) or a
+        // PM ring rotor (can-stack PM)
+        const xs9 = X0 + (xm + (Lm - stk) / 2) * k, ws9 = stk * k;
+        const rSt = R(modOD * 0.94), rRt = R(modOD * 0.55);
+        const ovhS = Math.min(ovh, 0.5 * ovh + 2);                 // stepper heads are short
+        const hyb = motorP.stpKind !== "pm";
+        const magW = Math.max(ws9 * 0.1, 2), cupW = (ws9 - magW) / 2;
+        return <g>
+          <rect x={xs9} y={yC - rSt} width={ws9} height={2 * rSt} fill="#9AA7B8" stroke="#334155" strokeWidth="0.7" />
+          <rect x={xs9 - ovhS * k * 0.7} y={yC - rSt * 0.82} width={ovhS * k * 0.7} height={2 * rSt * 0.82} fill="#C87F3D" opacity="0.9" />
+          <rect x={xs9 + ws9} y={yC - rSt * 0.82} width={ovhS * k * 0.7} height={2 * rSt * 0.82} fill="#C87F3D" opacity="0.9" />
+          {hyb ? <g>
+            <rect x={xs9} y={yC - rRt} width={cupW} height={2 * rRt} fill="#B4BDC9" stroke="#334155" strokeWidth="0.7" />
+            <rect x={xs9 + cupW} y={yC - rRt * 0.7} width={magW} height={2 * rRt * 0.7} fill="#3E5FB0" stroke="#334155" strokeWidth="0.5" />
+            <rect x={xs9 + cupW + magW} y={yC - rRt} width={cupW} height={2 * rRt} fill="#B4BDC9" stroke="#334155" strokeWidth="0.7" />
+            {Array.from({ length: 5 }, (_, t9) => <line key={"tt" + t9}
+              x1={xs9 + 1 + (t9 * (cupW - 2)) / 4} y1={yC - rRt} x2={xs9 + 1 + (t9 * (cupW - 2)) / 4} y2={yC - rRt + 3} stroke="#334155" strokeWidth="0.5" />)}
+            {Array.from({ length: 5 }, (_, t9) => <line key={"tb" + t9}
+              x1={xs9 + cupW + magW + 1 + (t9 * (cupW - 2)) / 4} y1={yC + rRt - 3} x2={xs9 + cupW + magW + 1 + (t9 * (cupW - 2)) / 4} y2={yC + rRt} stroke="#334155" strokeWidth="0.5" />)}
+          </g> : <g>
+            <rect x={xs9} y={yC - rRt} width={ws9} height={2 * rRt} fill="#B4BDC9" stroke="#334155" strokeWidth="0.7" />
+            <rect x={xs9} y={yC - rRt} width={ws9} height={3} fill="#B0413E" opacity="0.85" />
+            <rect x={xs9} y={yC + rRt - 3} width={ws9} height={3} fill="#3E5FB0" opacity="0.85" />
+          </g>}
+        </g>;
       })() : (<g>
         <rect x={X0 + (xm + (Lm - stk) / 2) * k} y={yC - R(modOD * 0.94)} width={stk * k} height={2 * R(modOD * 0.94)} fill="#9AA7B8" stroke="#334155" strokeWidth="0.7" />
         <rect x={X0 + (xm + (Lm - stk) / 2 - ovh) * k} y={yC - R(modOD * 0.8)} width={ovh * k} height={2 * R(modOD * 0.8)} fill="#C87F3D" opacity="0.9" />
         <rect x={X0 + (xm + (Lm + stk) / 2) * k} y={yC - R(modOD * 0.8)} width={ovh * k} height={2 * R(modOD * 0.8)} fill="#C87F3D" opacity="0.9" />
       </g>)}
       <text x={X0 + (xm + Lm / 2) * k} y={yC - R(modOD) * 0.45} textAnchor="middle" className="wnum">
-        {motorP.motorType === "brushed" ? "brushed DC" : "BLDC"}</text>
-      {/* brake: backiron, armature + disc pack */}
-      {hasB && (
-        <g>
-          {blk(xb, brakeP.stackL, bOD, "#B9C2CE", "b")}
-          <rect x={X0 + (xb + brakeP.stackL) * k} y={yC - R(bOD * 0.96)} width={Math.max((brakeP.brkArm || 4) * k, 2.5)} height={2 * R(bOD * 0.96)} fill="#8A97A8" stroke="#334155" strokeWidth="0.7" />
-          <rect x={X0 + (xb + brakeP.stackL + (brakeP.brkArm || 4)) * k} y={yC - R(bOD * 0.9)} width={Math.max(3 * k, 2)} height={2 * R(bOD * 0.9)} fill="#7B8494" stroke="#334155" strokeWidth="0.7" />
-          <text x={X0 + (xb + Lb / 2) * k} y={yC - R(bOD) - 22} textAnchor="middle" className="wnum">brake</text>
-          <line x1={X0 + (xb + Lb / 2) * k} y1={yC - R(bOD) - 18} x2={X0 + (xb + Lb / 2) * k} y2={yC - R(bOD) + 2} stroke="#94A3B8" strokeWidth="0.6" strokeDasharray="2 2" />
-        </g>
-      )}
+        {motorP.motorType === "brushed" ? "brushed DC"
+          : motorP.motorType === "stepper" ? (motorP.stpKind === "pm" ? "PM stepper" : "hybrid stepper")
+          : "BLDC"}</text>
+      {/* brake: real pot-core half-section from the Brake tab's own dimensions —
+          backiron (rim + boss + web) with the coil seated in its pocket, springs,
+          sliding armature, then the lined friction disc on its hub. Same anatomy
+          as the Brake tab's AxialCutaway, compressed to the outline scale. */}
+      {hasB && (() => {
+        const rOD9 = R(bOD);
+        const rPkt = R(Math.max(brakeP.brkPktID || bOD * 0.8, 4));
+        const rBoss = R(Math.max(brakeP.brkBossOD || bOD * 0.3, 2));
+        const rThru = R(Math.max(brakeP.brkBore || 8, 4));
+        const rBob = R(Math.max(brakeP.brkBobID || bOD * 0.62, 4));
+        const rFlg = Math.min(R(Math.max(brakeP.brkBobOD || bOD * 0.72, 5)), rPkt - 1);
+        const rRo = Math.min(R(2 * Math.max(brakeP.brkRo || bOD * 0.42, 2)), rOD9 * 0.97);
+        const rRi = R(2 * Math.max(brakeP.brkRi || bOD * 0.28, 1));
+        const rHub = Math.max(rRi * 0.8, rThru + 1.5);
+        const stkB = brakeP.stackL, tArm = Math.max(brakeP.brkArm || 4, 2), faces = brakeP.brkFaces >= 2;
+        const pktD = Math.min(Math.max(brakeP.brkPktD || stkB * 0.7, 2), stkB - 1);
+        const xB0 = X0 + xb * k, wStk = stkB * k;                 // backiron block
+        const xA0 = xB0 + wStk, wArm = tArm * k;                  // armature slides on the pocket side
+        const xD0 = xA0 + wArm, wD = Math.max(2.2 * k, 2);        // lined disc outboard
+        const band = (x9, w9, ri9, ro9, fill9, key9) => <g key={key9}>
+          <rect x={x9} y={yC - ro9} width={w9} height={ro9 - ri9} fill={fill9} stroke="#334155" strokeWidth="0.6" />
+          <rect x={x9} y={yC + ri9} width={w9} height={ro9 - ri9} fill={fill9} stroke="#334155" strokeWidth="0.6" />
+        </g>;
+        const wPkt = pktD * k, xPkt = xB0 + wStk - wPkt;          // pocket opens toward the armature
+        const wCoil = Math.min(Math.max((brakeP.brkBobL || pktD * 0.8) * k, 3), wPkt - 1);
+        const rSpr = (rBoss + rPkt) / 2;
+        const zz = (y9, key9) => {
+          const n8 = 3, pts = [];
+          for (let j8 = 0; j8 <= n8 * 2; j8++) pts.push(`${xA0 - wPkt * 0.55 + ((wPkt * 0.55 + wArm * 0.4) * j8) / (n8 * 2)},${y9 + (j8 % 2 ? -2 : 2)}`);
+          return <polyline key={key9} points={pts.join(" ")} fill="none" stroke="#52525B" strokeWidth="1.1" />;
+        };
+        return <g>
+          {/* backiron rim, boss, and back web */}
+          {band(xB0, wStk, rPkt, rOD9, "#94A3B8", "bkRim")}
+          {band(xB0, wStk, rThru, rBoss, "#94A3B8", "bkBoss")}
+          {band(xB0, wStk - wPkt, rBoss, rPkt, "#94A3B8", "bkWeb")}
+          {/* coil seated at the pocket bottom */}
+          {band(xPkt + (wPkt - wCoil) / 2, wCoil, rBob, rFlg, "#E8933A", "bkCoil")}
+          {/* springs armature ↔ web, at the spring circle */}
+          {zz(yC - rSpr, "bkSprT")}
+          {zz(yC + rSpr, "bkSprB")}
+          {/* armature (annular, clears the hub) */}
+          {band(xA0, wArm, rHub + 1, rOD9 * 0.96, "#7C9885", "bkArm")}
+          {/* friction disc on its hub: lining bonded both sides (2-face) or bare disc + lining on the armature */}
+          {faces ? <g>
+            {band(xD0 + wD * 0.28, wD * 0.44, rHub, rRo, "#8A97A8", "bkDisc")}
+            {band(xD0, wD * 0.28, rRi, rRo, "#3F3F46", "bkLinA")}
+            {band(xD0 + wD * 0.72, wD * 0.28, rRi, rRo, "#3F3F46", "bkLinB")}
+          </g> : <g>
+            {band(xD0, wD, rHub, rRo, "#8A97A8", "bkDisc")}
+            {band(xA0 + wArm - 1.4, 1.4, rRi, rRo, "#3F3F46", "bkLin")}
+          </g>}
+          <rect key="bkHub" x={xD0 - wArm * 0.4} y={yC - rHub} width={wD + wArm * 0.8} height={2 * rHub} fill="#B5C9A5" stroke="#334155" strokeWidth="0.6" />
+          <rect key="bkFrame" x={xB0} y={yC - rOD9} width={Lb * k} height={2 * rOD9} fill="none" stroke="#334155" strokeWidth="1" />
+          <text x={X0 + (xb + Lb / 2) * k} y={yC - rOD9 - 22} textAnchor="middle" className="wnum">brake</text>
+          <line x1={X0 + (xb + Lb / 2) * k} y1={yC - rOD9 - 18} x2={X0 + (xb + Lb / 2) * k} y2={yC - rOD9 + 2} stroke="#94A3B8" strokeWidth="0.6" strokeDasharray="2 2" />
+        </g>;
+      })()}
       {/* Ø labels above, lengths below */}
       {odLbl(Lg * 0.5, gOD, `\u00d8${dl(gOD)}`)}
       {odLbl(xm + Lm * 0.5, modOD, `\u00d8${dl(modOD)}`)}
@@ -5978,11 +6108,12 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
   const withBrk = p.actBrake === "yes";
   const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
   const act = composeActuator(mr, br, { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff, brg: p.gbBrg });
-  const gtAll = useMemo(() => {
+  const gtEnv = useMemo(() => {
     if (act.fail) return null;
     const env0 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
-    return designGearTrain(p, act, env0.gOD, env0.Lg);
+    return { env: env0, gt: designGearTrain(p, act, env0.gOD, env0.Lg) };
   }, [p, act, motorP, brakeP, withBrk]);
+  const gtAll = gtEnv ? gtEnv.gt : null;
   const gtLim = gtAll && Number.isFinite(gtAll.TmaxOut) ? { T: gtAll.TmaxOut, label: "tooth yield" } : null;
   const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
   const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
@@ -6082,9 +6213,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
         <AssumptionsCard p={p} />
       </div>
       <div>
-        {!act.fail && (() => {
-          const env9 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
-          const gt = designGearTrain(p, act, env9.gOD, env9.Lg);
+        {!act.fail && gtEnv && (() => {
+          const env9 = gtEnv.env;                      // one computation — the cards can never disagree
+          const gt = gtEnv.gt;
           return <div className="card">
             <div className="cardhead">
               <h2>Gear train — synthesized</h2>
@@ -6162,7 +6293,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
               <h2>Isometric</h2>
               <button className="btn mini ghost" onClick={() => exportPng("svg-actiso", "actuator-iso.png")}>PNG ⤓</button>
             </div>
-            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT, osh: { type: p.oshType, od: p.oshOD, len: p.oshLen, feat: p.oshFeat, pin: p.oshPinD } }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} />
+            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT, osh: { type: p.oshType, od: p.oshOD, len: p.oshLen, feat: p.oshFeat, pin: p.oshPinD } }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} gt={gtAll} />
             <div className="note">
               Envelope outline at true relative scale. Gearhead: {p.gbOD > 0 || p.gbLen > 0 ? "specified envelope where entered, typical shell for the rest" : "representative shell"} — auto length built up from what
               the stages need (1.5×face + carrier per stage, real bearing width, faceplate; harmonic straight

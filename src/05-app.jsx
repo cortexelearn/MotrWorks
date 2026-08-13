@@ -672,11 +672,12 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
   const withBrk = p.actBrake === "yes";
   const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
   const act = composeActuator(mr, br, { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff, brg: p.gbBrg });
-  const gtAll = useMemo(() => {
+  const gtEnv = useMemo(() => {
     if (act.fail) return null;
     const env0 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
-    return designGearTrain(p, act, env0.gOD, env0.Lg);
+    return { env: env0, gt: designGearTrain(p, act, env0.gOD, env0.Lg) };
   }, [p, act, motorP, brakeP, withBrk]);
+  const gtAll = gtEnv ? gtEnv.gt : null;
   const gtLim = gtAll && Number.isFinite(gtAll.TmaxOut) ? { T: gtAll.TmaxOut, label: "tooth yield" } : null;
   const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
   const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
@@ -776,9 +777,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
         <AssumptionsCard p={p} />
       </div>
       <div>
-        {!act.fail && (() => {
-          const env9 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
-          const gt = designGearTrain(p, act, env9.gOD, env9.Lg);
+        {!act.fail && gtEnv && (() => {
+          const env9 = gtEnv.env;                      // one computation — the cards can never disagree
+          const gt = gtEnv.gt;
           return <div className="card">
             <div className="cardhead">
               <h2>Gear train — synthesized</h2>
@@ -856,7 +857,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
               <h2>Isometric</h2>
               <button className="btn mini ghost" onClick={() => exportPng("svg-actiso", "actuator-iso.png")}>PNG ⤓</button>
             </div>
-            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT, osh: { type: p.oshType, od: p.oshOD, len: p.oshLen, feat: p.oshFeat, pin: p.oshPinD } }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} />
+            <ActuatorIso motorP={motorP} brakeP={withBrk ? brakeP : null} act={act} withBrk={withBrk} us={us} gbOD={p.gbOD} gbLen={p.gbLen} mnt={{ style: p.mntStyle, thread: p.mntThread, n: p.mntN, bcd: p.mntBCD, flgOD: p.mntFlgOD, flgT: p.mntFlgT, dir: p.mntDir, gap: p.mntGap, pilotOD: p.mntPilotOD, pilotT: p.mntPilotT, osh: { type: p.oshType, od: p.oshOD, len: p.oshLen, feat: p.oshFeat, pin: p.oshPinD } }} fin={{ gb: p.finGb, mot: p.finMot, brk: p.finBrk }} gt={gtAll} />
             <div className="note">
               Envelope outline at true relative scale. Gearhead: {p.gbOD > 0 || p.gbLen > 0 ? "specified envelope where entered, typical shell for the rest" : "representative shell"} — auto length built up from what
               the stages need (1.5×face + carrier per stage, real bearing width, faceplate; harmonic straight
