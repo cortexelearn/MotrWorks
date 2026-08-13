@@ -423,3 +423,31 @@ UI: skew field in the BLDC/Brushed/ACIM geometry card and the Winding tab; resul
 shows k_sk, slot-path multiplier, and the cogging attenuation when skew > 0. `_base.json`
 gains `skew: 0` (engine-consumed key, per the v59 sync rule). Verified by 12-probe script:
 skew 0 reproduces the golden anchors exactly; 30° matches the analytic k_sk to 4 decimals.
+
+---
+
+# v59.8 — Carter where it belongs, and nowhere it doesn't (2026-08-13)
+
+First deliberate anchor-moving refinement, per the owner's go-ahead on the audit backlog.
+The engine's own trusted `carterK` (already applied in the PM/brushed/ACIM branches) now
+covers the two gaps that carried a bare 1.05 fudge, and the slotless machine stops
+pretending it has slots:
+
+- **PM can-stack stepper:** magnet-circuit gap and phase inductance use
+  carterK(pole pitch, g + lm/µr, slot opening) — the same call, same form, at the
+  stepper's coarse pole pitch. (Not golden-anchored; stp-preset-gate stays warning-free.)
+- **Cogging model:** effective gap uses the PM branch's computed kcGap instead of 1.05.
+- **LATM (slotless):** Carter does not apply to a slotless gap — the 1.05 multiplier on
+  (airgap + winding) was a leftover from the slotted branches. Removed from the field,
+  inductance, and fringing-angle expressions. **Golden re-anchor:** the ~5% shorter
+  effective gap lifts Bg → Kt 0.054424 → 0.056661 and peakT 0.035021 → 0.036461 (both
+  +4.1%); Rll untouched. ANALYTICAL — flag for replacement by the bench LATM cal set.
+- **Deferred with reason:** the hybrid stepper's toothlet-scale Carter needs a toothlet
+  opening the parameter set doesn't carry (only 0.42·pitch tooth width is assumed);
+  adding it is a parameter-shape decision, not a drop-in.
+
+Calibration interplay (the Pages site is collecting bench sets): calibration factors are
+multiplicative on model output, so any model refinement shifts the *implied* factor. Sets
+captured before v59.8 remain valid as measurements; re-derive kKe/kKt against the current
+model before using them to judge model error — especially the LATM set, whose baseline
+moved +4.1% here. Full suite green (14 gates + 6 e2e).

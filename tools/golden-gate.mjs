@@ -38,7 +38,11 @@ const GOLD = [
   { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 4.2091 } },
   { preset: 'NEMA 17 · 1.8° hybrid · bipolar',          checks: { Kt: 0.22844, Rll: 3.075, peakT: 0.48458 } },
   { preset: 'Brake 24 V · 60 mm · spring-applied',      checks: { Rll: 142.92, peakT: 3.6 } },
-  { preset: 'LATM 1.5" · 28 V · SmCo 4-pole · 45° toggle', checks: { Kt: 0.054424, Rll: 118.35, peakT: 0.035021 } },
+  // v59.8 re-anchor — LATM is slotless: the 1.05 "Carter" on its magnetic gap was a leftover
+  // from the slotted branches, not physics. Removing it shortens the effective gap ~5%,
+  // lifting Bg and thus Kt/peakT by +4.1% (0.054424 -> 0.056661, 0.035021 -> 0.036461).
+  // ANALYTICAL ONLY — replace with the bench LATM calibration set when captured.
+  { preset: 'LATM 1.5" · 28 V · SmCo 4-pole · 45° toggle', checks: { Kt: 0.056661, Rll: 118.35, peakT: 0.036461 } },
 ];
 
 for (const g of GOLD) {

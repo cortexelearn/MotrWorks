@@ -1123,7 +1123,10 @@ function computeDesign(p) {
       // half-pitch cup offset already inherent in the swing; permeance modulation depth ≈ 0.4
       dPhiPole = 0.4 * BtBias * AgPole;
     } else {
-      const Bg6 = airgap > 0 ? (0.9 * BrT * p.magT) / (p.magT + mag.mur * 1.05 * airgap) : 0;
+      // v59.8: the stator pole openings see the same Carter's coefficient the PM/brushed
+      // branches already use, at the stepper's pole pitch — replaces a bare 1.05 fudge
+      const kcS = carterK((Math.PI * p.statorID) / NsP, airgap + p.magT / mag.mur, p.slotOpen);
+      const Bg6 = airgap > 0 ? (0.9 * BrT * p.magT) / (p.magT + mag.mur * kcS * airgap) : 0;
       const APole = ((Math.PI * (p.statorID / 1000)) / NsP) * 0.7 * (p.stackL / 1000);
       dPhiPole = 0.9 * Bg6 * APole;
       BtBias = Bg6;
@@ -1148,7 +1151,7 @@ function computeDesign(p) {
     }
     const Ls = (4e-7 * Math.PI) * Nph * Nph * (hyb
       ? (NsP * teethPP * (0.42 * tPitch / 1000) * (Math.max((p.stackL - p.magT) / 2, 2) / 1000)) / (2 * Math.max(airgap, 0.03) / 1000) / (NsP * NsP / 4)
-      : ((Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000)) / NsP) / Math.max((1.05 * airgap + p.magT / mag.mur) / 1000, 1e-5) / (kE * 2));
+      : ((Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000)) / NsP) / Math.max((carterK((Math.PI * p.statorID) / NsP, airgap + p.magT / mag.mur, p.slotOpen) * airgap + p.magT / mag.mur) / 1000, 1e-5) / (kE * 2));
     const tauS = Ls / Math.max(Rs, 1e-6);
     const rpmC2 = (Math.max(p.Vdc - p.Imax * Rs, 0) / Math.max(KtPh * kE, 1e-9)) * (60 / (2 * Math.PI)); // ω where bemf eats bus
     const hubD9 = p.stpHubD > 0 ? p.stpHubD : 1.6 * p.shaftD;      // rotor hub the cups/ring mount on
@@ -1238,7 +1241,9 @@ function computeDesign(p) {
     // limited-angle torquer: toroidal sector windings on a slotless ring core, PM rotor,
     // two-wire drive — flipping polarity toggles between two stop positions.
     const tw = Math.max(p.latmWind, 0.5);
-    const Bg4 = airgap > 0 ? (0.9 * BrT * p.magT) / (p.magT + mag.mur * 1.05 * (airgap + tw)) : 0;
+    // v59.8: slotless gap — Carter's coefficient does not apply (no slotting ripple);
+    // the previous 1.05 was a leftover from the slotted branches, not physics
+    const Bg4 = airgap > 0 ? (0.9 * BrT * p.magT) / (p.magT + mag.mur * (airgap + tw)) : 0;
     const sect = Math.max(Math.round(p.latmSect), 1);
     const spanR = (Math.max(p.latmSpan, 5) * Math.PI) / 180;
     const Ntot = p.turns * sect;                                    // turns/sector × sectors
@@ -1246,14 +1251,14 @@ function computeDesign(p) {
     const coreD = Math.max((p.statorOD - p.statorID) / 2, 0.5);     // ring radial depth from OD/ID
     const MLTt = 2 * (p.stackL + 2 * coreD + 3 * tw);               // toroidal turn length, mm
     const Ra2 = ((RHO_CU * (MLTt / 1000) * Ntot) / (aBare * 1e-6 * Math.max(p.strands, 1))) * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
-    const L4 = ((4e-7 * Math.PI) / Math.PI) * (((p.rotorOD / 1000) * (p.stackL / 1000)) / Math.max((1.05 * airgap + tw + p.magT / mag.mur) / 1000, 1e-5)) * ((Ntot * Ntot) / (poles * poles));
+    const L4 = ((4e-7 * Math.PI) / Math.PI) * (((p.rotorOD / 1000) * (p.stackL / 1000)) / Math.max((airgap + tw + p.magT / mag.mur) / 1000, 1e-5)) * ((Ntot * Ntot) / (poles * poles));
     const Idrv = Math.min(p.Imax, Ra2 > 0 ? p.Vdc / Ra2 : p.Imax);  // two-wire: supply/Ra, clamped by the drive limit
     // ---- torque vs angle: circular cross-correlation of the alternating pole field (fringing-
     //      smoothed square) with the alternating sector current sheet; trapezoid shape falls out ----
     const NPH = 720;
     const wrapPi = (x) => { let y = x % (2 * Math.PI); if (y > Math.PI) y -= 2 * Math.PI; if (y < -Math.PI) y += 2 * Math.PI; return y; };
     const arcHalf = ((p.poleArc / 100) * Math.PI) / poles;          // mech half pole-arc
-    const sigF = Math.max((1.05 * airgap + tw + p.magT / mag.mur) / Math.max(p.rotorOD / 2, 1), 0.01); // fringing angle, rad
+    const sigF = Math.max((airgap + tw + p.magT / mag.mur) / Math.max(p.rotorOD / 2, 1), 0.01); // fringing angle, rad (slotless — no Carter)
     const field = new Array(NPH), sheet = new Array(NPH).fill(0);
     const polePitch = (2 * Math.PI) / poles;
     for (let i5 = 0; i5 < NPH; i5++) {
@@ -1510,7 +1515,7 @@ function computeDesign(p) {
     const gcd = (a2, b2) => (b2 ? gcd(b2, a2 % b2) : a2);
     const Ncog = (Ns * poles) / gcd(Ns, poles);          // cogging cycles per mech rev
     const perDeg = 360 / Ncog;
-    const gp = (airgap * 1.05 + p.magT / mag.mur) / 1000; // effective magnetic gap, m
+    const gp = (airgap * kcGap + p.magT / mag.mur) / 1000; // effective magnetic gap, m — the PM branch's Carter coefficient, not a fudge (v59.8)
     const b0 = p.slotOpen / 1000, Lm3 = p.stackL / 1000;
     const eta2 = b0 / (b0 + 4 * gp);
     const dW = ((BgAvg * BgAvg) / (2 * 4e-7 * Math.PI)) * b0 * Lm3 * gp * eta2; // J per edge crossing
