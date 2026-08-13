@@ -114,8 +114,8 @@ const opts = await page.evaluate(() => {
   const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value.includes('choose a preset')));
   return sel ? [...sel.options].map(o => o.value).slice(1) : [];
 });
-console.log(`brake presets: ${opts.length} listed (4), brake-only: ${opts.length === 4 && opts.every(o => o.startsWith('Brake')) ? '✓' : '✗ ' + opts.join('|')}`);
-if (opts.length !== 4 || !opts.every(o => o.startsWith('Brake'))) process.exitCode = 1;
+console.log(`brake presets: ${opts.length} listed (5), brake-only: ${opts.length === 5 && opts.every(o => o.startsWith('Brake')) ? '✓' : '✗ ' + opts.join('|')}`);
+if (opts.length !== 5 || !opts.every(o => o.startsWith('Brake'))) process.exitCode = 1;
 
 // memory round-trip
 await clickSeg('BLDC'); await page.waitForTimeout(250);

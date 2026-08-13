@@ -28,7 +28,7 @@ Source of truth is `src/`, five modules concatenated in numeric order (no bundle
 
 | File | Contents |
 |---|---|
-| `src/01-shared.jsx` | materials (MAGNETS/STEELS/BRAKE_MATS/GEAR_MATS/BARS), wire tables, `PRESETS` (33), theme, unit context |
+| `src/01-shared.jsx` | materials (MAGNETS/STEELS/BRAKE_MATS/GEAR_MATS/BARS), wire tables, `PRESETS` (38), theme, unit context |
 | `src/02-engine.js` | `computeDesign` (physics, pure), `computeBobbin`/`solveBobbin`, `designGearTrain`, `composeActuator`, DXF/FEMM builders |
 | `src/03-dxf-import.js` | `parseDxf` + `analyzeLam` (lamination geometry inference) |
 | `src/04-views.jsx` | ~32 SVG views, charts, drawings, input controls |

@@ -9,13 +9,16 @@ const app = html.slice(html.indexOf('<script>/*APP*/') + 15, html.indexOf('</scr
 const M = new Function('React', app + '\nreturn { computeDesign, PRESETS };')(globalThis.React);
 const base = JSON.parse(readFileSync('/tmp/_base.json','utf8'));
 const names = Object.keys(M.PRESETS).filter(n => (M.PRESETS[n].motorType || '') === 'brake');
-console.log(`brake presets found: ${names.length} (expect 4)`);
-if (names.length !== 4) process.exitCode = 1;
+console.log(`brake presets found: ${names.length} (expect 5)`);
+if (names.length !== 5) process.exitCode = 1;
 const expect = {
   'Brake 28 V · 38 mm · aero holding':   { T: [0.74, 0.83], margin: [1.45, 1.6], clr: [0.55, 0.8], Tcu: [105, 120], Ipull: [0.2, 0.35] },
   'Brake 24 V · 60 mm · spring-applied': { T: [3.4, 3.8],  margin: [1.7, 2.0],  clr: [1.0, 1.4],  Tcu: [95, 120],  Ipull: [0.4, 0.7] },
   'Brake 24 V · 90 mm · 10 N·m class':   { T: [9.5, 10.6], margin: [3.0, 3.6],  clr: [3.2, 4.2],  Tcu: [90, 115],  Ipull: [0.7, 1.1] },
   'Brake 12 V · 40 mm · light duty':     { T: [0.85, 0.97],margin: [1.35, 1.55],clr: [0.5, 0.8],  Tcu: [100, 118], Ipull: [0.5, 0.75] },
+  // v59.5 baseline: same magnet body as the 24 V 60 mm (identical Thold/clr class), coil
+  // rewound for 270 V with a 50% economizer — anchors from the computed design at add time.
+  'Brake 270 V · 60 mm · aero bus':      { T: [3.4, 3.8],  margin: [2.1, 2.4],  clr: [1.2, 1.6],  Tcu: [55, 80],   Ipull: [0.07, 0.12] },
 };
 for (const n of names) {
   const r = M.computeDesign({ ...base, ...M.PRESETS[n] });

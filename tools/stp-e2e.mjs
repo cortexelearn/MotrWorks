@@ -38,8 +38,8 @@ const opts = await page.evaluate(() => {
   const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value.includes('choose a preset')));
   return sel ? [...sel.options].map(o => o.value).slice(1) : [];
 });
-const pOK = opts.length === 4 && opts.every(o => /NEMA|PM stepper/.test(o));
-console.log(`stepper presets listed: ${opts.length} (expect 4, stepper-only): ${pOK?'✓':'✗ '+opts.join(' | ')}`);
+const pOK = opts.length === 6 && opts.every(o => /NEMA|PM stepper/.test(o));
+console.log(`stepper presets listed: ${opts.length} (expect 6, stepper-only): ${pOK?'✓':'✗ '+opts.join(' | ')}`);
 if (!pOK) process.exitCode = 1;
 
 // cards: stepper output + torque-angle present; 3-phase cards hidden

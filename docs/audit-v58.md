@@ -330,3 +330,34 @@ golden-gate anchor; full 14-gate + 6-e2e suite green.
   input returned a page of NaN diameters with nothing to say why); the solve card renders
   it. composeActuator sanitizes a non-finite ratio (Math.max(NaN, 1) is NaN — every
   composed output went NaN with fail unset).
+
+---
+
+# v59.5 — five presets into the coverage gaps (2026-08-13)
+
+Preset-coverage audit found the gaps; each new entry was iterated against the live engine in
+a candidate lab until compute-clean (errors AND warnings, except the LATM build-info note the
+gate tolerates), then anchored in its preset gate. All values are scaled from the in-family
+presets (which carry the catalog anchors) with the scaling stated in a source comment — none
+are bench-measured; replace with catalog rows when a target unit is chosen.
+
+- **NEMA 23 · 0.9° hybrid · bipolar** — first 0.9° preset. On the 23-frame deliberately: a
+  100-tooth NEMA 17 rotor has 0.81 mm tooth pitch, under the tool's own ~1.2 mm
+  manufacturability floor; the 23-frame's Ø38.9 rotor clears it at 1.22 mm.
+- **NEMA 34 · 1.8° hybrid · bipolar** — first 34-frame. Computes 6.4 N·m holding, inside the
+  4.5–8.5 N·m band for 65 mm-stack 34HS catalog units.
+- **LATM 0.75" · 28 V · SmCo 2-pole · 30° toggle** — smallest LATM (all three priors ≥ 1").
+  Passes every latm-preset-gate invariant: Tstop/Tpk 98%, 30° travel far inside the ±90°
+  reversal, 380 turns of 708 capacity, 103 °C held-on at the 0.25 A limit.
+- **ACIM 230 V · 60 Hz · 2-pole blower** — first 2-pole ACIM. 100 mm frame carries the deep
+  2-pole yoke while keeping fill under the 45% insertion ceiling; 19 bars / 24 slots clears
+  every cage-slot interaction check.
+- **Brake 270 V · 60 mm · aero bus** — first high-voltage-bus brake. Same magnet body and
+  springs as the 24 V 60 mm (Thold unchanged at 3.6 N·m); AWG 39 rewind for release authority
+  (margin ×2.26 — release margin scales with V·wire-area, turns-independent) with a 50%
+  economizer holding the released coil at ~65 °C (hold power scales V²·area/turns, which
+  full voltage would push past the insulation class).
+
+Gate/test bookkeeping in the same commit: brk-preset-gate expects 5 presets and carries the
+270 V unit's computed baseline bands; the three e2e preset-count assertions (stepper 6,
+LATM 4, brake 5) updated. CLAUDE.md preset count 33 → 38. Full suite green.

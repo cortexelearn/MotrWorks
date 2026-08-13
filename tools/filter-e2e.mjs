@@ -47,8 +47,8 @@ console.log(`LATM default auto-loaded: Vdc ${vdc} (expect 28) · turns/sector ${
 if (vdc !== '28' || turns !== '207') process.exitCode = 1;
 await openPresets();
 opts = await presetOpts();
-ok = opts.length === 3 && opts.every(o => o.startsWith('LATM'));
-console.log(`LATM presets: ${opts.length} listed (expect 3, all LATM): ${ok ? '✓' : '✗ ' + opts.join(' | ')}`);
+ok = opts.length === 4 && opts.every(o => o.startsWith('LATM'));
+console.log(`LATM presets: ${opts.length} listed (expect 4, all LATM): ${ok ? '✓' : '✗ ' + opts.join(' | ')}`);
 if (!ok) process.exitCode = 1;
 
 // ACIM: cage bars visible, copper variant recolors

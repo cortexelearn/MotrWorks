@@ -17361,6 +17361,29 @@ const PRESETS = {
         seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
         statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
     },
+    // v59.5: NEMA 23 frame with a 100-tooth rotor (0.9° full step). Same 23HM-class frame and
+    // winding as the 1.8° NEMA 23 above; tooth pitch π·38.9/100 = 1.22 mm stays above the tool's
+    // ~1.2 mm manufacturability floor (a 0.9° NEMA 17 rotor does not — pitch 0.81 mm).
+    'NEMA 23 · 0.9° hybrid · bipolar': {
+        slots: 8, poles: 2, statorOD: 55, statorID: 39, rotorOD: 38.9, yoke: 3.6, toothW: 5.5,
+        slotOpen: 2.2, tipH: 1, stackL: 45, liner: 0.25, slotR: 0.3, shaftD: 6.35,
+        pattern: "concentrated", layers: 2, span: 0, turns: 31, awg: 25, strands: 1, paths: 1, conn: "wye",
+        motorType: "stepper", stpKind: "hybrid", stpNr: 100, stpWire: "bip-ser", stpOn: 2,
+        mag: "N35", magT: 3, poleArc: 85, Top: 60, Vdc: 24, Imax: 2.8, freq: 100, J: 6,
+        seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
+        statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+    },
+    // v59.5: 34-frame (86 mm) hybrid, 34HS-class proportions scaled from the NEMA 23 preset;
+    // computes 6.4 N·m holding, inside the 4.5–8.5 N·m catalog band for 65 mm stacks.
+    'NEMA 34 · 1.8° hybrid · bipolar': {
+        slots: 8, poles: 2, statorOD: 86, statorID: 61, rotorOD: 60.9, yoke: 5.5, toothW: 8.5,
+        slotOpen: 2.8, tipH: 1.4, stackL: 65, liner: 0.3, slotR: 0.3, shaftD: 14,
+        pattern: "concentrated", layers: 2, span: 0, turns: 22, awg: 20, strands: 1, paths: 1, conn: "wye",
+        motorType: "stepper", stpKind: "hybrid", stpNr: 50, stpWire: "bip-ser", stpOn: 2,
+        mag: "N35", magT: 4, poleArc: 85, Top: 60, Vdc: 48, Imax: 6, freq: 100, J: 6,
+        seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
+        statorMat: "M19 (29 ga)", rotorMat: "1018 steel (solid)",
+    },
     'Brake 28 V · 38 mm · aero holding': {
         slots: 12, poles: 4, statorOD: 38, statorID: 30, rotorOD: 24, yoke: 5, toothW: 3, slotOpen: 1.5,
         tipH: 0.8, stackL: 18, liner: 0.2, slotR: 0, shaftD: 8,
@@ -17400,6 +17423,20 @@ const PRESETS = {
         brkRo: 18, brkRi: 12, brkFaces: 2, brkMat: "Organic (resin-bonded)", brkMu: 0.40, brkMuD: 0.32,
         statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85, Top: 60,
     },
+    // v59.5: the 60 mm magnet body rewound for a 270 V aerospace bus — fine wire (AWG 39) for
+    // release authority (margin ∝ V·wire area), a 50% economizer holds the released coil at
+    // ~65 °C where full voltage would cook it (hold power ∝ V²·area/turns). Same springs,
+    // lining, and Thold as the 24 V unit; brk-preset-gate carries its bands.
+    'Brake 270 V · 60 mm · aero bus': {
+        slots: 12, poles: 4, statorOD: 60, statorID: 40, rotorOD: 30, yoke: 5, toothW: 3, slotOpen: 1.5,
+        tipH: 0.8, stackL: 25, liner: 0.2, slotR: 0, shaftD: 10,
+        pattern: "concentrated", layers: 2, span: 0, turns: 4300, awg: 39, strands: 1, paths: 1, conn: "wye",
+        motorType: "brake", Vdc: 270, Imax: 1, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0, brkEco: 50,
+        brkBore: 26, brkArm: 6, brkStroke: 0.3, brkSprFree: 23.3, brkSprEng: 18.3, brkK: 40, brkSpringN: 6,
+        brkPktID: 50, brkBossOD: 34, brkPktD: 18, brkBobID: 36.2, brkBobOD: 49, brkBobL: 15,
+        brkRo: 27, brkRi: 18, brkFaces: 2, brkMat: "Organic (resin-bonded)", brkMu: 0.40, brkMuD: 0.32,
+        statorMat: "1018 steel (solid)", rotorMat: "1018 steel (solid)", mag: "N35", magT: 3, poleArc: 85, Top: 60,
+    },
     'LATM 1.5" · 28 V · SmCo 4-pole · 45° toggle': {
         slots: 12, poles: 4, statorOD: 38, statorID: 28, rotorOD: 22, yoke: 5, toothW: 3, slotOpen: 1.5,
         tipH: 0.8, stackL: 25, liner: 0.2, slotR: 0, shaftD: 5,
@@ -17425,6 +17462,18 @@ const PRESETS = {
         motorType: "latm", mag: "N45SH", magT: 3.5, poleArc: 85, Top: 80,
         latmSect: 4, latmSpan: 60, latmWind: 2, latmTravel: 60,
         Vdc: 28, Imax: 2, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
+        statorMat: "Hiperco 50", rotorMat: "1018 steel (solid)",
+    },
+    // v59.5: sub-1" toggle LATM, scaled from the 1" 2-pole with the same slotless architecture.
+    // 30° travel sits far inside the ±90° reversal; held-on winding runs ~103 °C at the 0.25 A
+    // limit (latm-preset-gate invariants: Tstop/Tpk 98%, coil fits at 380/708 turns capacity).
+    'LATM 0.75" · 28 V · SmCo 2-pole · 30° toggle': {
+        slots: 12, poles: 2, statorOD: 19, statorID: 13.5, rotorOD: 9.5, yoke: 2.2, toothW: 1.5,
+        slotOpen: 1, tipH: 0.5, stackL: 15, liner: 0.12, slotR: 0, shaftD: 2,
+        pattern: "lap", layers: 2, span: 0, turns: 380, awg: 37, strands: 1, paths: 1, conn: "wye",
+        motorType: "latm", mag: "Sm2Co17-26", magT: 1.8, poleArc: 85, Top: 70,
+        latmSect: 2, latmSpan: 120, latmWind: 1.2, latmTravel: 30,
+        Vdc: 28, Imax: 0.25, freq: 100, J: 6, seq: "ABC", endMode: "auto", loadMode: "J", Rext: 0,
         statorMat: "Hiperco 50", rotorMat: "1018 steel (solid)",
     },
     'Brushed 12 V · 2-pole ferrite · ~7 krpm': {
@@ -17465,6 +17514,17 @@ const PRESETS = {
         pattern: "lap", layers: 2, span: 0, turns: 37, awg: 24, strands: 1, paths: 1, conn: "wye",
         motorType: "induction", Vll: 460, freq: 60, Bg: 0.8, J: 5, seq: "ABC", endMode: "auto",
         rotorBars: 29, barA: 40, ringA: 80, barMat: "Cast aluminum", loadMode: "J",
+        statorMat: "M19 (29 ga)", rotorMat: "M19 (29 ga)", Rext: 0,
+    },
+    // v59.5: 2-pole coverage (both prior ACIMs are 4/6-pole). 100 mm frame carries the deep
+    // yoke a 2-pole flux path needs while keeping slot area insertable; 19 bars vs 24 slots
+    // clears every cage/slot interaction check (Nb≠Ns, |Ns−Nb| ∉ {p, 2p}, Nb ≫ poles).
+    'ACIM 230 V · 60 Hz · 2-pole blower': {
+        slots: 24, poles: 2, statorOD: 100, statorID: 48, rotorOD: 47.4, yoke: 13.5, toothW: 3.2,
+        slotOpen: 2, tipH: 1, stackL: 60, liner: 0.25, slotR: 0.5, shaftD: 16,
+        pattern: "lap", layers: 2, span: 0, turns: 26, awg: 23, strands: 1, paths: 1, conn: "wye",
+        motorType: "induction", Vll: 230, freq: 60, Bg: 0.68, J: 5, seq: "ABC", endMode: "auto",
+        rotorBars: 19, barA: 45, ringA: 90, barMat: "Cast aluminum", loadMode: "J",
         statorMat: "M19 (29 ga)", rotorMat: "M19 (29 ga)", Rext: 0,
     },
     '4" high-temp · 270 V · Hiperco/SmCo': {
