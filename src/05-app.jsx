@@ -534,6 +534,7 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
           <Num label="Slot opening" unit="mm" v={p.slotOpen} set={s("slotOpen")} step={0.1} />
           <Num label="Liner thickness" unit="mm" v={p.liner} set={s("liner")} step={0.05} />
           <Num label="Stack length" unit="mm" v={p.stackL} set={s("stackL")} />
+          <Num label="Stack skew end-to-end (0 = straight)" unit="°" v={p.skew} set={s("skew")} step={0.5} min={0} />
           <Num label="Coil head per end (0 = auto from scheme)" unit="mm" v={p.wbHead} set={s("wbHead")} step={0.5} min={0} />
           <Num label="Slot bottom corner R" unit="mm" v={p.slotR} set={s("slotR")} step={0.1} min={0} />
           <Num label="Slot mouth corner R" unit="mm" v={p.wbRtip} set={s("wbRtip")} step={0.1} min={0} />
@@ -586,8 +587,8 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
             <div className="kv"><span>Build (nested / crossover worst)</span>
               <b style={{ color: b.buildX > p.wbChanH ? "#DC2626" : "#059669" }}>{b.build.toFixed(2)} / {b.buildX.toFixed(2)} of {p.wbChanH} mm</b></div>
             <div className="kv"><span>Coil heads (per end) · stack fit</span>
-              <b>{dl9(b.Lhead)} · {dl9(b.stackFit)} vs stack {dl9(p.stackL)}
-                <span style={{ color: b.stackFit < p.stackL - 0.5 ? "#DC2626" : Math.abs(b.stackFit - p.stackL) < Math.max(6, 0.15 * p.stackL) ? "#059669" : "#B45309" }}> {b.stackFit < p.stackL - 0.5 ? "✗ short" : Math.abs(b.stackFit - p.stackL) < Math.max(6, 0.15 * p.stackL) ? "✓" : "loose"}</span></b></div>
+              <b>{dl9(b.Lhead)} · {dl9(b.stackFit)} vs {p.skew > 0 ? "skew diagonal" : "stack"} {dl9(b.stkReq)}
+                <span style={{ color: b.stackFit < b.stkReq - 0.5 ? "#DC2626" : Math.abs(b.stackFit - b.stkReq) < Math.max(6, 0.15 * b.stkReq) ? "#059669" : "#B45309" }}> {b.stackFit < b.stkReq - 0.5 ? "✗ short" : Math.abs(b.stackFit - b.stkReq) < Math.max(6, 0.15 * b.stkReq) ? "✓" : "loose"}</span></b></div>
             <div className="kv"><span>Coil ID / OD · channel capacity</span><b>{dl9(p.wbArborD)} / {dl9(b.coilOD)} · ~{b.capCh} turns</b></div>
             <div className="kv"><span>Mean turn · wire per coil</span><b>{dl9(b.MLT)} · {b.lenCoil.toFixed(2)} m</b></div>
             <div className="kv"><span>String: {p.wbCoils} coils + jumpers</span><b>{b.lenString.toFixed(2)} m · {(b.mCu * 1000).toFixed(0)} g Cu</b></div>
@@ -933,7 +934,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
 export default function MotorDesigner() {
   const [p, setP] = useState({
     slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
-    yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0,
+    yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0, skew: 0,
     pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy", turnBasis: "coil",
     conn: "wye", vref: "ll", motorType: "pm", ctrl: "foc", sense: "hall",
     mag: "N45SH", magT: 4, poleArc: 85, Top: 60,
@@ -1601,6 +1602,7 @@ export default function MotorDesigner() {
               <Num label="Slot mouth corner R" unit="mm" v={p.wbRtip} set={s("wbRtip")} step={0.1} min={0} />}
             </>}
             <Num label="Stack length" unit="mm" v={p.stackL} set={s("stackL")} />
+            {!latmM && !stpM && !brkM && <Num label="Stack skew end-to-end (0 = straight)" unit="°" v={p.skew} set={s("skew")} step={0.5} min={0} />}
             {!latmM && <Num label="Slot liner" unit="mm" v={p.liner} set={s("liner")} step={0.05} />}
             <Num label="Shaft Ø" unit="mm" v={p.shaftD} set={s("shaftD")} step={0.5} min={1} />
             <Sel label={brM ? "Armature lamination" : latmM ? "Toroid core (tape/lam)" : "Stator lamination"} v={p.statorMat} set={s("statorMat")} opts={Object.keys(STEELS).filter((k) => STEELS[k].lam)} />
@@ -2261,7 +2263,9 @@ export default function MotorDesigner() {
             )}
             {!brkM && !stpM && !latmM && <div className="kv"><span>Shaft power</span><b>{us === "in" ? (r.Pout / 745.7).toFixed(2) + " hp · " + fmt(r.Pout, 0) + " W" : fmt(r.Pout / 1000) + " kW"}</b></div>}
             {!latmM && !stpM && !brkM && <div className="kv"><span>Rotation ({brM ? (p.seq === "ABC" ? "normal" : "reversed") : p.seq})</span><b>{r.rotation}</b></div>}
-            {!brM && !latmM && !stpM && !brkM && <div className="kv"><span>Winding factor kw</span><b>{fmt(r.kw, 3)}</b></div>}
+            {!brM && !latmM && !stpM && !brkM && <div className="kv"><span>Winding factor kw{r.skewDeg > 0 ? " (incl. skew)" : ""}</span><b>{fmt(r.kw, 3)}</b></div>}
+            {!latmM && !stpM && !brkM && r.skewDeg > 0 && <div className="kv"><span>Stack skew {r.skewDeg}° ({fmt(r.skewArc, 1)} mm arc)</span>
+              <b>k_sk {fmt(r.ksk, 4)} · slot path ×{fmt(r.skewSlant, 4)}{r.cog && Number.isFinite(r.cog.kskCog) ? ` · cogging ×${fmt(r.cog.kskCog, 3)}` : ""}</b></div>}
             {!latmM && !stpM && !brkM && <div className="kv"><span>Linear loading A</span><b>{fmt(r.Arms / 1000, 1)} kA/m</b></div>}
             {brkM && r.brake && <div className="kv"><span>Coil dissipation (released)</span><b>{fmt(r.brake.Pb, 1)} W</b></div>}
             {stpM && r.step && <div className="kv"><span>Coil dissipation (holding)</span><b>{fmt((r.step.on2 ? 2 : 1) * p.Imax * p.Imax * r.step.Rs, 1)} W</b></div>}

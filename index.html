@@ -17988,7 +17988,12 @@ function solveBobbin(p) {
     const spanArc9 = (p.wbStyle || "tooth") === "lap" ? (Math.max(p.wbThrow, 1) * Math.PI * dm) / Ns : 0;
     const reachShort = p.wbHead > 0 && spanArc9 > 0 && p.wbHead < spanArc9;
     const Lhead = reachShort ? +spanArc9.toFixed(1) : LheadEnt;
-    const perim = 2 * (Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1) + 2 * Lhead;
+    // stack skew: the coil's in-slot legs run the skewed slot's diagonal, so the straight
+    // length the tool must produce grows by hypot(stack, skew arc at mean slot Ø)/stack
+    const skewB9 = Math.max(Number.isFinite(p.skew) ? p.skew : 0, 0);
+    const stkStr9 = Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1;
+    const slantB9 = skewB9 > 0 ? Math.hypot(stkStr9, (Math.PI * dm * skewB9) / 360) / stkStr9 : 1;
+    const perim = 2 * stkStr9 * slantB9 + 2 * Lhead;
     const DaGeo = +((perim / Math.PI) - build).toFixed(2); // arbor that yields exactly stack + heads
     let Da = Math.max(DaGeo, DaIns), RcT = 0, DaR = 0;
     let basis = DaGeo >= DaIns ? "stator geometry (2\u00b7stack + 2\u00b7heads)" : "insertion rule (geometry coil would be under the tips)";
@@ -18028,7 +18033,8 @@ function solveBobbin(p) {
     return { Da, DaIns, DaGeo, DaR, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
         jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal,
         spanArc: +spanArc9.toFixed(1), reachShort, LheadEnt, headAuto: +headAuto9.toFixed(1),
-        perStrand: perStrand9, tplW: tplW9s, LwW: perStrand9 ? Math.ceil((N * st) / tplW9s) : 0, err, warn };
+        perStrand: perStrand9, tplW: tplW9s, LwW: perStrand9 ? Math.ceil((N * st) / tplW9s) : 0,
+        skewSlant: slantB9, err, warn };
 }
 function computeBobbin(p) {
     const w = [], err = [];
@@ -18080,14 +18086,19 @@ function computeBobbin(p) {
         w.push(`Entered coil head ${(p.wbHead).toFixed(1)} mm/end is shorter than the throw-${Math.max(p.wbThrow, 1)} span arc — the head can't reach the return slot, so it's been RAISED to the ${spanArcH.toFixed(1)} mm reach floor for the fit numbers. Scheme auto suggests ${headAuto.toFixed(1)} mm/end (1.25×span); clear the override (0) for throw-driven heads.`);
     const LheadAuto = +headAuto.toFixed(1);
     const stk9 = Number.isFinite(p.stackL) ? Math.max(p.stackL, 1) : 1;
-    const perim = 2 * stk9 + 2 * Lhead; // what the inserted coil must measure
+    // stack skew: the in-slot legs must cover the skewed slot's DIAGONAL, not the straight stack
+    const skewB = Math.max(Number.isFinite(p.skew) ? p.skew : 0, 0);
+    const slantB = skewB > 0 ? Math.hypot(stk9, (Math.PI * dmH * skewB) / 360) / stk9 : 1;
+    const stkReq = +(stk9 * slantB).toFixed(2); // straight length each coil side must provide
+    const skewNote = skewB > 0 ? ` (${skewB}° skew diagonal of the ${stk9} mm stack)` : "";
+    const perim = 2 * stkReq + 2 * Lhead; // what the inserted coil must measure
     // wire & resistance (per coil and the sequential string with inter-coil jumpers)
     const MLTb = Math.PI * (arbor + build); // mean turn as wound on this arbor, mm
     const stackFit = MLTb / 2 - Lhead; // straight length the wound coil offers per side
-    if (Number.isFinite(p.stackL) && stackFit < p.stackL - 0.5)
-        w.push(`Wound coil offers ${stackFit.toFixed(1)} mm straight per side vs the ${p.stackL} mm stack (heads ${Lhead} mm/end) — arbor too small; grow it to \u2265 \u00d8${((perim / Math.PI) - build).toFixed(1)} mm.`);
-    else if (Number.isFinite(p.stackL) && stackFit > p.stackL + Math.max(6, 0.15 * p.stackL))
-        w.push(`Wound coil is ${(stackFit - p.stackL).toFixed(1)} mm long per side beyond stack + heads — loose fit wastes copper and resistance; shrink the arbor toward \u00d8${((perim / Math.PI) - build).toFixed(1)} mm.`);
+    if (Number.isFinite(p.stackL) && stackFit < stkReq - 0.5)
+        w.push(`Wound coil offers ${stackFit.toFixed(1)} mm straight per side vs the ${stkReq} mm required${skewNote} (heads ${Lhead} mm/end) — arbor too small; grow it to \u2265 \u00d8${((perim / Math.PI) - build).toFixed(1)} mm.`);
+    else if (Number.isFinite(p.stackL) && stackFit > stkReq + Math.max(6, 0.15 * stkReq))
+        w.push(`Wound coil is ${(stackFit - stkReq).toFixed(1)} mm long per side beyond ${skewB > 0 ? "the skew diagonal" : "stack"} + heads — loose fit wastes copper and resistance; shrink the arbor toward \u00d8${((perim / Math.PI) - build).toFixed(1)} mm.`);
     const lenCoil = (MLTb * p.turns) / 1000; // m, per strand
     const jump = Math.max(p.wbJump, 0) / 1000;
     const lenString = nC * lenCoil + (nC - 1) * jump + 2 * jump; // + lead tails
@@ -18137,7 +18148,7 @@ function computeBobbin(p) {
         MLT: MLTb, lenCoil, lenString, R20c, R20s, RhotF: Rhot, mCu, mPhase, slot, lenTool, wild, perStrand,
         tplW: tplW9, LwW: LwW9,
         kRw, predAtMeasT, R20cC: kRw * R20c, R20sC: kRw * R20s,
-        Lhead, LheadAuto, perim, stackFit,
+        Lhead, LheadAuto, perim, stackFit, stkReq, skewSlant: slantB,
         flangeOD: arbor + 2 * chH };
 }
 function computeDesign(p) {
@@ -18302,6 +18313,32 @@ function computeDesign(p) {
     const Nser = (coilsPerPhase * p.turns) / a;
     const midD = (d1 + d2) / 2; // mid-slot diameter (valid outward stator slots or inward armature slots)
     const coilArc = (span * Math.PI * midD) / Ns;
+    // ---- stack skew (end-to-end, mechanical degrees; 0 = straight stack) ----
+    // Three physical effects, all classical: (1) the EMF fundamental sees the sinc-form
+    // skew factor k_sk = sin(γe/2)/(γe/2), γe = (p/2)·θ_skew — folded into kw as the
+    // conventional kd·kp·k_sk product (magnetizing coupling scales with it too);
+    // (2) each in-slot conductor runs the DIAGONAL of the skewed slot, lengthening the
+    // in-slot portion of every turn by hypot(stack, arc)/stack at the mid-slot radius;
+    // (3) cogging is attenuated by the skew's sinc over the cogging period (applied in
+    // the cogging block below). Harmonic EMFs get k_sk(n) in the BEMF synthesis.
+    const skewDeg = Math.max(Number.isFinite(p.skew) ? p.skew : 0, 0);
+    const skewArc = (Math.PI * midD * skewDeg) / 360; // mm of arc, end-to-end, at mid-slot
+    const skewSlant = p.stackL > 0 && skewDeg > 0 ? Math.hypot(p.stackL, skewArc) / p.stackL : 1;
+    const gammaSkE = ((poles / 2) * skewDeg * Math.PI) / 180; // electrical skew angle, rad
+    const kskH = (n9) => { const x9 = (n9 * gammaSkE) / 2; return x9 > 1e-9 ? Math.sin(x9) / x9 : 1; };
+    const ksk = kskH(1);
+    kw *= ksk;
+    if (skewDeg > 0 && !stpE && !brkE && !latmE) {
+        // guidance in COGGING PERIODS, not slot pitches: on fractional-slot machines
+        // (e.g. 12s14p, lcm 84) one cogging period is a few degrees and nulls cogging
+        // almost free, while a full slot pitch would cost half the EMF
+        const gcd9 = (a9, b9) => (b9 ? gcd9(b9, a9 % b9) : a9);
+        const perCog9 = 360 / ((Ns * poles) / gcd9(Ns, poles));
+        if (ksk < 0.9)
+            w.push(`Stack skew ${skewDeg}° costs ${(100 * (1 - ksk)).toFixed(0)}% of EMF/torque (k_sk ${ksk.toFixed(3)}) — one cogging period (${perCog9.toFixed(1)}° on this ${Ns}s/${poles}p) already smooths cogging.`);
+        else if (p.motorType === "pm" && skewDeg > 3 * perCog9)
+            w.push(`Stack skew ${skewDeg}° is ${(skewDeg / perCog9).toFixed(1)}× the cogging period (${perCog9.toFixed(1)}°) — cogging nulls at ~one period; the extra skew only costs EMF (k_sk ${ksk.toFixed(3)}).`);
+    }
     // ---- coil build / end-turn model → MLT (mm) ----
     const nCoilCond = p.turns * p.strands; // conductors in one coil bundle
     const winH = Math.max(p.bobWin, dIns); // winding window height
@@ -18312,8 +18349,8 @@ function computeDesign(p) {
             MLTmm = Math.PI * (p.bobD + tb);
             coilOD = p.bobD + 2 * tb;
         }
-        else { // racetrack bobbin around the tooth
-            const ca = p.stackL + 2 * p.bobWall, cb = p.toothW + 2 * p.bobWall;
+        else { // racetrack bobbin around the tooth (a skewed tooth stretches the stack-direction leg)
+            const ca = p.stackL * skewSlant + 2 * p.bobWall, cb = p.toothW + 2 * p.bobWall;
             MLTmm = 2 * (ca + cb) + Math.PI * tb;
             coilOD = tb; // envelope build per side
         }
@@ -18323,11 +18360,11 @@ function computeDesign(p) {
     }
     else if (p.endMode === "head") {
         endSide = Math.sqrt(coilArc * coilArc + p.headH * p.headH) + 5; // throw + single-sided rise + nose (rise was double-counted as 2·headH pre-v58)
-        MLTmm = 2 * p.stackL + 2 * endSide;
+        MLTmm = 2 * p.stackL * skewSlant + 2 * endSide; // in-slot legs run the skew diagonal
     }
     else { // auto
         endSide = 1.35 * coilArc + 10;
-        MLTmm = 2 * (p.stackL + endSide);
+        MLTmm = 2 * (p.stackL * skewSlant + endSide);
     }
     const MLT = MLTmm / 1000; // m per turn
     const coilDia = MLTmm / Math.PI; // equivalent round-coil Ø
@@ -18902,7 +18939,7 @@ function computeDesign(p) {
         const PhiP = (BgAvg * Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000)) / poles; // flux per pole at the armature surface
         const Z = condPerSlot * Ns; // total armature conductors
         const A2 = pathsEff; // parallel paths (lap = poles × plex, wave = 2 × plex)
-        Kt = (calAct ? cKe : 1) * (poles * Z * PhiP) / (2 * Math.PI * A2); // = Ke in SI (BEMF, bench-scaled)
+        Kt = (calAct ? cKe : 1) * ksk * (poles * Z * PhiP) / (2 * Math.PI * A2); // = Ke in SI (BEMF, bench-scaled); armature skew applies the same sinc factor
         const KtT9 = calAct ? Kt * (cKt / cKe) : Kt; // torque production with measured stall droop
         const Ra = ((RHO_CU * ((MLT / 2) * Z)) / (A2 * A2 * aBare * 1e-6)) * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
         // armature inductance seen at the brushes: airgap term (magnets ≈ air) + slot-leakage adder
@@ -19089,7 +19126,7 @@ function computeDesign(p) {
         noLoad = nSync; // minus friction/windage
         const Nb = Math.max(4, Math.round(p.rotorBars));
         const rhoBar = (BARS[p.barMat] || 3.2e-8) * (1 + 0.004 * (p.Tcu - 20));
-        const Rbar = (rhoBar * (p.stackL / 1000)) / Math.max(p.barA * 1e-6, 1e-9);
+        const Rbar = (rhoBar * ((p.stackL * skewSlant) / 1000)) / Math.max(p.barA * 1e-6, 1e-9); // skewed bars run the stack diagonal
         const Dring = (p.rotorOD * 0.85) / 1000; // mean end-ring diameter
         const Rseg = (rhoBar * ((Math.PI * Dring) / Nb)) / Math.max(p.ringA * 1e-6, 1e-9);
         const pp2 = poles / 2;
@@ -19218,7 +19255,7 @@ function computeDesign(p) {
         const ks = [1, 3, 5, 7, 9, 11, 13];
         const Ek = ks.map((k) => {
             const bk = ((4 / Math.PI) * BgAvg * Math.sin((k * (p.poleArc / 100) * Math.PI) / 2)) / k;
-            return 4.44 * fBd * kwH(k) * Nser * ((2 * bk * D * L) / poles); // rms, per phase
+            return 4.44 * fBd * kwH(k) * kskH(k) * Nser * ((2 * bk * D * L) / poles); // rms, per phase; skew filters harmonics harder than the fundamental
         });
         const NPT = 241;
         const phW = (thE, off) => ks.reduce((acc, k, j) => acc + Math.SQRT2 * Ek[j] * Math.sin(k * (thE - off)), 0);
@@ -19284,9 +19321,16 @@ function computeDesign(p) {
             thArr.push((th3 * 180) / Math.PI);
             tArr.push(tau);
         }
+        // skew attenuation: a conductor/magnet edge skewed across the stack averages the
+        // cogging waveform over skewDeg of rotation — the classic sinc over the cogging
+        // period. One full period of skew ("covering a full bar") nulls the fundamental.
+        const kskCog = skewDeg > 0 ? Math.abs(Math.sin(Math.PI * skewDeg / perDeg) / (Math.PI * skewDeg / perDeg)) : 1;
+        if (kskCog !== 1)
+            for (let i5 = 0; i5 < tArr.length; i5++)
+                tArr[i5] *= kskCog;
         const Tpk = Math.max(...tArr.map(Math.abs));
         const Trms = Math.sqrt(tArr.reduce((a4, v) => a4 + v * v, 0) / tArr.length);
-        cog = { Ncog, perDeg, thArr, tArr, Tpk, Trms, Tpp: Math.max(...tArr) - Math.min(...tArr) };
+        cog = { Ncog, perDeg, thArr, tArr, Tpk, Trms, Tpp: Math.max(...tArr) - Math.min(...tArr), kskCog };
     }
     if (p.motorType === "induction" && Eph > Vph)
         w.push("Back-EMF exceeds supply phase voltage — lower turns, B̂g, or frequency.");
@@ -19429,6 +19473,7 @@ function computeDesign(p) {
     return {
         err, warn: w, Ns, poles, airgap, hs, w1, w2, slotArea, usableArea,
         dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve,
+        skewDeg, ksk, skewSlant, skewArc,
         Nser, MLT, Rphase, Rll, Iph, Iline: IlineOut, Istall, Vph, Arms,
         Trated, nSync, nShaft, Pout, Pcu, eta, Eph, Ke, Kt, VphAvail,
         rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
@@ -23305,6 +23350,7 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
                 React.createElement(Num, { label: "Slot opening", unit: "mm", v: p.slotOpen, set: s("slotOpen"), step: 0.1 }),
                 React.createElement(Num, { label: "Liner thickness", unit: "mm", v: p.liner, set: s("liner"), step: 0.05 }),
                 React.createElement(Num, { label: "Stack length", unit: "mm", v: p.stackL, set: s("stackL") }),
+                React.createElement(Num, { label: "Stack skew end-to-end (0 = straight)", unit: "\u00B0", v: p.skew, set: s("skew"), step: 0.5, min: 0 }),
                 React.createElement(Num, { label: "Coil head per end (0 = auto from scheme)", unit: "mm", v: p.wbHead, set: s("wbHead"), step: 0.5, min: 0 }),
                 React.createElement(Num, { label: "Slot bottom corner R", unit: "mm", v: p.slotR, set: s("slotR"), step: 0.1, min: 0 }),
                 React.createElement(Num, { label: "Slot mouth corner R", unit: "mm", v: p.wbRtip, set: s("wbRtip"), step: 0.1, min: 0 }),
@@ -23369,11 +23415,13 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
                             dl9(b.Lhead),
                             " \u00B7 ",
                             dl9(b.stackFit),
-                            " vs stack ",
-                            dl9(p.stackL),
-                            React.createElement("span", { style: { color: b.stackFit < p.stackL - 0.5 ? "#DC2626" : Math.abs(b.stackFit - p.stackL) < Math.max(6, 0.15 * p.stackL) ? "#059669" : "#B45309" } },
+                            " vs ",
+                            p.skew > 0 ? "skew diagonal" : "stack",
+                            " ",
+                            dl9(b.stkReq),
+                            React.createElement("span", { style: { color: b.stackFit < b.stkReq - 0.5 ? "#DC2626" : Math.abs(b.stackFit - b.stkReq) < Math.max(6, 0.15 * b.stkReq) ? "#059669" : "#B45309" } },
                                 " ",
-                                b.stackFit < p.stackL - 0.5 ? "✗ short" : Math.abs(b.stackFit - p.stackL) < Math.max(6, 0.15 * p.stackL) ? "✓" : "loose"))),
+                                b.stackFit < b.stkReq - 0.5 ? "✗ short" : Math.abs(b.stackFit - b.stkReq) < Math.max(6, 0.15 * b.stkReq) ? "✓" : "loose"))),
                     React.createElement("div", { className: "kv" },
                         React.createElement("span", null, "Coil ID / OD \u00B7 channel capacity"),
                         React.createElement("b", null,
@@ -23909,7 +23957,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
 function MotorDesigner() {
     const [p, setP] = useState({
         slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
-        yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0,
+        yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0, skew: 0,
         pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy", turnBasis: "coil",
         conn: "wye", vref: "ll", motorType: "pm", ctrl: "foc", sense: "hall",
         mag: "N45SH", magT: 4, poleArc: 85, Top: 60,
@@ -24615,6 +24663,7 @@ function MotorDesigner() {
                                 (p.motorType === "pm" || p.motorType === "induction" || brM) &&
                                     React.createElement(Num, { label: "Slot mouth corner R", unit: "mm", v: p.wbRtip, set: s("wbRtip"), step: 0.1, min: 0 })),
                             React.createElement(Num, { label: "Stack length", unit: "mm", v: p.stackL, set: s("stackL") }),
+                            !latmM && !stpM && !brkM && React.createElement(Num, { label: "Stack skew end-to-end (0 = straight)", unit: "\u00B0", v: p.skew, set: s("skew"), step: 0.5, min: 0 }),
                             !latmM && React.createElement(Num, { label: "Slot liner", unit: "mm", v: p.liner, set: s("liner"), step: 0.05 }),
                             React.createElement(Num, { label: "Shaft \u00D8", unit: "mm", v: p.shaftD, set: s("shaftD"), step: 0.5, min: 1 }),
                             React.createElement(Sel, { label: brM ? "Armature lamination" : latmM ? "Toroid core (tape/lam)" : "Stator lamination", v: p.statorMat, set: s("statorMat"), opts: Object.keys(STEELS).filter((k) => STEELS[k].lam) }),
@@ -25314,8 +25363,23 @@ function MotorDesigner() {
                                         ")"),
                                     React.createElement("b", null, r.rotation)),
                                 !brM && !latmM && !stpM && !brkM && React.createElement("div", { className: "kv" },
-                                    React.createElement("span", null, "Winding factor kw"),
+                                    React.createElement("span", null,
+                                        "Winding factor kw",
+                                        r.skewDeg > 0 ? " (incl. skew)" : ""),
                                     React.createElement("b", null, fmt(r.kw, 3))),
+                                !latmM && !stpM && !brkM && r.skewDeg > 0 && React.createElement("div", { className: "kv" },
+                                    React.createElement("span", null,
+                                        "Stack skew ",
+                                        r.skewDeg,
+                                        "\u00B0 (",
+                                        fmt(r.skewArc, 1),
+                                        " mm arc)"),
+                                    React.createElement("b", null,
+                                        "k_sk ",
+                                        fmt(r.ksk, 4),
+                                        " \u00B7 slot path \u00D7",
+                                        fmt(r.skewSlant, 4),
+                                        r.cog && Number.isFinite(r.cog.kskCog) ? ` · cogging ×${fmt(r.cog.kskCog, 3)}` : "")),
                                 !latmM && !stpM && !brkM && React.createElement("div", { className: "kv" },
                                     React.createElement("span", null, "Linear loading A"),
                                     React.createElement("b", null,

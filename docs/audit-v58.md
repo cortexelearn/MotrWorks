@@ -393,3 +393,33 @@ Deliberately NOT done tonight (each moves anchors and deserves owner sign-off; s
 engine-audit list): computed magnet leakage in place of the fixed 0.9, Carter's coefficient
 for the stepper/cogging gaps, brushed saturation iteration, ACIM deep-bar + real X2,
 drag-corrected PM no-load intercept, two-harmonic stepper permeance model.
+
+---
+
+# v59.7 — stack skew: EMF, cogging, and the diagonal every wire actually runs (2026-08-13)
+
+New `skew` parameter (mechanical degrees, end-to-end of the stack, default 0 — a straight
+stack computes bit-identically to before; all 20 tests unchanged). Three classical effects,
+one input, applied to BLDC/PMSM, brushed, ACIM, and the Winding module:
+
+- **EMF/torque:** the sinc-form skew factor k_sk = sin(γe/2)/(γe/2), γe = (p/2)·θ_skew,
+  folded into kw as the conventional kd·kp·k_sk product (magnetizing coupling follows).
+  Harmonic EMFs in the BEMF synthesis get k_sk(n) — skew filters harmonics harder than
+  the fundamental, as it should. Brushed applies the same factor to its conductor-count Kt.
+- **Cogging:** attenuated by |sinc| over the cogging period — verified: one cogging period
+  of skew ("covering a full bar") drives Tpp to ~zero (12s14p probe: ×0.000 at one period).
+  The in-app guidance is denominated in COGGING PERIODS, not slot pitches: on fractional-slot
+  machines one period is a few degrees and nearly free (12s14p: 4.3°, k_sk 0.989), while a
+  full slot pitch would cost half the EMF (30°: k_sk 0.527) — the tool now says so.
+- **Copper path:** every in-slot conductor runs the skewed slot's diagonal —
+  hypot(stack, skew arc at mid-slot Ø)/stack multiplies the in-slot legs of the MLT
+  (head/auto end modes and the racetrack bobbin's stack leg), so R, copper mass, and the
+  thermal chain all see it (NEMA 17 at 30°: Rll ×1.020). ACIM rotor bars run the same
+  diagonal (Rbar ×slant). In the Winding module, solveBobbin/computeBobbin size the coil
+  against the skew DIAGONAL: required straight length, perimeter, solved arbor Ø, and the
+  stack-fit verdicts all use it (new `stkReq` field; fit rows show "vs skew diagonal").
+
+UI: skew field in the BLDC/Brushed/ACIM geometry card and the Winding tab; results row
+shows k_sk, slot-path multiplier, and the cogging attenuation when skew > 0. `_base.json`
+gains `skew: 0` (engine-consumed key, per the v59 sync rule). Verified by 12-probe script:
+skew 0 reproduces the golden anchors exactly; 30° matches the analytic k_sk to 4 decimals.
