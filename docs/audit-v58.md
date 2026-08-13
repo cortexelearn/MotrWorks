@@ -297,3 +297,36 @@ byte-identical rebuild verified against the committed artifact before any source
 The six e2e scripts take their file:// URL from `pathToFileURL('index.html')` (cwd = repo
 root, per the run instructions) instead of the hardcoded /home/claude path. Full suite
 (14 compute gates + 6 e2e) verified green on Windows before and after this change.
+
+---
+
+# v59.4 — engine input hardening: the never-throw contract, enforced (2026-08-13)
+
+Engine audit empirically confirmed three contract violations and a family of silent NaN
+leaks in computeDesign and friends; every one now returns a named err instead. All fixes
+verified by re-running the original failure triggers (15-probe script) — and none moves a
+golden-gate anchor; full 14-gate + 6-e2e suite green.
+
+- CRASH: distributed winding with span > 10·slots indexed topLayer[negative] and threw on
+  .phase. True modulo + "coil span exceeds slot count" err.
+- HANG: PM field-weakening sweep with Vdc = 0 and negative Imax stepped by 0 and never
+  exited. Sweep now guarded on wNL > 0; Imax clamped in the exit test; negative drive
+  limit errs ("must be ≥ 0").
+- NaN gate: a non-finite load-bearing numeric (e.g. rotorOD: NaN) passed every bound
+  check (NaN compares false) and poisoned all outputs with zero errs. New per-type input
+  sanity block names the offending fields. Airgap check NaN-proofed (!(airgap > 0)) and
+  scoped away from brakes, whose statorID/rotorOD have no rotor meaning.
+- ACIM: freq = 0 produced an Infinity torque curve (err now); a cage with bars ≤ poles
+  collapsed torque ~to zero via the FP-epsilon sine in R2bar (err now); therm.Tcont was
+  NaN whenever Imax was absent (Number.isFinite fallback to Icont, all three thermal
+  branches).
+- Brake: Vdc = 0 returned brake.Vrel = NaN (err: coil produces no pull force); armature
+  plate thickness ≤ 0 silently disabled the "too thin" warning path (err now).
+- Slot geometry: liner consuming the whole slot produced Infinity fill factors with the
+  true cause unstated — computeDesign and computeBobbin both err on zero usable area.
+- J (current density) clamped ≥ 0 like Irate already was — a negative J silently produced
+  negative rated torque and skipped both density warnings.
+- solveBobbin gains the same err/warn channel computeBobbin has (was numbers-only — bad
+  input returned a page of NaN diameters with nothing to say why); the solve card renders
+  it. composeActuator sanitizes a non-finite ratio (Math.max(NaN, 1) is NaN — every
+  composed output went NaN with fail unset).

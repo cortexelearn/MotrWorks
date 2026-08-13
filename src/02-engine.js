@@ -237,7 +237,7 @@ function designGearTrain(p, act, gODin, gLenIn) {
 function composeActuator(mr, br, cfg) {
   const w = [];
   const type9 = ["Planetary", "Harmonic", "Spur"].includes(cfg.type) ? cfg.type : "Planetary";
-  const N = Math.max(cfg.ratio, 1), st = Math.max(Math.round(cfg.stages) || 1, 1);
+  const N = Math.max(Number.isFinite(cfg.ratio) ? cfg.ratio : 1, 1), st = Math.max(Math.round(cfg.stages) || 1, 1); // Math.max(NaN,1) is NaN — a NaN ratio would silently NaN every output
   const ETA_STAGE = { Planetary: 0.90, Spur: 0.93, Harmonic: 0.80 };
   const etaStage = ETA_STAGE[type9];
   const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : Math.pow(etaStage, st);
@@ -275,6 +275,14 @@ function composeActuator(mr, br, cfg) {
    inter-coil jumper allowance are estimated from the lamination and winding scheme rather
    than entered. ---- */
 function solveBobbin(p) {
+  // err/warn channel matching computeBobbin's — bad input names itself instead of
+  // returning a silent page of NaN diameters (the UI already knows how to render these)
+  const err = [], warn = [];
+  {
+    const bad = ["turns", "awg", "statorOD", "statorID", "stackL", "toothW", "yoke", "tipH"]
+      .filter((k9) => !Number.isFinite(p[k9]));
+    if (bad.length) err.push("Non-numeric input: " + bad.join(", ") + " — the solve is meaningless until these are fixed.");
+  }
   const dBare = awgBareDia(p.awg);
   const dIns = awgInsDia(dBare, p.insBuild);
   const st = Math.max(Math.round(p.strands) || 1, 1);
@@ -360,7 +368,7 @@ function solveBobbin(p) {
   return { Da, DaIns, DaGeo, DaR, Lhead, perim, chW, chH, tpl, layers, build: +build.toFixed(2), basis,
     jumpEst, flgEst, RcT, Rjump, throwArc, kRw, RcReal, RphReal, RllReal,
     spanArc: +spanArc9.toFixed(1), reachShort, LheadEnt, headAuto: +headAuto9.toFixed(1),
-    perStrand: perStrand9, tplW: tplW9s, LwW: perStrand9 ? Math.ceil((N * st) / tplW9s) : 0 };
+    perStrand: perStrand9, tplW: tplW9s, LwW: perStrand9 ? Math.ceil((N * st) / tplW9s) : 0, err, warn };
 }
 
 function computeBobbin(p) {
@@ -443,6 +451,7 @@ function computeBobbin(p) {
     const fill = areaU > 0 ? (sides * p.turns * st * aIns) / areaU : NaN;
     slot = { hs: hs9, w1, w2, areaU, fill, sides, rB: rB9, rT: rT9 };
     if (!(hs9 > 0.5)) err.push("Stator drawing leaves no slot depth (check yoke / tip / bore) — nothing to verify against.");
+    else if (!(areaU > 0)) err.push("Slot liner (or fillets) consume the entire slot area — no usable winding window, fill is undefined.");
     else {
       if (fill > 0.42) w.push(`Slot fill ${(fill * 100).toFixed(0)}% with ${sides} coil side(s) per slot — above the ~42% insertion ceiling.`);
       else if (fill > 0.35) w.push(`Slot fill ${(fill * 100).toFixed(0)}% — insertable but tight; expect careful lacing.`);
@@ -484,8 +493,30 @@ function computeDesign(p) {
   // ---- geometry (mm) ----
   // brushed: statorOD = housing OD, statorID = magnet-ring ID, rotorOD = armature OD,
   // yoke = armature core depth over the shaft; slots open OUTWARD from the armature surface.
+  // ---- input sanity: a NaN/undefined in a load-bearing numeric compares false against
+  // every bound below, so it would sail through the geometry checks and poison every
+  // downstream number silently. Name the offenders instead. (Never throw — err[].)
+  {
+    const needs = ["statorOD", "stackL", "turns", "awg"];
+    if (!brkE) needs.push("statorID", "rotorOD");
+    if (!latmE && !brkE) needs.push("slots", "poles", "yoke", "toothW", "tipH", "slotOpen");
+    if (p.motorType === "induction") needs.push("freq", "Vll", "rotorBars", "barA", "ringA");
+    const bad = needs.filter((k9) => !Number.isFinite(p[k9]));
+    if (bad.length) err.push("Non-numeric input: " + bad.join(", ") + " — fix these fields; every downstream number is meaningless until then.");
+  }
+  if ((p.motorType === "pm" || brushedM || latmE || stpE) && !(p.magT > 0))
+    err.push("Magnet thickness must be > 0.");
+  if (p.motorType === "induction" && !(p.freq > 0))
+    err.push("Supply frequency must be > 0.");
+  if (p.motorType === "induction" && Math.round(p.rotorBars) <= poles)
+    err.push(`A ${Math.round(p.rotorBars)}-bar cage cannot support ${poles} poles — practical cages need bars comfortably above the pole count.`);
+  if (brkE && !(p.brkArm > 0))
+    err.push("Brake armature plate thickness must be > 0.");
+  if (p.Imax !== undefined && !(p.Imax >= 0))
+    err.push("Drive current limit must be ≥ 0.");
+
   const airgap = (p.statorID - p.rotorOD) / 2;
-  if (airgap <= 0) err.push(brushedM
+  if (!brkE && !(airgap > 0)) err.push(brushedM
     ? "Armature OD must be smaller than the magnet ring ID (airgap ≤ 0)."
     : "Rotor OD must be smaller than stator bore (airgap ≤ 0).");
   const hs = brushedM
@@ -504,6 +535,8 @@ function computeDesign(p) {
   const slotArea = ((w1 + w2) / 2) * Math.max(hs, 0) - 2 * (1 - Math.PI / 4) * rcFil * rcFil; // mm², fillets remove corner area
   const slotPerim = 2 * Math.max(hs, 0) + Math.max(w1, 0) + Math.max(w2, 0);
   const usableArea = Math.max(slotArea - slotPerim * p.liner, 0);
+  if (!latmE && !brkE && hs > 0 && slotArea > 0 && usableArea <= 0)
+    err.push("Slot liner consumes the entire slot area — no room left for winding.");
 
   // ---- wire ----
   const dBare = awgBareDia(p.awg);
@@ -543,8 +576,11 @@ function computeDesign(p) {
     const s6 = Math.floor((th + Math.PI / 6 + 1e-9) / (Math.PI / 3)) % 6; // +1e-9 rad: ties land CCW, not on FP noise
     topLayer.push({ phase: SECT[s6][0], sign: SECT[s6][1] });
   }
+  if (span > Ns) err.push(`Coil span ${span} exceeds the slot count ${Ns} — a coil cannot span more slots than exist.`);
   const botLayer = topLayer.map((_, i) => {
-    const src = topLayer[(i - span + Ns * 10) % Ns];
+    // true modulo: the old `(i - span + Ns*10) % Ns` went negative for span > 10·Ns
+    // and indexed topLayer[-k] — undefined — throwing on .phase (never-throw contract)
+    const src = topLayer[(((i - span) % Ns) + Ns) % Ns];
     return { phase: src.phase, sign: -src.sign };
   });
 
@@ -646,7 +682,7 @@ function computeDesign(p) {
   // ---- electrical operating point: from current density J, or from a specified rated current ----
   // brushed: armature current divides over A2 parallel paths (lap = poles × plex, wave = 2 × plex)
   const pathsEff = brushedM ? (p.pattern === "lap" ? poles * a : 2 * a) : a;
-  const Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : p.J * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current)
+  const Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : Math.max(p.J, 0) * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current; J clamped ≥ 0 like Irate)
   const Jimp = Iph / (aBare * p.strands * pathsEff); // implied copper current density, A/mm²
   if (Jimp > 10) w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — needs forced-air or liquid cooling (passive designs usually run 3–6).`);
   else if (Jimp > 7) w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — fine with good airflow, hot for a sealed housing.`);
@@ -856,7 +892,9 @@ function computeDesign(p) {
         return best;
       };
       let wEnd = wNL;
-      for (let wm = wNL; wm <= wNL * 1.6; wm += wNL / 40) { if (IqMax(wm) > p.Imax * 0.01) wEnd = wm; else break; }
+      // wNL = 0 (e.g. Vdc = 0) makes the step size 0 — the loop would never advance,
+      // and with a negative Imax the exit test stays true forever: guard, don't hang
+      if (wNL > 0) for (let wm = wNL; wm <= wNL * 1.6; wm += wNL / 40) { if (IqMax(wm) > Math.max(p.Imax, 0) * 0.01) wEnd = wm; else break; }
       for (let i = 0; i <= 90; i++) {
         const wm = (wEnd * i) / 90;
         curve.push({ n: (wm * 60) / (2 * Math.PI), T: Kt * Math.min(IqMax(wm), p.Imax) });
@@ -949,7 +987,8 @@ function computeDesign(p) {
     const RthB = 1 / (14 * Asurf) * 0.6;
     const TcuB = p.Tamb + Phold * RthB;                               // held released at economizer voltage
     const Lb = (Ntot * Ntot) / ((g0 / (mu0b * Ain)) + (g0 / (mu0b * Aout)) + (gFe / (mu0b * Amin)));
-    const Vrel = Math.sqrt(Math.max(1.35 * Fcompr / atGap.F, 0)) * p.Vdc;
+    const Vrel = atGap.F > 0 ? Math.sqrt(Math.max(1.35 * Fcompr / atGap.F, 0)) * p.Vdc : NaN;
+    if (!(atGap.F > 0)) err.push("Coil produces no pull force (check bus voltage and coil turns) — the brake cannot release.");
     // ---- actuation currents: invert the circuit for the force targets ----
     const Rtot = (g) => (g / (mu0b * Ain)) + (g / (mu0b * Aout)) + (gFe / (mu0b * Amin));
     const kF = (1 / Ain + 1 / Aout) / (2 * mu0b);                     // F = kF·Φ²
@@ -1509,7 +1548,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * Math.min(Icont, p.Imax), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
     if (Tc > p.TcuMax) w.push(`Held-on winding temp ≈ ${Math.round(Tc)} °C exceeds the ${p.TcuMax} °C class at the ${latm.Idrv.toFixed(2)} A drive current — a toggle LATM energized continuously needs Idrv ≤ ~${Icont.toFixed(2)} A (current limit or higher-R winding), or pulse duty.`);
   } else if (brushedM && brush) {
     // rotating armature: winding heat crosses the airgap too — lump an extra series resistance
@@ -1541,7 +1580,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * Math.min(Icont, p.Imax), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   } else {
     let Tc = p.Tamb + 40;
     for (let it3 = 0; it3 < 10; it3++) {
@@ -1565,7 +1604,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: Kt * Math.min(Icont, p.Imax), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   }
 
 

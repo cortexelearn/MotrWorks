@@ -462,6 +462,7 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
               <Pick label="Winding style" v={p.wbStyle} set={s("wbStyle")} opts={[{ v: "tooth", t: "Tooth-wound" }, { v: "lap", t: "Lap (inserted)" }]} />
               {p.wbStyle === "lap" && <Num label="Coil throw" unit="slots" v={p.wbThrow} set={s("wbThrow")} min={1} />}
               <Num label="Coils per phase (string)" v={p.wbCoils} set={s("wbCoils")} min={1} max={48} />
+              {sol.err && sol.err.map((e9, i9) => <div className="warn errb" key={"se" + i9}>{e9}</div>)}
               <div className="tbl" style={{ marginTop: 6 }}>
                 <div className="kv"><span>Solved arbor Ø ({sol.basis})</span>
                   <b style={{ color: sol.Da < Math.max(sol.DaIns, sol.DaGeo) - 0.25 ? "#DC2626" : "#059669" }}>{dl9(sol.Da)}</b></div>
