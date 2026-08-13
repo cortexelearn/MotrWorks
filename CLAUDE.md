@@ -112,6 +112,16 @@ Static: GitHub Pages serving `main` at repo root (per README; no workflow file i
 ships nothing. The page works offline from `file://`; the only external reference is a favicon URL,
 which degrades harmlessly.
 
+## Desktop shell (`tauri/`)
+
+`tauri/` wraps the committed `index.html` in a native Windows exe (Tauri 2 / WebView2). It is a
+shell, not a fork: `npm run build` in `tauri/` stages the repo-root `index.html` into `tauri/dist/`
+(git-ignored) and embeds it — it does **not** run `build.py`, so rebuild `index.html` first if
+`src/` changed. The shell grants the frontend no native permissions and registers no Tauri
+commands; app file IO stays browser-native through WebView2. localStorage autosave persists across
+relaunches (WebView2 profile). See `tauri/README.md` for prerequisites, build steps, and
+desktop-specific behaviour. The shell does not change the browser/Pages deployment story above.
+
 ## Git workflow and safety
 
 - Work on the assigned feature branch. Never commit or push to `main`. Never merge.

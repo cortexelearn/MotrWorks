@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "MotrWorks runs entirely in the webview. File IO is browser-native (<input type=file> and blob downloads via WebView2), so it needs no filesystem, shell, http or dialog permissions — only the core window surface.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MotrWorks",
+  "version": "0.1.0",
+  "identifier": "com.cortexelearn.motrworks",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": false,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Cortexe Learn",
+    "copyright": "Cortexe Learn",
+    "category": "DeveloperTool",
+    "shortDescription": "Electric-machine design workbench",
+    "longDescription": "MotrWorks is a single-page electric-machine design tool: BLDC/PMSM, brushed PM DC, limited-angle torquers, hybrid steppers, spring-applied brakes, and squirrel-cage ACIM, plus actuator composition (motor + brake + gearhead) and winding tooling. Envelope-synthesis wizard, bench calibration, DXF lamination import/export, FEMM export. Runs fully offline; designs autosave locally and export as JSON files.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "motrworks-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tauri desktop shell for MotrWorks — wraps the self-contained index.html in a Windows exe",
+  "scripts": {
+    "stage": "node scripts/stage.js",
+    "icons": "node scripts/make-icons.js",
+    "dev": "npm run stage && tauri dev",
+    "build": "npm run stage && tauri build",
+    "build:debug": "npm run stage && tauri build --debug"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

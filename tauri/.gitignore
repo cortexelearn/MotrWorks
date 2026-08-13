@@ -1,0 +1,9 @@
+# npm + cargo build output
+node_modules/
+src-tauri/target/
+
+# tauri codegen output
+src-tauri/gen/
+
+# staged copy of the repo-root index.html (written by scripts/stage.js)
+dist/

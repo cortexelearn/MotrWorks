@@ -1,0 +1,22 @@
+[package]
+name = "motrworks"
+version = "0.1.0"
+description = "MotrWorks — electric-machine design workbench"
+authors = ["Cortexe Learn"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# Smaller, faster release binary. MotrWorks does no Rust work at all — the
+# whole application is the embedded index.html — so optimise for size.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
