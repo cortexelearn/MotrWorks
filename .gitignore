@@ -1,3 +1,6 @@
 # build.py transpile byproducts (written to the repo root, never shipped)
 _appsrc.tsx
 _appsrc.js
+
+# Tauri frontend staging dir (tools/make-dist.py copies index.html here)
+/dist/

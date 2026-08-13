@@ -34,3 +34,12 @@ design JSON stays lossless across types.
     python3 build.py             # rebuilds index.html in place
 
 ## Deploy: push index.html (and src/) to the repo root; Pages -> main / root.
+
+## Desktop app (Tauri)
+
+`src-tauri/` wraps the same self-contained index.html in a native window and
+builds a standalone Windows executable + installer:
+
+    cargo tauri build            # from the repo root; needs Rust + tauri-cli
+
+See docs/tauri-windows-setup.md for machine prerequisites and details.

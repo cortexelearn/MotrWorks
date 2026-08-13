@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MotrWorks",
+  "version": "0.1.0",
+  "identifier": "com.cortexedge.motrworks",
+  "build": {
+    "beforeDevCommand": "python tools/make-dist.py",
+    "beforeBuildCommand": "python tools/make-dist.py",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MotrWorks — CortexEdge Engineering Tools",
+        "width": 1500,
+        "height": 950,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/icon.png"]
+  }
+}
