@@ -1720,9 +1720,145 @@ function computeDesign(p) {
     mag, BrT, HcJT, HcJmin, demagT, kcGap, BgAvg, B1, BgEff, Hdemag, demagMargin,
     cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
     MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
-    stM, rtM, Bt, By, Byr, hyr, coreMass, Bavg, TstallW, Jimp, bemf, Rhot, cog,
+    stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog,
     Lph, LphNR, Lll, LllNR, acim, therm, acFr, Pwind, Pfe, feOp, brush, latm, brake, step,
   };
+}
+
+/* ================= efficiency map / drive cycle =================
+   Both sweep the SAME loss physics computeDesign uses — no second model. The
+   pre-v60 EfficiencyMap view carried its own copy with a (n/n0)^1.5 iron-loss
+   guess; these replace it so one change to the loss chain moves every screen.
+
+   Torque axis is SHAFT torque (the curve is already drag-corrected), so
+   eta = Pout / (Pout + Pcu·acFr + Pfe + Pwind) with each loss counted once —
+   identical to the operating-point efficiency the results column reports. */
+
+/* losses at an arbitrary (speed, shaft torque) for a computed design; pure. */
+function lossesAt(p, r, n9, T9) {
+  const w9 = (n9 * 2 * Math.PI) / 60;
+  const brushedM = p.motorType === "brushed";
+  // Signed torque: braking (T < 0) still draws current — and still heats the winding —
+  // but is NOT useful shaft output. Regeneration back to the bus is not modeled, so a
+  // braking sample counts its copper/iron loss with zero output (conservative, disclosed).
+  const Pout = Math.max(T9, 0) * w9;
+  // electrical frequency: PM/brushed commutation both follow n·poles/120
+  const fe9 = Math.max((n9 * r.poles) / 120, 0);
+  // drag first — shaft torque plus drag is what the winding must actually produce
+  const Pw9 = 0.01 * Math.PI * 1.2 * Math.pow(w9, 3) * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000);
+  const feT = (B9) => {
+    const b9 = Math.min(B9, 2.4) / 1.5;
+    return (1 - r.efFe) * Math.pow(b9, 1.8) * (fe9 / 60) + r.efFe * b9 * b9 * Math.pow(fe9 / 60, 2);
+  };
+  const Pfe9 = (r.mYoke * feT(r.By) + r.mTeeth * feT(r.Bt)) * r.stM.w;
+  const Tdrag = w9 > 0 ? (Pfe9 + Pw9) / w9 : 0;
+  // current follows the MAGNITUDE of electromagnetic torque; drag opposes motion, so it
+  // adds when motoring and subtracts (the machine is already being slowed) when braking
+  const Tem = T9 >= 0 ? T9 + Tdrag : Math.abs(T9) - Tdrag;
+  const I9 = r.Kt > 0 ? Math.max(Tem, 0) / r.Kt : 0;
+  // AC copper factor at THIS speed's frequency (Dowell, same form as the engine)
+  let acF = 1;
+  if (fe9 > 0 && r.dBare > 0) {
+    const delta = Math.sqrt(RHO_CU / (Math.PI * fe9 * 4e-7 * Math.PI)) * 1000;
+    const NlL = Math.ceil(Math.sqrt(Math.max(r.condPerSlot, 1)));
+    acF = Math.min(1 + ((5 * NlL * NlL - 1) / 45) * Math.pow(r.dBare / delta, 4), 4);
+  }
+  const Pcu9 = brushedM && r.brush
+    ? (I9 * I9 * r.brush.Ra + Math.max(p.brushV, 0) * I9) * acF
+    : 3 * I9 * I9 * r.Rhot * acF;
+  const Pin = Pout + Pcu9 + Pfe9 + Pw9;
+  return { n: n9, T: T9, I: I9, Pout, Pcu: Pcu9, Pfe: Pfe9, Pwind: Pw9, Pin,
+    eta: Pin > 0 && Pout > 0 ? Pout / Pin : 0 };
+}
+
+/* efficiency map over the drive envelope. opts: { nc, nr } grid resolution. */
+function efficiencyMap(p, r, opts) {
+  const o9 = opts || {};
+  if (!(p.motorType === "pm" || p.motorType === "brushed")) return null;
+  if (!r || r.err.length || !(r.Kt > 0) || !(r.noLoad > 0) || !r.curve || r.curve.length < 2) return null;
+  const NC = Math.max(Math.round(o9.nc || 56), 8), NR = Math.max(Math.round(o9.nr || 40), 6);
+  const cv = [...r.curve].sort((a9, b9) => a9.n - b9.n);
+  const tAt = (n9) => {                                       // envelope torque at a speed
+    if (n9 <= cv[0].n) return cv[0].T;
+    for (let i9 = 1; i9 < cv.length; i9++) if (cv[i9].n >= n9) {
+      const f9 = (n9 - cv[i9 - 1].n) / Math.max(cv[i9].n - cv[i9 - 1].n, 1e-9);
+      return cv[i9 - 1].T + f9 * (cv[i9].T - cv[i9 - 1].T);
+    }
+    return 0;
+  };
+  const nMax = r.noLoad, tMax = Math.max(...cv.map((c9) => c9.T));
+  if (!(nMax > 0) || !(tMax > 0)) return null;
+  // grid of node values (NC+1 × NR+1) so contours can be traced by marching squares
+  const grid = [], inEnv = [];
+  for (let j9 = 0; j9 <= NR; j9++) {
+    const rowE = [], rowIn = [];
+    const T9 = (tMax * j9) / NR;
+    for (let i9 = 0; i9 <= NC; i9++) {
+      const n9 = (nMax * i9) / NC;
+      const ok = n9 > 0 && T9 > 0 && T9 <= tAt(n9);
+      rowIn.push(ok);
+      rowE.push(ok ? lossesAt(p, r, n9, T9).eta : 0);
+    }
+    grid.push(rowE); inEnv.push(rowIn);
+  }
+  // peak-efficiency point and the per-speed best-efficiency locus (the "sweet spot" ridge)
+  let best = null; const ridge = [];
+  for (let i9 = 1; i9 <= NC; i9++) {
+    const n9 = (nMax * i9) / NC;
+    const tEnv = tAt(n9);
+    if (!(tEnv > 0)) continue;
+    let bp = null;
+    for (let k9 = 1; k9 <= 40; k9++) {
+      const T9 = (tEnv * k9) / 40;
+      const L9 = lossesAt(p, r, n9, T9);
+      if (!bp || L9.eta > bp.eta) bp = L9;
+    }
+    if (bp) { ridge.push({ n: bp.n, T: bp.T, eta: bp.eta }); if (!best || bp.eta > best.eta) best = bp; }
+  }
+  const op = r.op ? lossesAt(p, r, r.op.n, r.op.T) : null;
+  // continuous-thermal envelope: torque the winding can hold indefinitely (from the
+  // thermal model's Icont), drawn as a second line on the map
+  const Tcont = r.therm && Number.isFinite(r.therm.Icont) ? r.Kt * r.therm.Icont : null;
+  return { NC, NR, nMax, tMax, grid, inEnv, best, ridge, op, Tcont, tAt,
+    envelope: Array.from({ length: NC + 1 }, (_, i9) => ({ n: (nMax * i9) / NC, T: tAt((nMax * i9) / NC) })) };
+}
+
+/* drive-cycle evaluation: samples [{t seconds, n rpm, T N·m}] → energy, RMS
+   loading, and the winding temperature the cycle's mean copper loss implies
+   through the design's own thermal resistance. Pure. */
+function driveCycle(p, r, samples) {
+  if (!Array.isArray(samples) || samples.length < 2) return { err: "A drive cycle needs at least two samples." };
+  if (!(p.motorType === "pm" || p.motorType === "brushed")) return { err: "Drive-cycle evaluation covers BLDC/PMSM and brushed designs." };
+  if (!r || r.err.length || !(r.Kt > 0)) return { err: "Fix the design's errors before running a cycle." };
+  const pts = samples
+    .filter((s9) => Number.isFinite(s9.t) && Number.isFinite(s9.n) && Number.isFinite(s9.T))
+    .sort((a9, b9) => a9.t - b9.t);
+  if (pts.length < 2) return { err: "No usable samples (need finite t, n, T)." };
+  const env = r.curve && r.curve.length ? efficiencyMap(p, r, { nc: 8, nr: 4 }) : null;
+  let Eout = 0, Ein = 0, Ecu = 0, Efe = 0, Ew = 0, I2t = 0, T2t = 0, tTot = 0, over = 0, nPk = 0, tPk = 0;
+  const trace = [];
+  for (let i9 = 1; i9 < pts.length; i9++) {
+    const a9 = pts[i9 - 1], b9 = pts[i9];
+    const dt = Math.max(b9.t - a9.t, 0);
+    if (!(dt > 0)) continue;
+    const nMid = (a9.n + b9.n) / 2, tMid = (a9.T + b9.T) / 2;   // midpoint rule
+    const L9 = lossesAt(p, r, nMid, tMid);                      // signed: braking heats but does no useful work
+    Eout += L9.Pout * dt; Ein += L9.Pin * dt;
+    Ecu += L9.Pcu * dt; Efe += L9.Pfe * dt; Ew += L9.Pwind * dt;
+    I2t += L9.I * L9.I * dt; T2t += tMid * tMid * dt; tTot += dt;
+    nPk = Math.max(nPk, Math.abs(nMid)); tPk = Math.max(tPk, Math.abs(tMid));
+    if (env && Math.abs(tMid) > env.tAt(Math.abs(nMid)) * 1.001) over += dt;
+    trace.push({ t: b9.t, n: nMid, T: tMid, eta: L9.eta, Pcu: L9.Pcu, Pfe: L9.Pfe });
+  }
+  if (!(tTot > 0)) return { err: "Cycle has zero duration." };
+  const Irms = Math.sqrt(I2t / tTot), Trms = Math.sqrt(T2t / tTot);
+  const PcuMean = Ecu / tTot, PfeMean = Efe / tTot;
+  // steady winding temperature this cycle implies, through the design's own Rth
+  const Rth9 = r.therm && Number.isFinite(r.therm.Rth) ? r.therm.Rth : null;
+  const Tcu = Rth9 !== null ? p.Tamb + PcuMean * Rth9 + PfeMean * Math.max(Rth9 * 0.5, 0) : null;
+  return { dur: tTot, Eout, Ein, Ecu, Efe, Ew, etaCycle: Ein > 0 ? Eout / Ein : 0,
+    Irms, Trms, PcuMean, PfeMean, Tcu, nPk, tPk, overT: over, trace,
+    overFrac: over / tTot };
 }
 
 /* ================= presentation: CortexEdge theme ================= */

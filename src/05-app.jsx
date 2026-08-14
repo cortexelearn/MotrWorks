@@ -1079,6 +1079,33 @@ export default function MotorDesigner() {
     () => (p.calOn === "yes" && (p.motorType === "pm" || p.motorType === "brushed")
       ? computeDesign({ ...p, calOn: "no" }) : null),
     [p]);
+  // efficiency map + drive cycle (engine-computed; null for machine types without a curve)
+  const emap = useMemo(() => efficiencyMap(p, r, {}), [p, r]);
+  const [cycle, setCycle] = useState(null);
+  const [cycMsg, setCycMsg] = useState("");
+  const dcyc = useMemo(() => (cycle ? driveCycle(p, r, cycle) : null), [p, r, cycle]);
+  const importCycle = (e9) => {
+    const f9 = e9.target.files && e9.target.files[0];
+    e9.target.value = "";
+    if (!f9) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const rows = String(rd.result).split(/\r?\n/).map((L9) => L9.trim()).filter(Boolean);
+        const out = [];
+        for (const L9 of rows) {
+          const c9 = L9.split(/[,;\t]/).map((x9) => parseFloat(x9));
+          if (c9.length < 3 || !Number.isFinite(c9[0]) || !Number.isFinite(c9[1]) || !Number.isFinite(c9[2])) continue; // header/blank
+          out.push({ t: c9[0], n: c9[1], T: c9[2] });
+        }
+        if (out.length < 2) { setCycle(null); setCycMsg(`Could not read ${f9.name} — expected rows of time_s, speed_rpm, torque_Nm.`); return; }
+        setCycle(out);
+        setCycMsg(`${f9.name}: ${out.length} samples over ${(out[out.length - 1].t - out[0].t).toFixed(1)} s.`);
+      } catch { setCycle(null); setCycMsg("Could not parse that file."); }
+    };
+    rd.onerror = () => { setCycle(null); setCycMsg("Could not read that file."); };
+    rd.readAsText(f9);
+  };
   const pm = p.motorType === "pm" || p.motorType === "brushed";
   const brM = p.motorType === "brushed";
   const latmM = p.motorType === "latm";
@@ -2167,18 +2194,76 @@ export default function MotorDesigner() {
             </div>
           )}
 
-          {p.motorType === "pm" && r.op && (
+          {emap && (
             <div className="card paper" style={{ marginTop: 14 }}>
               <div className="cardhead">
                 <h2>Efficiency map</h2>
                 <button className="btn mini ghost" onClick={() => exportPng("svg-effmap", "efficiency-map.png")}>PNG ⤓</button>
               </div>
-              <EfficiencyMap r={r} p={p} us={us} />
-              <div className="note">
-                η over the torque-speed envelope: DC + AC copper (skin/proximity per strand lay), iron loss scaled
-                ~f^1.5, and windage. Marker = rated point. Red &lt;70%, amber &lt;80%, yellow &lt;88%,
-                green ≥93%. Magnet eddy loss not modeled.
+              <EfficiencyMap r={r} p={p} us={us} emap={emap} />
+              <div className="tbl" style={{ marginTop: 8 }}>
+                {emap.best && <div className="kv"><span>Peak efficiency</span>
+                  <b>{(emap.best.eta * 100).toFixed(1)}% at {Math.round(emap.best.n)} rpm · {tqS(emap.best.T)}</b></div>}
+                {emap.op && <div className="kv"><span>At the rated point</span>
+                  <b>{(emap.op.eta * 100).toFixed(1)}% · Cu {emap.op.Pcu.toFixed(1)} W · Fe {emap.op.Pfe.toFixed(1)} W · windage {emap.op.Pwind.toFixed(2)} W</b></div>}
+                {Number.isFinite(emap.Tcont) && <div className="kv"><span>S1 continuous torque (thermal)</span><b>{tqS(emap.Tcont)}</b></div>}
               </div>
+              <div className="note">
+                η over the drive envelope from the SAME loss chain as the results column — DC + AC copper
+                (Dowell, re-evaluated at each speed's electrical frequency), two-term Steinmetz iron loss at
+                that frequency, and windage; shaft torque on the axis, so drag is charged as input, not output.
+                White contours are iso-efficiency (heavier at 80/90%); dashed white is the best-efficiency
+                locus per speed; black is the drive envelope. Magnet eddy loss and PWM harmonic loss are not modeled.
+              </div>
+            </div>
+          )}
+
+          {emap && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Drive cycle</h2>
+                {dcyc && !dcyc.err && <button className="btn mini ghost" onClick={() => exportPng("svg-dcycle", "drive-cycle.png")}>PNG ⤓</button>}
+              </div>
+              <div className="iobar">
+                <label className="btn ghost">
+                  Load cycle CSV…
+                  <input type="file" accept=".csv,text/csv" onChange={importCycle} />
+                </label>
+                {dcyc && <button className="btn mini ghost" onClick={() => { setCycle(null); setCycMsg(""); }}>Clear</button>}
+              </div>
+              <div className="note" style={{ marginTop: 2 }}>
+                CSV columns <code>time_s, speed_rpm, torque_Nm</code> (a header row is detected and skipped).
+                Everything is parsed locally — the file never leaves this machine.
+              </div>
+              {cycMsg && <div className="iomsg">{cycMsg}</div>}
+              {dcyc && dcyc.err && <div className="warn errb">{dcyc.err}</div>}
+              {dcyc && !dcyc.err && (
+                <>
+                  <DriveCycleChart dc={dcyc} us={us} />
+                  <div className="tbl" style={{ marginTop: 8 }}>
+                    <div className="kv"><span>Cycle duration · energy out / in</span>
+                      <b>{dcyc.dur.toFixed(1)} s · {(dcyc.Eout / 3600).toFixed(2)} / {(dcyc.Ein / 3600).toFixed(2)} W·h</b></div>
+                    <div className="kv"><span>Cycle-average efficiency</span><b>{(dcyc.etaCycle * 100).toFixed(1)}%</b></div>
+                    <div className="kv"><span>Loss split (Cu / Fe / windage)</span>
+                      <b>{(dcyc.Ecu / 3600).toFixed(3)} / {(dcyc.Efe / 3600).toFixed(3)} / {(dcyc.Ew / 3600).toFixed(3)} W·h</b></div>
+                    <div className="kv"><span>RMS current · RMS torque · peaks</span>
+                      <b>{dcyc.Irms.toFixed(2)} A · {tqS(dcyc.Trms)} · {Math.round(dcyc.nPk)} rpm / {tqS(dcyc.tPk)}</b></div>
+                    {Number.isFinite(dcyc.Tcu) && <div className="kv"><span>Implied winding temp (cycle-mean loss)</span>
+                      <b style={{ color: dcyc.Tcu > p.TcuMax ? "#DC2626" : dcyc.Tcu > 0.85 * p.TcuMax ? "#B45309" : "#059669" }}>
+                        {Math.round(dcyc.Tcu)} °C vs {p.TcuMax} °C class</b></div>}
+                  </div>
+                  {dcyc.overFrac > 0.001 && <div className="warn">
+                    {(dcyc.overFrac * 100).toFixed(1)}% of the cycle sits ABOVE the drive envelope — those points
+                    are not achievable with this motor and bus; the numbers above assume the demanded torque anyway.
+                  </div>}
+                  <div className="note">
+                    Midpoint integration over the samples, per-sample losses from the same chain as the map.
+                    The implied winding temperature applies the design's own thermal resistance to the cycle-mean
+                    copper loss — a steady-state estimate valid when the cycle is short against the machine's
+                    thermal time constant ({r.therm && Number.isFinite(r.therm.tauM) ? Math.round(r.therm.tauM / 60) : "—"} min).
+                  </div>
+                </>
+              )}
             </div>
           )}
 

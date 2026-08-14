@@ -2097,53 +2097,162 @@ function TorqueSpeedChart({ r, us, ghost, tLimit }) {
 }
 
 
-function EfficiencyMap({ r, p, us }) {
-  if (p.motorType !== "pm" || !(r.Kt > 0) || !(r.noLoad > 0) || !r.curve.length) return null;
-  const W = 340, H = 240, mL = 44, mB = 34, mT = 12, mR = 12;
-  const cv = [...r.curve].sort((a, b) => a.n - b.n);
-  const tAt = (n) => {
-    if (n <= cv[0].n) return cv[0].T;
-    for (let i = 1; i < cv.length; i++) if (cv[i].n >= n) {
-      const f = (n - cv[i - 1].n) / Math.max(cv[i].n - cv[i - 1].n, 1e-9);
-      return cv[i - 1].T + f * (cv[i].T - cv[i - 1].T);
+/* ---- efficiency map: contoured, from the ENGINE's efficiencyMap() — the same loss
+   chain the results column reports. Pre-v60 this view carried its own duplicate
+   loss model (with a (n/n0)^1.5 iron-loss guess); it no longer computes physics. ---- */
+const EFF_LEVELS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.88, 0.9, 0.92, 0.94, 0.95, 0.96];
+function effCol(e9) {                                     // perceptual-ish ramp, dark = poor
+  if (!(e9 > 0)) return "#0F172A";
+  const stops = [[0.40, [30, 41, 59]], [0.60, [67, 56, 122]], [0.75, [37, 99, 160]],
+    [0.85, [16, 150, 129]], [0.92, [132, 190, 60]], [0.97, [250, 214, 80]]];
+  if (e9 <= stops[0][0]) return `rgb(${stops[0][1].join(",")})`;
+  for (let i9 = 1; i9 < stops.length; i9++) {
+    if (e9 <= stops[i9][0]) {
+      const f9 = (e9 - stops[i9 - 1][0]) / (stops[i9][0] - stops[i9 - 1][0]);
+      const c9 = [0, 1, 2].map((k9) => Math.round(stops[i9 - 1][1][k9] + f9 * (stops[i9][1][k9] - stops[i9 - 1][1][k9])));
+      return `rgb(${c9.join(",")})`;
     }
-    return 0;
-  };
-  const nMax = r.noLoad, tMax = Math.max(...cv.map((c) => c.T));
-  const NC = 14, NR = 10;
-  const col = (e) => (e < 0.7 ? "#DC2626" : e < 0.8 ? "#F59E0B" : e < 0.88 ? "#FDE047" : e < 0.93 ? "#86EFAC" : "#10B981");
-  const cells = [];
-  for (let i = 0; i < NC; i++) for (let j = 0; j < NR; j++) {
-    const n = (nMax * (i + 0.5)) / NC, T = (tMax * (j + 0.5)) / NR;
-    if (T > tAt(n) || T <= 0 || n <= 0) continue;
-    const I = T / r.Kt;
-    const fe = (n * r.poles) / 120;
-    const delta = Math.sqrt(1.724e-8 / (Math.PI * Math.max(fe, 1) * 4e-7 * Math.PI)) * 1000;
-    const NlL = Math.ceil(Math.sqrt(Math.max(r.condPerSlot, 1)));
-    const Fr = Math.min(1 + ((5 * NlL * NlL - 1) / 45) * Math.pow(r.dBare / delta, 4), 4);
-    const Pcu = 3 * I * I * r.Rhot * Fr;
-    const Pfe2 = r.Pfe * Math.pow(n / Math.max(r.nShaft, 1), 1.5);
-    const Pw2 = 0.01 * Math.PI * 1.2 * Math.pow((n * 2 * Math.PI) / 60, 3) * Math.pow(p.rotorOD / 2000, 4) * (p.stackL / 1000);
-    const Pout = (T * n * 2 * Math.PI) / 60;
-    const eta = Pout / Math.max(Pout + Pcu + Pfe2 + Pw2, 1e-6);
-    cells.push(<rect key={i + "-" + j} x={mL + ((W - mL - mR) * i) / NC} y={H - mB - ((H - mB - mT) * (j + 1)) / NR}
-      width={(W - mL - mR) / NC - 1} height={(H - mB - mT) / NR - 1} fill={col(eta)} opacity="0.85" />);
   }
-  const tqU = us === "in" ? 141.612 : 1;
+  return `rgb(${stops[stops.length - 1][1].join(",")})`;
+}
+
+function EfficiencyMap({ r, p, us, emap }) {
+  const M = emap;
+  if (!M) return null;
+  const W = 430, H = 300, mL = 52, mB = 42, mT = 16, mR = 66;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const X = (n9) => mL + (PW * n9) / M.nMax;
+  const Y = (T9) => H - mB - (PH * T9) / M.tMax;
+  const cu = us === "in"
+    ? (M.tMax * 141.612 < 320 ? { k: 141.612, u: "oz·in" } : { k: 8.8507, u: "lb·in" })
+    : { k: 1, u: "N·m" };
+  const cells = [];
+  const cw = PW / M.NC + 0.6, ch = PH / M.NR + 0.6;
+  for (let j9 = 0; j9 < M.NR; j9++) for (let i9 = 0; i9 < M.NC; i9++) {
+    // a cell paints only where all four corners sit inside the drive envelope
+    if (!(M.inEnv[j9][i9] && M.inEnv[j9 + 1][i9] && M.inEnv[j9][i9 + 1] && M.inEnv[j9 + 1][i9 + 1])) continue;
+    const e9 = (M.grid[j9][i9] + M.grid[j9 + 1][i9] + M.grid[j9][i9 + 1] + M.grid[j9 + 1][i9 + 1]) / 4;
+    cells.push(<rect key={`c${i9}-${j9}`} x={mL + (PW * i9) / M.NC} y={H - mB - (PH * (j9 + 1)) / M.NR}
+      width={cw} height={ch} fill={effCol(e9)} shapeRendering="crispEdges" />);
+  }
+  // iso-efficiency contours by marching squares over the node grid
+  const conts = [];
+  for (const lv of EFF_LEVELS) {
+    const segs = [];
+    for (let j9 = 0; j9 < M.NR; j9++) for (let i9 = 0; i9 < M.NC; i9++) {
+      if (!(M.inEnv[j9][i9] && M.inEnv[j9 + 1][i9] && M.inEnv[j9][i9 + 1] && M.inEnv[j9 + 1][i9 + 1])) continue;
+      const x0 = mL + (PW * i9) / M.NC, x1 = mL + (PW * (i9 + 1)) / M.NC;
+      const y0 = H - mB - (PH * j9) / M.NR, y1 = H - mB - (PH * (j9 + 1)) / M.NR;
+      const v = [M.grid[j9][i9], M.grid[j9][i9 + 1], M.grid[j9 + 1][i9 + 1], M.grid[j9 + 1][i9]]; // CCW from bottom-left
+      const P = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+      const cross = [];
+      for (let e9 = 0; e9 < 4; e9++) {
+        const a9 = v[e9], b9 = v[(e9 + 1) % 4];
+        if ((a9 - lv) * (b9 - lv) < 0) {
+          const f9 = (lv - a9) / (b9 - a9);
+          const pa = P[e9], pb = P[(e9 + 1) % 4];
+          cross.push([pa[0] + f9 * (pb[0] - pa[0]), pa[1] + f9 * (pb[1] - pa[1])]);
+        }
+      }
+      if (cross.length === 2) segs.push(`M ${cross[0][0].toFixed(1)} ${cross[0][1].toFixed(1)} L ${cross[1][0].toFixed(1)} ${cross[1][1].toFixed(1)}`);
+    }
+    if (segs.length) conts.push(<path key={"lv" + lv} d={segs.join(" ")} fill="none"
+      stroke="#FFFFFF" strokeWidth={lv === 0.9 || lv === 0.8 ? 1.1 : 0.6} opacity={lv === 0.9 || lv === 0.8 ? 0.85 : 0.5} />);
+  }
+  const envPath = M.envelope.filter((e9) => e9.T > 0).map((e9, i9) => `${i9 ? "L" : "M"} ${X(e9.n).toFixed(1)} ${Y(e9.T).toFixed(1)}`).join(" ");
+  const ridgePath = M.ridge.length > 1 ? M.ridge.map((e9, i9) => `${i9 ? "L" : "M"} ${X(e9.n).toFixed(1)} ${Y(e9.T).toFixed(1)}`).join(" ") : "";
+  const legend = [];
+  for (let i9 = 0; i9 < 24; i9++) {
+    const e9 = 0.4 + (0.58 * i9) / 23;
+    legend.push(<rect key={"lg" + i9} x={W - mR + 12} y={H - mB - (PH * (i9 + 1)) / 24} width={12} height={PH / 24 + 0.6} fill={effCol(e9)} shapeRendering="crispEdges" />);
+  }
   return (
     <svg id="svg-effmap" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
       <style>{SVGCSS}</style>
+      <rect x={mL} y={mT} width={PW} height={PH} fill="#0F172A" opacity="0.06" />
       {cells}
+      {conts}
+      {envPath && <path d={envPath} fill="none" stroke="#0F172A" strokeWidth="1.4" />}
+      {ridgePath && <path d={ridgePath} fill="none" stroke="#FFFFFF" strokeWidth="1.3" strokeDasharray="5 3" opacity="0.9" />}
+      {Number.isFinite(M.Tcont) && M.Tcont > 0 && M.Tcont < M.tMax && (
+        <g>
+          <line x1={mL} y1={Y(M.Tcont)} x2={W - mR} y2={Y(M.Tcont)} stroke="#DC2626" strokeWidth="1.1" strokeDasharray="7 3" />
+          <text x={W - mR - 3} y={Y(M.Tcont) - 3} textAnchor="end" className="dim" style={{ fill: "#DC2626" }}>S1 continuous</text>
+        </g>
+      )}
+      {/* markers: labels flip to the left of their dot near the right edge so they
+          never run under the legend, and clamp off the top/bottom rails */}
+      {M.best && (() => {
+        const bx = X(M.best.n), by = Math.min(Math.max(Y(M.best.T), mT + 10), H - mB - 4);
+        const flip = bx > mL + PW * 0.62;
+        return <g>
+          <circle cx={bx} cy={Y(M.best.T)} r="4.5" fill="none" stroke="#FFFFFF" strokeWidth="1.6" />
+          <text x={bx + (flip ? -7 : 7)} y={by - 6} textAnchor={flip ? "end" : "start"} className="dim" style={{ fill: "#FFFFFF" }}>
+            {`peak ${(M.best.eta * 100).toFixed(1)}%`}</text>
+        </g>;
+      })()}
+      {M.op && M.op.T > 0 && (() => {
+        const ox = X(M.op.n), oy = Math.min(Math.max(Y(M.op.T), mT + 14), H - mB - 6);
+        const flip = ox > mL + PW * 0.62;
+        return <g>
+          <circle cx={ox} cy={Y(M.op.T)} r="4" fill="#111827" stroke="#FFFFFF" strokeWidth="1.2" />
+          <text x={ox + (flip ? -7 : 7)} y={oy + 11} textAnchor={flip ? "end" : "start"} className="dim">
+            {`rated ${(M.op.eta * 100).toFixed(1)}%`}</text>
+        </g>;
+      })()}
       <line x1={mL} y1={H - mB} x2={W - mR} y2={H - mB} stroke={AXIS} />
       <line x1={mL} y1={mT} x2={mL} y2={H - mB} stroke={AXIS} />
-      {[0, 0.5, 1].map((f) => <text key={"x" + f} x={mL + (W - mL - mR) * f} y={H - mB + 14} textAnchor="middle" className="tick">{Math.round(nMax * f)}</text>)}
-      {[0, 0.5, 1].map((f) => <text key={"y" + f} x={mL - 5} y={H - mB - (H - mB - mT) * f + 3} textAnchor="end" className="tick">{(tMax * tqU * f).toFixed(0)}</text>)}
-      <text x={(W + mL) / 2} y={H - 4} textAnchor="middle" className="axis">speed (rpm)</text>
-      <text x={12} y={(H - mB) / 2} textAnchor="middle" transform={`rotate(-90 12 ${(H - mB) / 2})`} className="axis">torque ({us === "in" ? "oz·in" : "N·m"})</text>
-      {r.op && <circle cx={mL + ((W - mL - mR) * r.op.n) / nMax} cy={H - mB - ((H - mB - mT) * r.op.T) / tMax} r="4" fill="#111827" />}
+      {[0, 0.25, 0.5, 0.75, 1].map((f9) => (
+        <text key={"x" + f9} x={mL + PW * f9} y={H - mB + 13} textAnchor="middle" className="tick">{Math.round(M.nMax * f9)}</text>
+      ))}
+      {[0, 0.5, 1].map((f9) => (
+        <text key={"y" + f9} x={mL - 5} y={H - mB - PH * f9 + 3} textAnchor="end" className="tick">{(M.tMax * cu.k * f9).toFixed(M.tMax * cu.k < 20 ? 2 : 0)}</text>
+      ))}
+      <text x={mL + PW / 2} y={H - 6} textAnchor="middle" className="axis">speed (rpm)</text>
+      <text x={13} y={mT + PH / 2} textAnchor="middle" transform={`rotate(-90 13 ${mT + PH / 2})`} className="axis">shaft torque ({cu.u})</text>
+      {legend}
+      <text x={W - mR + 26} y={H - mB - PH - 4} className="tick">98%</text>
+      <text x={W - mR + 26} y={H - mB + 3} className="tick">40%</text>
+      <text x={W - mR + 12} y={mT - 5} className="dim">η</text>
     </svg>
   );
 }
+
+/* ---- drive-cycle result strip: speed/torque trace with per-sample efficiency ---- */
+function DriveCycleChart({ dc, us }) {
+  if (!dc || dc.err || !dc.trace || dc.trace.length < 2) return null;
+  const W = 430, H = 190, mL = 48, mB = 34, mT = 14, mR = 46;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const tEnd = dc.trace[dc.trace.length - 1].t || 1;
+  const nMax = Math.max(...dc.trace.map((s9) => Math.abs(s9.n)), 1);
+  const tqMax = Math.max(...dc.trace.map((s9) => Math.abs(s9.T)), 1e-6);
+  const cu = us === "in" ? (tqMax * 141.612 < 320 ? { k: 141.612, u: "oz·in" } : { k: 8.8507, u: "lb·in" }) : { k: 1, u: "N·m" };
+  const X = (t9) => mL + (PW * t9) / tEnd;
+  const Yn = (n9) => H - mB - (PH * Math.abs(n9)) / nMax;
+  const Yt = (T9) => H - mB - (PH * Math.abs(T9)) / tqMax;
+  const pathOf = (fy) => dc.trace.map((s9, i9) => `${i9 ? "L" : "M"} ${X(s9.t).toFixed(1)} ${fy(s9).toFixed(1)}`).join(" ");
+  return (
+    <svg id="svg-dcycle" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      {dc.trace.map((s9, i9) => i9 === 0 ? null : (
+        <rect key={"e" + i9} x={X(dc.trace[i9 - 1].t)} y={mT} width={Math.max(X(s9.t) - X(dc.trace[i9 - 1].t), 0.6)} height={PH}
+          fill={effCol(s9.eta)} opacity="0.34" shapeRendering="crispEdges" />
+      ))}
+      <path d={pathOf((s9) => Yn(s9.n))} fill="none" stroke="#2563EB" strokeWidth="1.5" />
+      <path d={pathOf((s9) => Yt(s9.T))} fill="none" stroke="#B45309" strokeWidth="1.5" />
+      <line x1={mL} y1={H - mB} x2={W - mR} y2={H - mB} stroke={AXIS} />
+      <line x1={mL} y1={mT} x2={mL} y2={H - mB} stroke={AXIS} />
+      {[0, 0.5, 1].map((f9) => <text key={"x" + f9} x={mL + PW * f9} y={H - mB + 13} textAnchor="middle" className="tick">{(tEnd * f9).toFixed(0)}</text>)}
+      <text x={mL - 5} y={mT + 8} textAnchor="end" className="tick" style={{ fill: "#2563EB" }}>{Math.round(nMax)}</text>
+      <text x={W - mR + 4} y={mT + 8} className="tick" style={{ fill: "#B45309" }}>{(tqMax * cu.k).toFixed(1)}</text>
+      <text x={mL + PW / 2} y={H - 4} textAnchor="middle" className="axis">cycle time (s)</text>
+      <text x={mL} y={mT - 4} className="dim" style={{ fill: "#2563EB" }}>speed (rpm)</text>
+      <text x={W - mR + 4} y={H - mB - 2} className="dim" style={{ fill: "#B45309" }}>{cu.u}</text>
+      <text x={mL + PW / 2} y={mT - 4} textAnchor="middle" className="dim">band shade = efficiency</text>
+    </svg>
+  );
+}
+
 
 function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
   if (!(r.Kt > 0) || (p.motorType !== "pm" && p.motorType !== "brushed")) return null;
@@ -3004,4 +3113,3 @@ function Sel({ label, v, set, opts }) {
   );
 }
 const fmt = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : "—");
-

@@ -475,3 +475,38 @@ Kt 0.098617 / noLoad 3320.6 vs its written anchors 0.09901 / 3307.5 (±0.4%, ins
 band) since BEFORE this branch — verified by probing the v59.2 baseline build. A pre-v59.2
 intentional change evidently moved it without re-anchoring. Left as-is deliberately; worth
 folding into the next re-anchor pass or checking against the bench set.
+
+---
+
+# v60.0 — efficiency maps and drive cycles from ONE loss chain (2026-08-13)
+
+Roadmap move 1. The pre-v60 EfficiencyMap view carried its **own** loss model — including
+an iron loss scaled `(n/n0)^1.5` instead of the real two-term Steinmetz, and its own copy of
+the AC-copper factor — so the map and the results column could (and did) disagree. Physics
+now lives in the engine and every screen reads it:
+
+- **`lossesAt(p, r, n, T)`** — losses at any (speed, shaft torque): drag-inclusive
+  electromagnetic torque, current, AC copper re-evaluated at THAT speed's electrical
+  frequency (Dowell), two-term Steinmetz at that frequency, windage, and η. Signed torque:
+  braking still draws current and heats the winding but does no useful work (regeneration
+  to the bus is not modeled — conservative and disclosed).
+- **`efficiencyMap(p, r, opts)`** — node grid over the drive envelope (56×40 default) for
+  marching-squares contours, the per-speed best-efficiency locus, the peak point, the rated
+  point, and the S1 continuous-torque line from the thermal model's own Icont.
+- **`driveCycle(p, r, samples)`** — midpoint integration of a `time_s, speed_rpm, torque_Nm`
+  cycle: energy in/out, cycle-average η, loss split, RMS current/torque, peaks, the fraction
+  of the cycle demanded above the drive envelope, and the winding temperature the cycle-mean
+  copper loss implies through the design's own thermal resistance. Parsed locally; the file
+  never leaves the machine (posture unchanged).
+
+Views: `EfficiencyMap` is now a pure renderer — filled cells on a perceptual ramp, white
+iso-efficiency contours (heavier at 80/90%), best-η ridge, drive envelope, S1 line, peak and
+rated markers with edge-aware label flipping, and a η legend. New `DriveCycleChart` traces
+speed/torque with per-sample efficiency shading. New Drive-cycle card with CSV loader.
+
+**New gate `tools/eff-gate.mjs` (15 compute gates now).** Its load-bearing assertion is that
+the map's rated-point η equals `computeDesign`'s η to 0.5% — two independent code paths over
+one physics. Verified on three presets (77.90/77.90, 93.11/93.11, 78.58/78.58) plus energy
+conservation (Pin = Pout + losses), monotonic copper-in-torque and iron-in-speed, ridge
+inside the envelope, constant-cycle η == point η, RMS identities, braking heats-without-work,
+and error paths for empty/NaN cycles.
