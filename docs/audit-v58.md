@@ -510,3 +510,53 @@ one physics. Verified on three presets (77.90/77.90, 93.11/93.11, 78.58/78.58) p
 conservation (Pin = Pout + losses), monotonic copper-in-torque and iron-in-speed, ridge
 inside the envelope, constant-cycle η == point η, RMS identities, braking heats-without-work,
 and error paths for empty/NaN cycles.
+
+---
+
+# v60.1 — a real field solution, and one number it refuses to report (2026-08-13)
+
+Roadmap move 3 (+ the overlay half of move 4). MotrWorks now solves its own 2-D nonlinear
+magnetostatic field, in-app, in a fraction of a second — no external FEMM round trip.
+
+**Solver.** Magnetic vector potential on a structured polar grid, finite-VOLUME so flux is
+conserved cell to cell; harmonic-mean face reluctivities so iron↔air jumps aren't smeared;
+nonlinear iron from the SAME Froelich curve (`Hof`) the analytical core uses. Magnets enter
+as their equivalent magnetization current ∇×M — which lives on the arc's side faces — with
+FRACTIONAL cell occupancy at the edges, so rotor rotation is a smooth shift of the source on
+a fixed mesh rather than a staircase. The mesh is radially GRADED (cells concentrated in the
+airgap, thinned in the yoke) with segment boundaries landing exactly on the physical radii.
+θ is periodic over the full 360°, so no symmetry is assumed and fractional-slot machines
+solve correctly. Az = 0 at the stator OD, natural at the shaft bore.
+
+Convergence needed a real solver, not a loop: point SOR crawls because a thin airgap makes
+the grid violently anisotropic, so the linear solve is radial LINE relaxation — every angular
+column's tridiagonal system in r solved exactly (Thomas) with θ-coupling from the current
+iterate. Typical solve: 54×288 cells, ~450 ms, residual 4e-5.
+
+**What it reports, and why you can believe it.** A mesh-convergence study (36×216 → 96×576)
+holds peak gap B, the gap fundamental, and flux per pole to ~1–2%; `field-gate` asserts all
+three stay within 5% between two mesh densities, alongside flux conservation (net radial flux
+1e-15 of the absolute), the dominant gap harmonic equalling the pole-pair number, and
+parametric responses (thicker magnet ↑, wider gap ↓, non-magnetic stator ↓, ferrite ↓).
+
+**What it refuses to report: cogging torque.** Maxwell-stress cogging was implemented and then
+REMOVED when that same study showed it diverging — 4.0e-2 → 3.9e-1 N·m as the mesh refined,
+while every other quantity converged. A structured polar mesh staircases the curved
+slot-opening and tooth-side boundaries, and stress-tensor torque is a small difference of
+large quantities that integrates exactly that noise. A number that fails its own convergence
+test does not ship; the analytical cogging model remains the app's source, and a real cogging
+capability needs conforming elements or a virtual-work (co-energy) formulation.
+
+**First finding.** Sweeping magnet thickness on the NEMA 17 preset, the field solve shows gap
+flux SATURATING and rolling over past ~2.5 mm (0.988 → 0.982 T at 3 → 5 mm) because a thicker
+magnet on a fixed rotor OD starves the back iron, while the first-order circuit keeps climbing
+(0.928 → 0.961 T). The circuit is trustworthy for sweeps in the thin-magnet regime and
+misleading past the knee — which is precisely the sort of thing this card exists to expose.
+`field-gate` now asserts the rollover so a future "fix" can't silently restore the
+monotonic-forever behaviour.
+
+**UI.** New on-demand Field solution card (Fast/Normal/Fine): flux-line plot (iso-A contours,
+which ARE flux lines in 2-D — no streamline integration) over |B| shading to the material's
+saturation, geometry rings, the solved air-gap waveform with its true Fourier fundamental
+overlaid, and a comparison row against the magnetic circuit. It states plainly when the design
+has changed since the solve, and that it is magnetostatic and no-load.

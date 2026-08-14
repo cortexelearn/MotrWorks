@@ -1081,6 +1081,27 @@ export default function MotorDesigner() {
     [p]);
   // efficiency map + drive cycle (engine-computed; null for machine types without a curve)
   const emap = useMemo(() => efficiencyMap(p, r, {}), [p, r]);
+  // field solve is ON DEMAND — it is a ~0.2-1 s nonlinear solve, not something to run
+  // on every keystroke. `fieldOf` records the parameters it was solved for so the card
+  // can say plainly when the design has moved on since.
+  const [field, setField] = useState(null);
+  const [fieldOf, setFieldOf] = useState(null);
+  const [fieldBusy, setFieldBusy] = useState(false);
+  const [fieldRes, setFieldRes] = useState("normal");
+  const fieldStale = field && fieldOf !== JSON.stringify(p);
+  const runField = () => {
+    setFieldBusy(true);
+    // yield a frame so the button can show its working state before the solve blocks
+    setTimeout(() => {
+      const cfg = fieldRes === "fine" ? { nr: 76, nth: 432 }
+        : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288 };
+      const t0 = Date.now();
+      const F = fieldStudy(p, r, cfg);
+      setField(F && !F.err ? { ...F, ms: Date.now() - t0 } : F);
+      setFieldOf(JSON.stringify(p));
+      setFieldBusy(false);
+    }, 30);
+  };
   const [cycle, setCycle] = useState(null);
   const [cycMsg, setCycMsg] = useState("");
   const dcyc = useMemo(() => (cycle ? driveCycle(p, r, cycle) : null), [p, r, cycle]);
@@ -2191,6 +2212,57 @@ export default function MotorDesigner() {
                   ? "I = T / Kt — linear for the brushed model (armature-reaction flux knockdown not iterated). Solid to the current-limited stall point; faint continuation = winding V/R capability. Red dashed = current limit."
                   : "I = T / Kt with the saturation bend applied — the curve steepens toward Imax as steel MMF drops knock down flux (kIT). Solid to the drive-limited stall point; faint continuation = winding V/R capability. Red dashed = drive current limit."}
               </div>
+            </div>
+          )}
+
+          {(pm || brM) && !r.err.length && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Field solution (2-D magnetostatic)</h2>
+                {field && !field.err && <button className="btn mini ghost" onClick={() => exportPng("svg-field", "field-plot.png")}>PNG ⤓</button>}
+              </div>
+              <div className="iobar">
+                <button className="btn" onClick={runField} disabled={fieldBusy}>
+                  {fieldBusy ? "Solving…" : field ? "Re-solve" : "Solve field"}</button>
+                <Pick label="" v={fieldRes} set={setFieldRes}
+                  opts={[{ v: "fast", t: "Fast" }, { v: "normal", t: "Normal" }, { v: "fine", t: "Fine" }]} />
+              </div>
+              <div className="note" style={{ marginTop: 2 }}>
+                Nonlinear vector-potential solve on a graded polar mesh, magnets as equivalent
+                magnetization currents, the same Froelich BH curve the analytical core uses. Runs
+                on demand — it is a real solve, not a formula.
+              </div>
+              {field && field.err && <div className="warn errb">{field.err}</div>}
+              {field && !field.err && (
+                <>
+                  {fieldStale && <div className="warn">The design has changed since this solve — re-solve to match the numbers above.</div>}
+                  <FieldPlot F={field} p={p} us={us} />
+                  <h2 style={{ marginTop: 12 }}>Air-gap flux density</h2>
+                  <GapWaveform F={field} us={us} />
+                  <div className="tbl" style={{ marginTop: 8 }}>
+                    <div className="kv"><span>Peak / fundamental gap flux density</span>
+                      <b>{field.gap.Bpk.toFixed(3)} / {field.B1.toFixed(3)} T</b></div>
+                    <div className="kv"><span>vs the magnetic-circuit model (fundamental)</span>
+                      <b style={{ color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" }}>
+                        {r.B1.toFixed(3)} T analytic · {(field.cmp.dB1 * 100).toFixed(1)}% difference</b></div>
+                    <div className="kv"><span>Flux per pole (solved)</span><b>{(field.fluxPole * 1000).toFixed(3)} mWb</b></div>
+                    <div className="kv"><span>Peak flux density in iron</span>
+                      <b>{Math.max(...field.B).toFixed(2)} T</b></div>
+                    <div className="kv"><span>Mesh · solve</span>
+                      <b>{field.nr}×{field.nth} cells · {field.ms} ms · {field.conv ? "converged" : `residual ${field.resid.toExponential(1)}`}</b></div>
+                  </div>
+                  <div className="note">
+                    The comparison row is the point of this card: where the field solve and the
+                    magnetic circuit agree, the fast model is trustworthy for sweeps; where they
+                    diverge, the circuit is missing something (thick magnets starving the back iron
+                    is the usual culprit — the circuit keeps predicting more flux, the field says
+                    the iron ran out). <b>Cogging torque is deliberately not reported here:</b> it
+                    failed its own mesh-convergence study on this structured mesh, so the analytical
+                    cogging model above remains the source. Magnetostatic and no-load: no eddy
+                    currents, no hysteresis, no stator current.
+                  </div>
+                </>
+              )}
             </div>
           )}
 

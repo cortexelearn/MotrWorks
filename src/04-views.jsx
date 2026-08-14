@@ -2097,6 +2097,148 @@ function TorqueSpeedChart({ r, us, ghost, tLimit }) {
 }
 
 
+/* ---- field plot: flux lines (contours of the vector potential) over |B| shading,
+   straight from the solver's own grid. Flux lines ARE iso-A contours in 2-D, so no
+   streamline integration is needed — marching squares on the (r,θ) grid, mapped to
+   cartesian. Shading is downsampled from the solve mesh to keep the SVG light. ---- */
+function bCol(b9, bsat) {
+  const f9 = Math.max(0, Math.min(b9 / Math.max(bsat, 0.5), 1.15));
+  const stops = [[0, [248, 250, 252]], [0.35, [186, 214, 240]], [0.6, [120, 190, 160]],
+    [0.8, [235, 205, 90]], [0.95, [232, 132, 58]], [1.1, [200, 40, 40]]];
+  if (f9 <= 0) return `rgb(${stops[0][1].join(",")})`;
+  for (let i9 = 1; i9 < stops.length; i9++) {
+    if (f9 <= stops[i9][0]) {
+      const t9 = (f9 - stops[i9 - 1][0]) / (stops[i9][0] - stops[i9 - 1][0]);
+      const c9 = [0, 1, 2].map((k9) => Math.round(stops[i9 - 1][1][k9] + t9 * (stops[i9][1][k9] - stops[i9 - 1][1][k9])));
+      return `rgb(${c9.join(",")})`;
+    }
+  }
+  return `rgb(${stops[stops.length - 1][1].join(",")})`;
+}
+
+function FieldPlot({ F, p, us, showB, showLines }) {
+  if (!F || F.err || !F.msh) return null;
+  const msh = F.msh, { nr, nth, rC, rf, dth } = msh;
+  const W = 430, H = 430, cx = W / 2, cy = H / 2;
+  const k = (Math.min(W, H) / 2 - 16) / msh.rOD;                  // mm -> px
+  const PX = (r9, th9) => [cx + r9 * k * Math.cos(th9), cy - r9 * k * Math.sin(th9)];
+  const stM = STEELS[p.statorMat] || STEELS["M19 (29 ga)"];
+  const bsat = stM.bsat || 2.05;
+  const els = [];
+  // ---- |B| shading, downsampled (max ~40 x 120 quads keeps the SVG manageable) ----
+  if (showB !== false) {
+    const si = Math.max(1, Math.ceil(nr / 40)), sj = Math.max(1, Math.ceil(nth / 120));
+    for (let i = 0; i < nr; i += si) {
+      const i2 = Math.min(i + si, nr);
+      const ra = rf[i], rb = rf[i2];
+      for (let j = 0; j < nth; j += sj) {
+        const j2 = j + sj;
+        let acc = 0, n9 = 0;
+        for (let ii = i; ii < i2; ii++) for (let jj = j; jj < j2; jj++) { acc += F.B[ii * nth + (jj % nth)]; n9++; }
+        const b9 = acc / Math.max(n9, 1);
+        const t0 = j * dth, t1 = Math.min(j2, nth) * dth;
+        const [x0, y0] = PX(ra, t0), [x1, y1] = PX(rb, t0), [x2, y2] = PX(rb, t1), [x3, y3] = PX(ra, t1);
+        els.push(<path key={`b${i}-${j}`} d={`M ${x0.toFixed(1)} ${y0.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${(rb * k).toFixed(1)} ${(rb * k).toFixed(1)} 0 0 0 ${x2.toFixed(1)} ${y2.toFixed(1)} L ${x3.toFixed(1)} ${y3.toFixed(1)} A ${(ra * k).toFixed(1)} ${(ra * k).toFixed(1)} 0 0 1 ${x0.toFixed(1)} ${y0.toFixed(1)} Z`}
+          fill={bCol(b9, bsat)} stroke="none" shapeRendering="crispEdges" />);
+      }
+    }
+  }
+  // ---- flux lines: iso-contours of A by marching squares on the solve grid ----
+  if (showLines !== false) {
+    let aMin = Infinity, aMax = -Infinity;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nth; j++) {
+      const v = F.A[i * nth + j];
+      if (v < aMin) aMin = v; if (v > aMax) aMax = v;
+    }
+    const NL = 26;
+    for (let L = 1; L < NL; L++) {
+      const lv = aMin + ((aMax - aMin) * L) / NL;
+      const segs = [];
+      for (let i = 0; i < nr - 1; i++) {
+        for (let j = 0; j < nth; j++) {
+          const jp = (j + 1) % nth;
+          const v = [F.A[i * nth + j], F.A[i * nth + jp], F.A[(i + 1) * nth + jp], F.A[(i + 1) * nth + j]];
+          const P = [[rC[i], (j + 0.5) * dth], [rC[i], (jp + 0.5) * dth],
+            [rC[i + 1], (jp + 0.5) * dth], [rC[i + 1], (j + 0.5) * dth]];
+          const cr = [];
+          for (let e = 0; e < 4; e++) {
+            const a9 = v[e], b9 = v[(e + 1) % 4];
+            if ((a9 - lv) * (b9 - lv) < 0) {
+              const f9 = (lv - a9) / (b9 - a9);
+              const pa = P[e], pb = P[(e + 1) % 4];
+              let dth9 = pb[1] - pa[1];
+              if (dth9 > Math.PI) dth9 -= 2 * Math.PI;
+              if (dth9 < -Math.PI) dth9 += 2 * Math.PI;
+              cr.push(PX(pa[0] + f9 * (pb[0] - pa[0]), pa[1] + f9 * dth9));
+            }
+          }
+          if (cr.length === 2)
+            segs.push(`M ${cr[0][0].toFixed(1)} ${cr[0][1].toFixed(1)} L ${cr[1][0].toFixed(1)} ${cr[1][1].toFixed(1)}`);
+        }
+      }
+      if (segs.length) els.push(<path key={`f${L}`} d={segs.join(" ")} fill="none" stroke="#0F172A" strokeWidth="0.7" opacity="0.6" />);
+    }
+  }
+  // ---- geometry outlines so the drawing reads as a machine, not a heatmap ----
+  const ring = (r9, sw, col) => <circle key={"r" + r9 + col} cx={cx} cy={cy} r={r9 * k} fill="none" stroke={col} strokeWidth={sw} />;
+  els.push(ring(msh.rOD, 1.2, "#334155"));
+  els.push(ring(msh.rBore, 0.9, "#334155"));
+  els.push(ring(msh.rRot, 0.9, "#334155"));
+  els.push(ring(msh.rMagIn, 0.7, "#64748B"));
+  els.push(ring(msh.rSh, 0.7, "#64748B"));
+  const dl = (mm) => (us === "in" ? (mm / 25.4).toFixed(2) + "″" : mm.toFixed(1) + " mm");
+  return (
+    <svg id="svg-field" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      {els}
+      <text x={8} y={14} className="dim">{`|B| shading to ${bsat.toFixed(2)} T sat · ${F.nr}x${F.nth} cells`}</text>
+      <text x={W - 8} y={14} textAnchor="end" className="dim">{`gap Ø${dl(2 * msh.rGap)} · peak ${F.gap.Bpk.toFixed(2)} T`}</text>
+      <text x={W - 8} y={H - 6} textAnchor="end" className="dim">{F.conv ? "converged" : `residual ${F.resid.toExponential(1)}`}</text>
+      <text x={8} y={H - 6} className="dim">flux lines = iso-A contours</text>
+    </svg>
+  );
+}
+
+/* gap-field waveform from the solve, with its fundamental for comparison */
+function GapWaveform({ F, us }) {
+  if (!F || F.err || !F.gap) return null;
+  const W = 430, H = 190, mL = 46, mB = 34, mT = 16, mR = 14;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const B = F.gap.Br, n = B.length;
+  const bMax = Math.max(...B.map(Math.abs)) * 1.15 || 1;
+  const X = (j) => mL + (PW * j) / (n - 1);
+  const Y = (b) => mT + PH / 2 - (PH / 2) * (b / bMax);
+  const path = Array.from(B, (b, j) => `${j ? "L" : "M"} ${X(j).toFixed(1)} ${Y(b).toFixed(1)}`).join(" ");
+  // fundamental reconstructed from its OWN Fourier coefficients — amplitude and phase —
+  // so the dashed sine lies on the solved wave instead of being phase-guessed
+  const pp = F.msh.poles / 2;
+  let fre = 0, fim = 0;
+  for (let j = 0; j < n; j++) {
+    const th = ((j + 0.5) * 2 * Math.PI) / n;
+    fre += B[j] * Math.cos(pp * th); fim += B[j] * Math.sin(pp * th);
+  }
+  fre *= 2 / n; fim *= 2 / n;
+  const fPath = Array.from({ length: n }, (_, j) => {
+    const th = ((j + 0.5) * 2 * Math.PI) / n;
+    return `${j ? "L" : "M"} ${X(j).toFixed(1)} ${Y(fre * Math.cos(pp * th) + fim * Math.sin(pp * th)).toFixed(1)}`;
+  }).join(" ");
+  return (
+    <svg id="svg-gapwave" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      <line x1={mL} y1={mT + PH / 2} x2={W - mR} y2={mT + PH / 2} stroke={AXIS} strokeWidth="0.7" />
+      <path d={fPath} fill="none" stroke="#B45309" strokeWidth="1.1" strokeDasharray="5 3" />
+      <path d={path} fill="none" stroke="#2563EB" strokeWidth="1.4" />
+      <line x1={mL} y1={mT} x2={mL} y2={mT + PH} stroke={AXIS} />
+      <text x={mL - 5} y={mT + 6} textAnchor="end" className="tick">{bMax.toFixed(2)}</text>
+      <text x={mL - 5} y={mT + PH} textAnchor="end" className="tick">{(-bMax).toFixed(2)}</text>
+      <text x={mL + PW / 2} y={H - 5} textAnchor="middle" className="axis">rotor position (one revolution)</text>
+      <text x={13} y={mT + PH / 2} textAnchor="middle" transform={`rotate(-90 13 ${mT + PH / 2})`} className="axis">B radial (T)</text>
+      <text x={mL + 4} y={H - 19} className="dim" style={{ fill: "#2563EB" }}>solved</text>
+      <text x={mL + 48} y={H - 19} className="dim" style={{ fill: "#B45309" }}>{`fundamental ${F.B1.toFixed(3)} T`}</text>
+    </svg>
+  );
+}
+
 /* ---- efficiency map: contoured, from the ENGINE's efficiencyMap() — the same loss
    chain the results column reports. Pre-v60 this view carried its own duplicate
    loss model (with a (n/n0)^1.5 iron-loss guess); it no longer computes physics. ---- */

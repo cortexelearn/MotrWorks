@@ -1725,6 +1725,343 @@ function computeDesign(p) {
   };
 }
 
+/* ================= 2-D magnetostatic field solver (FEA-light) =================
+   A real field solution for the radial-flux machines, living in the same file as
+   the analytical core so the gates can drive both and compare them.
+
+   FORMULATION. Magnetic vector potential A = Az(r,θ)ẑ on a structured polar grid,
+   finite-VOLUME so flux is conserved cell to cell:
+
+       Σ_faces  ν_face · (A_nb − A_P) · (face length / node distance)  =  −I_cell
+
+   Radial faces contribute ν·r_face·Δθ/Δr, angular faces ν·Δr/(r·Δθ), and face
+   reluctivities are harmonic means so material jumps (iron↔air) are handled without
+   smearing. Nonlinear iron enters as ν(|B|) from the SAME Froelich curve (Hof) the
+   analytical branch uses — one BH model in the whole tool.
+
+   MAGNETS. A radially magnetized arc has M = Br/μ0 r̂ inside and 0 outside, so its
+   equivalent magnetization current ∇×M = −(1/r)(∂M_r/∂θ)ẑ lives on the arc's SIDE
+   faces. Discretely that is the θ-derivative of M_r, which means rotor rotation is
+   just a shift of the magnetization pattern on a FIXED mesh — no remeshing. Magnet
+   edges carry FRACTIONAL cell occupancy, so a rotating magnet sweeps smoothly across
+   cells instead of snapping; without that, the staircase produces spurious torque
+   ripple far larger than real cogging.
+
+   MESH. Radially GRADED: cells are concentrated in the airgap (the region that sets
+   every number worth having) and thinned in the yoke. Segment boundaries land exactly
+   on the physical radii (magnet ID/OD, bore, tip, slot top), so no material boundary
+   falls mid-cell. θ is uniform and periodic over the full 360°, so no symmetry is
+   assumed and fractional-slot machines solve correctly.
+
+   SOLVER. Radial LINE relaxation: for every angular column the tridiagonal system in
+   r is solved exactly (Thomas), with the θ-coupling taken from the current iterate
+   (line Gauss-Seidel) plus over-relaxation. Point SOR converges badly here because a
+   thin airgap makes the grid violently anisotropic; solving along r removes that.
+
+   BOUNDARY. Az = 0 at the stator OD (flux stays inside the iron); natural (Neumann)
+   at the shaft bore.
+
+   TORQUE. Maxwell stress averaged over SEVERAL mid-gap circles (single-circle stress
+   is notoriously mesh-noisy): T = (L r²/μ0)∮ B_r B_θ dθ.
+
+   HONEST LIMITS: first-order structured solver — no adaptive meshing, slot corners
+   land on grid lines, fields are linear in a cell, and it is magnetostatic (no eddy
+   currents, no hysteresis). It exists to CHECK the analytical core; where the two
+   disagree, the disagreement is the finding. ================================== */
+
+const MU0 = 4e-7 * Math.PI;
+const FR_AIR = 0, FR_STAT = 1, FR_ROT = 2;
+
+/* graded radial faces: `segs` = [{ r0, r1, n }] contiguous, boundaries preserved */
+function gradeRadial(segs) {
+  const rf = [segs[0].r0];
+  for (const s of segs) {
+    for (let k = 1; k <= s.n; k++) rf.push(s.r0 + ((s.r1 - s.r0) * k) / s.n);
+  }
+  return Float64Array.from(rf);
+}
+
+/* Fixed region map + magnet-ring mask. nrHint sets overall refinement. */
+function fieldMesh(p, nrHint, nth) {
+  const Ns = Math.max(3, Math.round(p.slots));
+  const poles = Math.max(2, Math.round(p.poles / 2) * 2);
+  const rSh = Math.max(p.shaftD / 2, 0.5);
+  const rRot = p.rotorOD / 2;
+  const rMagIn = Math.max(rRot - p.magT, rSh + 0.2);
+  const rBore = p.statorID / 2;
+  const hs9 = Math.max((p.statorOD - p.statorID) / 2 - p.yoke - p.tipH, 0.2);
+  const rTip = rBore + p.tipH;
+  const rSlotTop = rTip + hs9;
+  const rOD = p.statorOD / 2;
+  // cell budget by importance: the airgap gets the most per mm, the yoke the least
+  const sc = Math.max(nrHint / 56, 0.5);
+  const nOf = (n) => Math.max(Math.round(n * sc), 2);
+  const rf = gradeRadial([
+    { r0: rSh, r1: rMagIn, n: nOf(8) },        // rotor back iron
+    { r0: rMagIn, r1: rRot, n: nOf(8) },       // magnet
+    { r0: rRot, r1: rBore, n: nOf(8) },        // AIRGAP — refined
+    { r0: rBore, r1: rTip, n: nOf(4) },        // tooth tips
+    { r0: rTip, r1: rSlotTop, n: nOf(16) },    // slots / tooth bodies
+    { r0: rSlotTop, r1: rOD, n: nOf(10) },     // yoke
+  ]);
+  const nr = rf.length - 1;
+  const rC = new Float64Array(nr), drC = new Float64Array(nr);
+  for (let i = 0; i < nr; i++) { rC[i] = (rf[i] + rf[i + 1]) / 2; drC[i] = rf[i + 1] - rf[i]; }
+  const dth = (2 * Math.PI) / nth;
+  const reg = new Uint8Array(nr * nth);
+  const isMag = new Uint8Array(nr);            // magnet ring by radial band
+  const slotPitch = (2 * Math.PI) / Ns;
+  for (let i = 0; i < nr; i++) {
+    const r = rC[i];
+    if (r > rMagIn && r < rRot) isMag[i] = 1;
+    for (let j = 0; j < nth; j++) {
+      const th = (j + 0.5) * dth;
+      let m = FR_AIR;
+      if (r < rMagIn) m = FR_ROT;                                  // shaft + rotor yoke, one material
+      else if (r < rBore) m = FR_AIR;                              // magnet ring & airgap (magnet ν set below)
+      else if (r < rOD) {
+        const off = ((th % slotPitch) + slotPitch) % slotPitch - slotPitch / 2;
+        if (r < rTip) {
+          const openHalf = p.slotOpen / 2 / r;
+          m = Math.abs(Math.abs(off) - slotPitch / 2) < openHalf ? FR_AIR : FR_STAT;
+        } else if (r < rSlotTop) {
+          m = Math.abs(off) < p.toothW / 2 / r ? FR_STAT : FR_AIR;
+        } else m = FR_STAT;
+      }
+      reg[i * nth + j] = m;
+    }
+  }
+  // gap circles used for Maxwell stress (averaged): all cells strictly inside the gap
+  const gapIdx = [];
+  for (let i = 0; i < nr; i++) if (rC[i] > rRot && rC[i] < rBore) gapIdx.push(i);
+  if (!gapIdx.length) for (let i = 0; i < nr; i++) if (rC[i] > rRot * 0.999 && rC[i] < rBore * 1.001) gapIdx.push(i);
+  return { nr, nth, rf, rC, drC, dth, reg, isMag, Ns, poles,
+    rSh, rMagIn, rRot, rBore, rTip, rSlotTop, rOD, gapIdx,
+    rGap: (rRot + rBore) / 2 };
+}
+
+/* Magnetization M_r (A/m) at a rotor position. Magnet edges get FRACTIONAL
+   occupancy so rotation is smooth on the fixed mesh. */
+function magPattern(p, msh, rotRad, BrT) {
+  const M = new Float64Array(msh.nr * msh.nth);
+  const poles = msh.poles, polePitch = (2 * Math.PI) / poles;
+  const arcHalf = ((Math.min(Math.max(p.poleArc, 5), 100) / 100) * polePitch) / 2;
+  const Mmag = BrT / MU0, dth = msh.dth;
+  for (let i = 0; i < msh.nr; i++) {
+    if (!msh.isMag[i]) continue;
+    for (let j = 0; j < msh.nth; j++) {
+      // fraction of this cell's angular span covered by a magnet, and its polarity
+      const thA = j * dth - rotRad, thB = (j + 1) * dth - rotRad;
+      let cov = 0, pol = 0;
+      const kA = Math.floor(thA / polePitch) - 1, kB = Math.floor(thB / polePitch) + 1;
+      for (let k = kA; k <= kB; k++) {
+        const cen = (k + 0.5) * polePitch;
+        const a = Math.max(thA, cen - arcHalf), b = Math.min(thB, cen + arcHalf);
+        if (b > a) {
+          const f = (b - a) / dth;
+          const s = ((k % 2) + 2) % 2 === 0 ? 1 : -1;
+          cov += f * s;                                   // signed coverage
+          pol = s;
+        }
+      }
+      if (cov !== 0) M[i * msh.nth + j] = cov * Mmag;
+      void pol;
+    }
+  }
+  return M;
+}
+
+/* Thomas algorithm for a tridiagonal system (a·x[i-1] + b·x[i] + c·x[i+1] = d). */
+function triSolve(a, b, c, d, x, n, cp, dp) {
+  cp[0] = c[0] / b[0]; dp[0] = d[0] / b[0];
+  for (let i = 1; i < n; i++) {
+    const m = b[i] - a[i] * cp[i - 1];
+    cp[i] = c[i] / m;
+    dp[i] = (d[i] - a[i] * dp[i - 1]) / m;
+  }
+  x[n - 1] = dp[n - 1];
+  for (let i = n - 2; i >= 0; i--) x[i] = dp[i] - cp[i] * x[i + 1];
+}
+
+/* Solve one rotor position. opts: { warm, nl, sweeps, tol, relax }. */
+function solveField(p, msh, M, opts) {
+  const o = opts || {};
+  const { nr, nth, rf, rC, drC, dth, reg } = msh;
+  const N = nr * nth;
+  const A = o.warm && o.warm.length === N ? Float64Array.from(o.warm) : new Float64Array(N);
+  const nu = new Float64Array(N), Bmag = new Float64Array(N);
+  const stM = STEELS[p.statorMat] || STEELS["M19 (29 ga)"];
+  const rtM = STEELS[p.rotorMat] || STEELS["1018 steel (solid)"];
+  const magM = MAGNETS[p.mag] || MAGNETS["N42"];
+  const nuAir = 1 / MU0, nuMag = 1 / (MU0 * (magM.mur || 1.05));
+  const matOf = (m) => (m === FR_STAT ? stM : m === FR_ROT ? rtM : null);
+  for (let i = 0; i < nr; i++) for (let j = 0; j < nth; j++) {
+    const k = i * nth + j, mt = matOf(reg[k]);
+    nu[k] = mt ? 1 / (MU0 * (mt.muri || 1000)) : (msh.isMag[i] ? nuMag : nuAir);
+  }
+  // source: −∂M_r/∂θ integrated over the cell = −(M_{j+½} − M_{j−½})·Δr
+  const src = new Float64Array(N);
+  for (let i = 0; i < nr; i++) for (let j = 0; j < nth; j++) {
+    const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+    const dM = (M[i * nth + jp] - M[i * nth + jm]) / 2;
+    if (dM !== 0) src[i * nth + j] = -dM * drC[i];
+  }
+  // geometric face factors (θ-independent)
+  const gRp = new Float64Array(nr), gRm = new Float64Array(nr), gT = new Float64Array(nr);
+  for (let i = 0; i < nr; i++) {
+    gRp[i] = i === nr - 1 ? 0 : (rf[i + 1] * dth) / ((drC[i] + drC[i + 1]) / 2);
+    gRm[i] = i === 0 ? 0 : (rf[i] * dth) / ((drC[i] + drC[i - 1]) / 2);
+    gT[i] = drC[i] / (rC[i] * dth);
+  }
+  const a = new Float64Array(nr), b = new Float64Array(nr), c = new Float64Array(nr);
+  const d = new Float64Array(nr), x = new Float64Array(nr);
+  const cp = new Float64Array(nr), dp = new Float64Array(nr);
+  const relax = o.relax || 1.25;
+  const nlMax = o.nl || 14, swMax = o.sweeps || 90, tol = o.tol || 1e-3;
+  let conv = false, sweeps = 0, resid = Infinity;
+  const hmean = (u, v) => (2 * u * v) / (u + v);
+  for (let nl = 0; nl < nlMax; nl++) {
+    // ---- linear solve at frozen ν: radial line Gauss-Seidel ----
+    for (let sw = 0; sw < swMax; sw++) {
+      let maxd = 0, scale = 1e-30;
+      for (let j = 0; j < nth; j++) {
+        const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+        for (let i = 0; i < nr; i++) {
+          const k = i * nth + j;
+          if (i === nr - 1) { a[i] = 0; b[i] = 1; c[i] = 0; d[i] = 0; continue; }
+          const nuP = nu[k];
+          const fE = hmean(nuP, nu[i * nth + jp]) * gT[i];
+          const fW = hmean(nuP, nu[i * nth + jm]) * gT[i];
+          const fN = i === nr - 1 ? 0 : hmean(nuP, nu[(i + 1) * nth + j]) * gRp[i];
+          const fS = i === 0 ? 0 : hmean(nuP, nu[(i - 1) * nth + j]) * gRm[i];
+          a[i] = -fS; c[i] = -fN; b[i] = fE + fW + fN + fS;
+          if (b[i] <= 0) { a[i] = 0; c[i] = 0; b[i] = 1; d[i] = A[k]; continue; }
+          d[i] = fE * A[i * nth + jp] + fW * A[i * nth + jm] + src[k];
+        }
+        triSolve(a, b, c, d, x, nr, cp, dp);
+        for (let i = 0; i < nr; i++) {
+          const k = i * nth + j;
+          const dd = x[i] - A[k];
+          A[k] += relax * dd;
+          const ad = Math.abs(dd); if (ad > maxd) maxd = ad;
+          const av = Math.abs(A[k]); if (av > scale) scale = av;
+        }
+      }
+      sweeps++;
+      resid = maxd / scale;
+      if (sw > 3 && resid < tol * 0.05) break;
+    }
+    // ---- B, then ν from the Froelich curve ----
+    let dmax = 0;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nth; j++) {
+      const k = i * nth + j;
+      const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+      const Br9 = (A[i * nth + jp] - A[i * nth + jm]) / (2 * rC[i] * dth);
+      const iu = Math.min(i + 1, nr - 1), id = Math.max(i - 1, 0);
+      const Bt9 = -(A[iu * nth + j] - A[id * nth + j]) / (rC[iu] - rC[id] || 1e-9);
+      const B9 = Math.hypot(Br9, Bt9);
+      Bmag[k] = B9;
+      const mt = matOf(reg[k]);
+      if (!mt) continue;
+      const Bc = Math.min(B9, (mt.bsat || 2) * 0.995);
+      const nuNew = Bc > 1e-6 ? Hof(Bc, mt) / Bc : 1 / (MU0 * (mt.muri || 1000));
+      const rel = Math.abs(nuNew - nu[k]) / Math.max(nu[k], 1e-9);
+      if (rel > dmax) dmax = rel;
+      nu[k] = nu[k] * 0.35 + nuNew * 0.65;
+    }
+    if (dmax < tol) { conv = true; break; }
+  }
+  return { A, B: Bmag, nu, conv, sweeps, resid };
+}
+
+/* Air-gap quantities: B around the mid-gap, and Maxwell-stress torque averaged
+   over every gap circle (single-circle stress is mesh-noisy). */
+function gapQuantities(p, msh, A) {
+  const { nth, dth, rC, gapIdx } = msh;
+  const iMid = gapIdx[Math.floor(gapIdx.length / 2)];
+  const Br9 = new Float64Array(nth), Bt9 = new Float64Array(nth);
+  const rMid = rC[iMid];
+  for (let j = 0; j < nth; j++) {
+    const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+    Br9[j] = (A[iMid * nth + jp] - A[iMid * nth + jm]) / (2 * rMid * dth);
+    Bt9[j] = -(A[(iMid + 1) * nth + j] - A[(iMid - 1) * nth + j]) / (rC[iMid + 1] - rC[iMid - 1]);
+  }
+  const L = p.stackL / 1000;
+  let Tsum = 0, nT = 0;
+  for (const i of gapIdx) {
+    if (i <= 0 || i >= msh.nr - 1) continue;
+    const r = rC[i], rm = r / 1000;
+    let integ = 0;
+    for (let j = 0; j < nth; j++) {
+      const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+      const br = (A[i * nth + jp] - A[i * nth + jm]) / (2 * r * dth);
+      const bt = -(A[(i + 1) * nth + j] - A[(i - 1) * nth + j]) / (rC[i + 1] - rC[i - 1]);
+      integ += br * bt * dth;
+    }
+    Tsum += (L * rm * rm / MU0) * integ; nT++;
+  }
+  let sum2 = 0, peak = 0;
+  for (let j = 0; j < nth; j++) { sum2 += Br9[j] * Br9[j]; peak = Math.max(peak, Math.abs(Br9[j])); }
+  return { Br: Br9, Bt: Bt9, T: nT ? Tsum / nT : 0, Brms: Math.sqrt(sum2 / nth), Bpk: peak, rGap: rMid };
+}
+
+/* Spatial harmonic amplitude of the gap field at pole-pair order n. */
+function gapHarmonic(Br9, n) {
+  const N = Br9.length;
+  let re = 0, im = 0;
+  for (let j = 0; j < N; j++) {
+    const th = ((j + 0.5) * 2 * Math.PI) / N;
+    re += Br9[j] * Math.cos(n * th); im += Br9[j] * Math.sin(n * th);
+  }
+  return (2 / N) * Math.hypot(re, im);
+}
+
+/* ---- app-facing entry: solve, summarize, CROSS-CHECK the analytic core. Pure.
+   opts: { nr, nth, cog (rotor steps, 0 = skip), quick } ---- */
+function fieldStudy(p, r, opts) {
+  const o = opts || {};
+  if (p.motorType !== "pm" && p.motorType !== "brushed") return { err: "The field solver covers BLDC/PMSM and brushed PM designs." };
+  if (!r || r.err.length) return { err: "Fix the design's errors before solving the field." };
+  if (!(p.magT > 0) || !(r.airgap > 0)) return { err: "Needs a positive magnet thickness and airgap." };
+  const nrH = Math.max(Math.round(o.nr || 56), 20), nth = Math.max(Math.round(o.nth || 288), 96);
+  const msh = fieldMesh(p, nrH, nth);
+  const BrT = r.BrT;
+  const M0 = magPattern(p, msh, 0, BrT);
+  const s0 = solveField(p, msh, M0, { nl: o.quick ? 8 : 16, sweeps: o.quick ? 60 : 110 });
+  const g0 = gapQuantities(p, msh, s0.A);
+  const pp = msh.poles / 2;
+  const B1 = gapHarmonic(g0.Br, pp);
+  // dominant spatial order — a correct solve peaks at the pole-pair number
+  let domN = 1, domA = 0;
+  for (let n = 1; n <= Math.min(msh.poles * 2, Math.floor(nth / 4)); n++) {
+    const a9 = gapHarmonic(g0.Br, n);
+    if (a9 > domA) { domA = a9; domN = n; }
+  }
+  let posArea = 0;
+  for (let j = 0; j < nth; j++) if (g0.Br[j] > 0) posArea += g0.Br[j] * g0.rGap * msh.dth;
+  const fluxPole = ((posArea / pp) / 1000) * (p.stackL / 1000);         // Wb per pole
+  // NO COGGING TORQUE FROM THIS SOLVER — deliberately, and this is the interesting part.
+  // Maxwell-stress cogging was implemented, then removed when its own mesh-convergence
+  // study (36x216 -> 96x576 cells) showed the gap field converging to within ±2% while
+  // the cogging ripple DIVERGED, 4.0e-2 -> 3.9e-1 N·m. A structured polar mesh staircases
+  // the curved slot-opening and tooth-side boundaries; stress-tensor torque is a small
+  // difference of large quantities and integrates that staircase noise, which grows with
+  // refinement rather than vanishing. Everything this function does return passed the
+  // same study. A real cogging capability needs conforming (body-fitted) elements or a
+  // virtual-work / co-energy formulation, which is volume-integrated and far less
+  // boundary-sensitive; until then the analytical cogging model is the app's source.
+  return {
+    msh, A: s0.A, B: s0.B, conv: s0.conv, sweeps: s0.sweeps, resid: s0.resid,
+    gap: g0, B1, domN, fluxPole,
+    cmp: {
+      BgField: g0.Bpk, BgAnalytic: r.BgAvg,
+      B1Field: B1, B1Analytic: r.B1,
+      dB1: r.B1 > 0 ? (B1 - r.B1) / r.B1 : NaN,
+    },
+    nr: msh.nr, nth,
+  };
+}
+
 /* ================= efficiency map / drive cycle =================
    Both sweep the SAME loss physics computeDesign uses — no second model. The
    pre-v60 EfficiencyMap view carried its own copy with a (n/n0)^1.5 iron-loss

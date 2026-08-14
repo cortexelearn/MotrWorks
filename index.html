@@ -19517,6 +19517,394 @@ function computeDesign(p) {
         Lph, LphNR, Lll, LllNR, acim, therm, acFr, Pwind, Pfe, feOp, brush, latm, brake, step,
     };
 }
+/* ================= 2-D magnetostatic field solver (FEA-light) =================
+   A real field solution for the radial-flux machines, living in the same file as
+   the analytical core so the gates can drive both and compare them.
+
+   FORMULATION. Magnetic vector potential A = Az(r,θ)ẑ on a structured polar grid,
+   finite-VOLUME so flux is conserved cell to cell:
+
+       Σ_faces  ν_face · (A_nb − A_P) · (face length / node distance)  =  −I_cell
+
+   Radial faces contribute ν·r_face·Δθ/Δr, angular faces ν·Δr/(r·Δθ), and face
+   reluctivities are harmonic means so material jumps (iron↔air) are handled without
+   smearing. Nonlinear iron enters as ν(|B|) from the SAME Froelich curve (Hof) the
+   analytical branch uses — one BH model in the whole tool.
+
+   MAGNETS. A radially magnetized arc has M = Br/μ0 r̂ inside and 0 outside, so its
+   equivalent magnetization current ∇×M = −(1/r)(∂M_r/∂θ)ẑ lives on the arc's SIDE
+   faces. Discretely that is the θ-derivative of M_r, which means rotor rotation is
+   just a shift of the magnetization pattern on a FIXED mesh — no remeshing. Magnet
+   edges carry FRACTIONAL cell occupancy, so a rotating magnet sweeps smoothly across
+   cells instead of snapping; without that, the staircase produces spurious torque
+   ripple far larger than real cogging.
+
+   MESH. Radially GRADED: cells are concentrated in the airgap (the region that sets
+   every number worth having) and thinned in the yoke. Segment boundaries land exactly
+   on the physical radii (magnet ID/OD, bore, tip, slot top), so no material boundary
+   falls mid-cell. θ is uniform and periodic over the full 360°, so no symmetry is
+   assumed and fractional-slot machines solve correctly.
+
+   SOLVER. Radial LINE relaxation: for every angular column the tridiagonal system in
+   r is solved exactly (Thomas), with the θ-coupling taken from the current iterate
+   (line Gauss-Seidel) plus over-relaxation. Point SOR converges badly here because a
+   thin airgap makes the grid violently anisotropic; solving along r removes that.
+
+   BOUNDARY. Az = 0 at the stator OD (flux stays inside the iron); natural (Neumann)
+   at the shaft bore.
+
+   TORQUE. Maxwell stress averaged over SEVERAL mid-gap circles (single-circle stress
+   is notoriously mesh-noisy): T = (L r²/μ0)∮ B_r B_θ dθ.
+
+   HONEST LIMITS: first-order structured solver — no adaptive meshing, slot corners
+   land on grid lines, fields are linear in a cell, and it is magnetostatic (no eddy
+   currents, no hysteresis). It exists to CHECK the analytical core; where the two
+   disagree, the disagreement is the finding. ================================== */
+const MU0 = 4e-7 * Math.PI;
+const FR_AIR = 0, FR_STAT = 1, FR_ROT = 2;
+/* graded radial faces: `segs` = [{ r0, r1, n }] contiguous, boundaries preserved */
+function gradeRadial(segs) {
+    const rf = [segs[0].r0];
+    for (const s of segs) {
+        for (let k = 1; k <= s.n; k++)
+            rf.push(s.r0 + ((s.r1 - s.r0) * k) / s.n);
+    }
+    return Float64Array.from(rf);
+}
+/* Fixed region map + magnet-ring mask. nrHint sets overall refinement. */
+function fieldMesh(p, nrHint, nth) {
+    const Ns = Math.max(3, Math.round(p.slots));
+    const poles = Math.max(2, Math.round(p.poles / 2) * 2);
+    const rSh = Math.max(p.shaftD / 2, 0.5);
+    const rRot = p.rotorOD / 2;
+    const rMagIn = Math.max(rRot - p.magT, rSh + 0.2);
+    const rBore = p.statorID / 2;
+    const hs9 = Math.max((p.statorOD - p.statorID) / 2 - p.yoke - p.tipH, 0.2);
+    const rTip = rBore + p.tipH;
+    const rSlotTop = rTip + hs9;
+    const rOD = p.statorOD / 2;
+    // cell budget by importance: the airgap gets the most per mm, the yoke the least
+    const sc = Math.max(nrHint / 56, 0.5);
+    const nOf = (n) => Math.max(Math.round(n * sc), 2);
+    const rf = gradeRadial([
+        { r0: rSh, r1: rMagIn, n: nOf(8) }, // rotor back iron
+        { r0: rMagIn, r1: rRot, n: nOf(8) }, // magnet
+        { r0: rRot, r1: rBore, n: nOf(8) }, // AIRGAP — refined
+        { r0: rBore, r1: rTip, n: nOf(4) }, // tooth tips
+        { r0: rTip, r1: rSlotTop, n: nOf(16) }, // slots / tooth bodies
+        { r0: rSlotTop, r1: rOD, n: nOf(10) }, // yoke
+    ]);
+    const nr = rf.length - 1;
+    const rC = new Float64Array(nr), drC = new Float64Array(nr);
+    for (let i = 0; i < nr; i++) {
+        rC[i] = (rf[i] + rf[i + 1]) / 2;
+        drC[i] = rf[i + 1] - rf[i];
+    }
+    const dth = (2 * Math.PI) / nth;
+    const reg = new Uint8Array(nr * nth);
+    const isMag = new Uint8Array(nr); // magnet ring by radial band
+    const slotPitch = (2 * Math.PI) / Ns;
+    for (let i = 0; i < nr; i++) {
+        const r = rC[i];
+        if (r > rMagIn && r < rRot)
+            isMag[i] = 1;
+        for (let j = 0; j < nth; j++) {
+            const th = (j + 0.5) * dth;
+            let m = FR_AIR;
+            if (r < rMagIn)
+                m = FR_ROT; // shaft + rotor yoke, one material
+            else if (r < rBore)
+                m = FR_AIR; // magnet ring & airgap (magnet ν set below)
+            else if (r < rOD) {
+                const off = ((th % slotPitch) + slotPitch) % slotPitch - slotPitch / 2;
+                if (r < rTip) {
+                    const openHalf = p.slotOpen / 2 / r;
+                    m = Math.abs(Math.abs(off) - slotPitch / 2) < openHalf ? FR_AIR : FR_STAT;
+                }
+                else if (r < rSlotTop) {
+                    m = Math.abs(off) < p.toothW / 2 / r ? FR_STAT : FR_AIR;
+                }
+                else
+                    m = FR_STAT;
+            }
+            reg[i * nth + j] = m;
+        }
+    }
+    // gap circles used for Maxwell stress (averaged): all cells strictly inside the gap
+    const gapIdx = [];
+    for (let i = 0; i < nr; i++)
+        if (rC[i] > rRot && rC[i] < rBore)
+            gapIdx.push(i);
+    if (!gapIdx.length)
+        for (let i = 0; i < nr; i++)
+            if (rC[i] > rRot * 0.999 && rC[i] < rBore * 1.001)
+                gapIdx.push(i);
+    return { nr, nth, rf, rC, drC, dth, reg, isMag, Ns, poles,
+        rSh, rMagIn, rRot, rBore, rTip, rSlotTop, rOD, gapIdx,
+        rGap: (rRot + rBore) / 2 };
+}
+/* Magnetization M_r (A/m) at a rotor position. Magnet edges get FRACTIONAL
+   occupancy so rotation is smooth on the fixed mesh. */
+function magPattern(p, msh, rotRad, BrT) {
+    const M = new Float64Array(msh.nr * msh.nth);
+    const poles = msh.poles, polePitch = (2 * Math.PI) / poles;
+    const arcHalf = ((Math.min(Math.max(p.poleArc, 5), 100) / 100) * polePitch) / 2;
+    const Mmag = BrT / MU0, dth = msh.dth;
+    for (let i = 0; i < msh.nr; i++) {
+        if (!msh.isMag[i])
+            continue;
+        for (let j = 0; j < msh.nth; j++) {
+            // fraction of this cell's angular span covered by a magnet, and its polarity
+            const thA = j * dth - rotRad, thB = (j + 1) * dth - rotRad;
+            let cov = 0, pol = 0;
+            const kA = Math.floor(thA / polePitch) - 1, kB = Math.floor(thB / polePitch) + 1;
+            for (let k = kA; k <= kB; k++) {
+                const cen = (k + 0.5) * polePitch;
+                const a = Math.max(thA, cen - arcHalf), b = Math.min(thB, cen + arcHalf);
+                if (b > a) {
+                    const f = (b - a) / dth;
+                    const s = ((k % 2) + 2) % 2 === 0 ? 1 : -1;
+                    cov += f * s; // signed coverage
+                    pol = s;
+                }
+            }
+            if (cov !== 0)
+                M[i * msh.nth + j] = cov * Mmag;
+            void pol;
+        }
+    }
+    return M;
+}
+/* Thomas algorithm for a tridiagonal system (a·x[i-1] + b·x[i] + c·x[i+1] = d). */
+function triSolve(a, b, c, d, x, n, cp, dp) {
+    cp[0] = c[0] / b[0];
+    dp[0] = d[0] / b[0];
+    for (let i = 1; i < n; i++) {
+        const m = b[i] - a[i] * cp[i - 1];
+        cp[i] = c[i] / m;
+        dp[i] = (d[i] - a[i] * dp[i - 1]) / m;
+    }
+    x[n - 1] = dp[n - 1];
+    for (let i = n - 2; i >= 0; i--)
+        x[i] = dp[i] - cp[i] * x[i + 1];
+}
+/* Solve one rotor position. opts: { warm, nl, sweeps, tol, relax }. */
+function solveField(p, msh, M, opts) {
+    const o = opts || {};
+    const { nr, nth, rf, rC, drC, dth, reg } = msh;
+    const N = nr * nth;
+    const A = o.warm && o.warm.length === N ? Float64Array.from(o.warm) : new Float64Array(N);
+    const nu = new Float64Array(N), Bmag = new Float64Array(N);
+    const stM = STEELS[p.statorMat] || STEELS["M19 (29 ga)"];
+    const rtM = STEELS[p.rotorMat] || STEELS["1018 steel (solid)"];
+    const magM = MAGNETS[p.mag] || MAGNETS["N42"];
+    const nuAir = 1 / MU0, nuMag = 1 / (MU0 * (magM.mur || 1.05));
+    const matOf = (m) => (m === FR_STAT ? stM : m === FR_ROT ? rtM : null);
+    for (let i = 0; i < nr; i++)
+        for (let j = 0; j < nth; j++) {
+            const k = i * nth + j, mt = matOf(reg[k]);
+            nu[k] = mt ? 1 / (MU0 * (mt.muri || 1000)) : (msh.isMag[i] ? nuMag : nuAir);
+        }
+    // source: −∂M_r/∂θ integrated over the cell = −(M_{j+½} − M_{j−½})·Δr
+    const src = new Float64Array(N);
+    for (let i = 0; i < nr; i++)
+        for (let j = 0; j < nth; j++) {
+            const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+            const dM = (M[i * nth + jp] - M[i * nth + jm]) / 2;
+            if (dM !== 0)
+                src[i * nth + j] = -dM * drC[i];
+        }
+    // geometric face factors (θ-independent)
+    const gRp = new Float64Array(nr), gRm = new Float64Array(nr), gT = new Float64Array(nr);
+    for (let i = 0; i < nr; i++) {
+        gRp[i] = i === nr - 1 ? 0 : (rf[i + 1] * dth) / ((drC[i] + drC[i + 1]) / 2);
+        gRm[i] = i === 0 ? 0 : (rf[i] * dth) / ((drC[i] + drC[i - 1]) / 2);
+        gT[i] = drC[i] / (rC[i] * dth);
+    }
+    const a = new Float64Array(nr), b = new Float64Array(nr), c = new Float64Array(nr);
+    const d = new Float64Array(nr), x = new Float64Array(nr);
+    const cp = new Float64Array(nr), dp = new Float64Array(nr);
+    const relax = o.relax || 1.25;
+    const nlMax = o.nl || 14, swMax = o.sweeps || 90, tol = o.tol || 1e-3;
+    let conv = false, sweeps = 0, resid = Infinity;
+    const hmean = (u, v) => (2 * u * v) / (u + v);
+    for (let nl = 0; nl < nlMax; nl++) {
+        // ---- linear solve at frozen ν: radial line Gauss-Seidel ----
+        for (let sw = 0; sw < swMax; sw++) {
+            let maxd = 0, scale = 1e-30;
+            for (let j = 0; j < nth; j++) {
+                const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+                for (let i = 0; i < nr; i++) {
+                    const k = i * nth + j;
+                    if (i === nr - 1) {
+                        a[i] = 0;
+                        b[i] = 1;
+                        c[i] = 0;
+                        d[i] = 0;
+                        continue;
+                    }
+                    const nuP = nu[k];
+                    const fE = hmean(nuP, nu[i * nth + jp]) * gT[i];
+                    const fW = hmean(nuP, nu[i * nth + jm]) * gT[i];
+                    const fN = i === nr - 1 ? 0 : hmean(nuP, nu[(i + 1) * nth + j]) * gRp[i];
+                    const fS = i === 0 ? 0 : hmean(nuP, nu[(i - 1) * nth + j]) * gRm[i];
+                    a[i] = -fS;
+                    c[i] = -fN;
+                    b[i] = fE + fW + fN + fS;
+                    if (b[i] <= 0) {
+                        a[i] = 0;
+                        c[i] = 0;
+                        b[i] = 1;
+                        d[i] = A[k];
+                        continue;
+                    }
+                    d[i] = fE * A[i * nth + jp] + fW * A[i * nth + jm] + src[k];
+                }
+                triSolve(a, b, c, d, x, nr, cp, dp);
+                for (let i = 0; i < nr; i++) {
+                    const k = i * nth + j;
+                    const dd = x[i] - A[k];
+                    A[k] += relax * dd;
+                    const ad = Math.abs(dd);
+                    if (ad > maxd)
+                        maxd = ad;
+                    const av = Math.abs(A[k]);
+                    if (av > scale)
+                        scale = av;
+                }
+            }
+            sweeps++;
+            resid = maxd / scale;
+            if (sw > 3 && resid < tol * 0.05)
+                break;
+        }
+        // ---- B, then ν from the Froelich curve ----
+        let dmax = 0;
+        for (let i = 0; i < nr; i++)
+            for (let j = 0; j < nth; j++) {
+                const k = i * nth + j;
+                const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+                const Br9 = (A[i * nth + jp] - A[i * nth + jm]) / (2 * rC[i] * dth);
+                const iu = Math.min(i + 1, nr - 1), id = Math.max(i - 1, 0);
+                const Bt9 = -(A[iu * nth + j] - A[id * nth + j]) / (rC[iu] - rC[id] || 1e-9);
+                const B9 = Math.hypot(Br9, Bt9);
+                Bmag[k] = B9;
+                const mt = matOf(reg[k]);
+                if (!mt)
+                    continue;
+                const Bc = Math.min(B9, (mt.bsat || 2) * 0.995);
+                const nuNew = Bc > 1e-6 ? Hof(Bc, mt) / Bc : 1 / (MU0 * (mt.muri || 1000));
+                const rel = Math.abs(nuNew - nu[k]) / Math.max(nu[k], 1e-9);
+                if (rel > dmax)
+                    dmax = rel;
+                nu[k] = nu[k] * 0.35 + nuNew * 0.65;
+            }
+        if (dmax < tol) {
+            conv = true;
+            break;
+        }
+    }
+    return { A, B: Bmag, nu, conv, sweeps, resid };
+}
+/* Air-gap quantities: B around the mid-gap, and Maxwell-stress torque averaged
+   over every gap circle (single-circle stress is mesh-noisy). */
+function gapQuantities(p, msh, A) {
+    const { nth, dth, rC, gapIdx } = msh;
+    const iMid = gapIdx[Math.floor(gapIdx.length / 2)];
+    const Br9 = new Float64Array(nth), Bt9 = new Float64Array(nth);
+    const rMid = rC[iMid];
+    for (let j = 0; j < nth; j++) {
+        const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+        Br9[j] = (A[iMid * nth + jp] - A[iMid * nth + jm]) / (2 * rMid * dth);
+        Bt9[j] = -(A[(iMid + 1) * nth + j] - A[(iMid - 1) * nth + j]) / (rC[iMid + 1] - rC[iMid - 1]);
+    }
+    const L = p.stackL / 1000;
+    let Tsum = 0, nT = 0;
+    for (const i of gapIdx) {
+        if (i <= 0 || i >= msh.nr - 1)
+            continue;
+        const r = rC[i], rm = r / 1000;
+        let integ = 0;
+        for (let j = 0; j < nth; j++) {
+            const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+            const br = (A[i * nth + jp] - A[i * nth + jm]) / (2 * r * dth);
+            const bt = -(A[(i + 1) * nth + j] - A[(i - 1) * nth + j]) / (rC[i + 1] - rC[i - 1]);
+            integ += br * bt * dth;
+        }
+        Tsum += (L * rm * rm / MU0) * integ;
+        nT++;
+    }
+    let sum2 = 0, peak = 0;
+    for (let j = 0; j < nth; j++) {
+        sum2 += Br9[j] * Br9[j];
+        peak = Math.max(peak, Math.abs(Br9[j]));
+    }
+    return { Br: Br9, Bt: Bt9, T: nT ? Tsum / nT : 0, Brms: Math.sqrt(sum2 / nth), Bpk: peak, rGap: rMid };
+}
+/* Spatial harmonic amplitude of the gap field at pole-pair order n. */
+function gapHarmonic(Br9, n) {
+    const N = Br9.length;
+    let re = 0, im = 0;
+    for (let j = 0; j < N; j++) {
+        const th = ((j + 0.5) * 2 * Math.PI) / N;
+        re += Br9[j] * Math.cos(n * th);
+        im += Br9[j] * Math.sin(n * th);
+    }
+    return (2 / N) * Math.hypot(re, im);
+}
+/* ---- app-facing entry: solve, summarize, CROSS-CHECK the analytic core. Pure.
+   opts: { nr, nth, cog (rotor steps, 0 = skip), quick } ---- */
+function fieldStudy(p, r, opts) {
+    const o = opts || {};
+    if (p.motorType !== "pm" && p.motorType !== "brushed")
+        return { err: "The field solver covers BLDC/PMSM and brushed PM designs." };
+    if (!r || r.err.length)
+        return { err: "Fix the design's errors before solving the field." };
+    if (!(p.magT > 0) || !(r.airgap > 0))
+        return { err: "Needs a positive magnet thickness and airgap." };
+    const nrH = Math.max(Math.round(o.nr || 56), 20), nth = Math.max(Math.round(o.nth || 288), 96);
+    const msh = fieldMesh(p, nrH, nth);
+    const BrT = r.BrT;
+    const M0 = magPattern(p, msh, 0, BrT);
+    const s0 = solveField(p, msh, M0, { nl: o.quick ? 8 : 16, sweeps: o.quick ? 60 : 110 });
+    const g0 = gapQuantities(p, msh, s0.A);
+    const pp = msh.poles / 2;
+    const B1 = gapHarmonic(g0.Br, pp);
+    // dominant spatial order — a correct solve peaks at the pole-pair number
+    let domN = 1, domA = 0;
+    for (let n = 1; n <= Math.min(msh.poles * 2, Math.floor(nth / 4)); n++) {
+        const a9 = gapHarmonic(g0.Br, n);
+        if (a9 > domA) {
+            domA = a9;
+            domN = n;
+        }
+    }
+    let posArea = 0;
+    for (let j = 0; j < nth; j++)
+        if (g0.Br[j] > 0)
+            posArea += g0.Br[j] * g0.rGap * msh.dth;
+    const fluxPole = ((posArea / pp) / 1000) * (p.stackL / 1000); // Wb per pole
+    // NO COGGING TORQUE FROM THIS SOLVER — deliberately, and this is the interesting part.
+    // Maxwell-stress cogging was implemented, then removed when its own mesh-convergence
+    // study (36x216 -> 96x576 cells) showed the gap field converging to within ±2% while
+    // the cogging ripple DIVERGED, 4.0e-2 -> 3.9e-1 N·m. A structured polar mesh staircases
+    // the curved slot-opening and tooth-side boundaries; stress-tensor torque is a small
+    // difference of large quantities and integrates that staircase noise, which grows with
+    // refinement rather than vanishing. Everything this function does return passed the
+    // same study. A real cogging capability needs conforming (body-fitted) elements or a
+    // virtual-work / co-energy formulation, which is volume-integrated and far less
+    // boundary-sensitive; until then the analytical cogging model is the app's source.
+    return {
+        msh, A: s0.A, B: s0.B, conv: s0.conv, sweeps: s0.sweeps, resid: s0.resid,
+        gap: g0, B1, domN, fluxPole,
+        cmp: {
+            BgField: g0.Bpk, BgAnalytic: r.BgAvg,
+            B1Field: B1, B1Analytic: r.B1,
+            dB1: r.B1 > 0 ? (B1 - r.B1) / r.B1 : NaN,
+        },
+        nr: msh.nr, nth,
+    };
+}
 /* ================= efficiency map / drive cycle =================
    Both sweep the SAME loss physics computeDesign uses — no second model. The
    pre-v60 EfficiencyMap view carried its own copy with a (n/n0)^1.5 iron-loss
@@ -22133,6 +22521,154 @@ function TorqueSpeedChart({ r, us, ghost, tLimit }) {
             ")"),
         React.createElement("text", { x: 13, y: (H - mB) / 2, textAnchor: "middle", className: "axis", transform: `rotate(-90 13 ${(H - mB) / 2})` }, "speed (rpm)")));
 }
+/* ---- field plot: flux lines (contours of the vector potential) over |B| shading,
+   straight from the solver's own grid. Flux lines ARE iso-A contours in 2-D, so no
+   streamline integration is needed — marching squares on the (r,θ) grid, mapped to
+   cartesian. Shading is downsampled from the solve mesh to keep the SVG light. ---- */
+function bCol(b9, bsat) {
+    const f9 = Math.max(0, Math.min(b9 / Math.max(bsat, 0.5), 1.15));
+    const stops = [[0, [248, 250, 252]], [0.35, [186, 214, 240]], [0.6, [120, 190, 160]],
+        [0.8, [235, 205, 90]], [0.95, [232, 132, 58]], [1.1, [200, 40, 40]]];
+    if (f9 <= 0)
+        return `rgb(${stops[0][1].join(",")})`;
+    for (let i9 = 1; i9 < stops.length; i9++) {
+        if (f9 <= stops[i9][0]) {
+            const t9 = (f9 - stops[i9 - 1][0]) / (stops[i9][0] - stops[i9 - 1][0]);
+            const c9 = [0, 1, 2].map((k9) => Math.round(stops[i9 - 1][1][k9] + t9 * (stops[i9][1][k9] - stops[i9 - 1][1][k9])));
+            return `rgb(${c9.join(",")})`;
+        }
+    }
+    return `rgb(${stops[stops.length - 1][1].join(",")})`;
+}
+function FieldPlot({ F, p, us, showB, showLines }) {
+    if (!F || F.err || !F.msh)
+        return null;
+    const msh = F.msh, { nr, nth, rC, rf, dth } = msh;
+    const W = 430, H = 430, cx = W / 2, cy = H / 2;
+    const k = (Math.min(W, H) / 2 - 16) / msh.rOD; // mm -> px
+    const PX = (r9, th9) => [cx + r9 * k * Math.cos(th9), cy - r9 * k * Math.sin(th9)];
+    const stM = STEELS[p.statorMat] || STEELS["M19 (29 ga)"];
+    const bsat = stM.bsat || 2.05;
+    const els = [];
+    // ---- |B| shading, downsampled (max ~40 x 120 quads keeps the SVG manageable) ----
+    if (showB !== false) {
+        const si = Math.max(1, Math.ceil(nr / 40)), sj = Math.max(1, Math.ceil(nth / 120));
+        for (let i = 0; i < nr; i += si) {
+            const i2 = Math.min(i + si, nr);
+            const ra = rf[i], rb = rf[i2];
+            for (let j = 0; j < nth; j += sj) {
+                const j2 = j + sj;
+                let acc = 0, n9 = 0;
+                for (let ii = i; ii < i2; ii++)
+                    for (let jj = j; jj < j2; jj++) {
+                        acc += F.B[ii * nth + (jj % nth)];
+                        n9++;
+                    }
+                const b9 = acc / Math.max(n9, 1);
+                const t0 = j * dth, t1 = Math.min(j2, nth) * dth;
+                const [x0, y0] = PX(ra, t0), [x1, y1] = PX(rb, t0), [x2, y2] = PX(rb, t1), [x3, y3] = PX(ra, t1);
+                els.push(React.createElement("path", { key: `b${i}-${j}`, d: `M ${x0.toFixed(1)} ${y0.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${(rb * k).toFixed(1)} ${(rb * k).toFixed(1)} 0 0 0 ${x2.toFixed(1)} ${y2.toFixed(1)} L ${x3.toFixed(1)} ${y3.toFixed(1)} A ${(ra * k).toFixed(1)} ${(ra * k).toFixed(1)} 0 0 1 ${x0.toFixed(1)} ${y0.toFixed(1)} Z`, fill: bCol(b9, bsat), stroke: "none", shapeRendering: "crispEdges" }));
+            }
+        }
+    }
+    // ---- flux lines: iso-contours of A by marching squares on the solve grid ----
+    if (showLines !== false) {
+        let aMin = Infinity, aMax = -Infinity;
+        for (let i = 0; i < nr; i++)
+            for (let j = 0; j < nth; j++) {
+                const v = F.A[i * nth + j];
+                if (v < aMin)
+                    aMin = v;
+                if (v > aMax)
+                    aMax = v;
+            }
+        const NL = 26;
+        for (let L = 1; L < NL; L++) {
+            const lv = aMin + ((aMax - aMin) * L) / NL;
+            const segs = [];
+            for (let i = 0; i < nr - 1; i++) {
+                for (let j = 0; j < nth; j++) {
+                    const jp = (j + 1) % nth;
+                    const v = [F.A[i * nth + j], F.A[i * nth + jp], F.A[(i + 1) * nth + jp], F.A[(i + 1) * nth + j]];
+                    const P = [[rC[i], (j + 0.5) * dth], [rC[i], (jp + 0.5) * dth],
+                        [rC[i + 1], (jp + 0.5) * dth], [rC[i + 1], (j + 0.5) * dth]];
+                    const cr = [];
+                    for (let e = 0; e < 4; e++) {
+                        const a9 = v[e], b9 = v[(e + 1) % 4];
+                        if ((a9 - lv) * (b9 - lv) < 0) {
+                            const f9 = (lv - a9) / (b9 - a9);
+                            const pa = P[e], pb = P[(e + 1) % 4];
+                            let dth9 = pb[1] - pa[1];
+                            if (dth9 > Math.PI)
+                                dth9 -= 2 * Math.PI;
+                            if (dth9 < -Math.PI)
+                                dth9 += 2 * Math.PI;
+                            cr.push(PX(pa[0] + f9 * (pb[0] - pa[0]), pa[1] + f9 * dth9));
+                        }
+                    }
+                    if (cr.length === 2)
+                        segs.push(`M ${cr[0][0].toFixed(1)} ${cr[0][1].toFixed(1)} L ${cr[1][0].toFixed(1)} ${cr[1][1].toFixed(1)}`);
+                }
+            }
+            if (segs.length)
+                els.push(React.createElement("path", { key: `f${L}`, d: segs.join(" "), fill: "none", stroke: "#0F172A", strokeWidth: "0.7", opacity: "0.6" }));
+        }
+    }
+    // ---- geometry outlines so the drawing reads as a machine, not a heatmap ----
+    const ring = (r9, sw, col) => React.createElement("circle", { key: "r" + r9 + col, cx: cx, cy: cy, r: r9 * k, fill: "none", stroke: col, strokeWidth: sw });
+    els.push(ring(msh.rOD, 1.2, "#334155"));
+    els.push(ring(msh.rBore, 0.9, "#334155"));
+    els.push(ring(msh.rRot, 0.9, "#334155"));
+    els.push(ring(msh.rMagIn, 0.7, "#64748B"));
+    els.push(ring(msh.rSh, 0.7, "#64748B"));
+    const dl = (mm) => (us === "in" ? (mm / 25.4).toFixed(2) + "″" : mm.toFixed(1) + " mm");
+    return (React.createElement("svg", { id: "svg-field", xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${W} ${H}`, className: "chart" },
+        React.createElement("style", null, SVGCSS),
+        els,
+        React.createElement("text", { x: 8, y: 14, className: "dim" }, `|B| shading to ${bsat.toFixed(2)} T sat · ${F.nr}x${F.nth} cells`),
+        React.createElement("text", { x: W - 8, y: 14, textAnchor: "end", className: "dim" }, `gap Ø${dl(2 * msh.rGap)} · peak ${F.gap.Bpk.toFixed(2)} T`),
+        React.createElement("text", { x: W - 8, y: H - 6, textAnchor: "end", className: "dim" }, F.conv ? "converged" : `residual ${F.resid.toExponential(1)}`),
+        React.createElement("text", { x: 8, y: H - 6, className: "dim" }, "flux lines = iso-A contours")));
+}
+/* gap-field waveform from the solve, with its fundamental for comparison */
+function GapWaveform({ F, us }) {
+    if (!F || F.err || !F.gap)
+        return null;
+    const W = 430, H = 190, mL = 46, mB = 34, mT = 16, mR = 14;
+    const PW = W - mL - mR, PH = H - mB - mT;
+    const B = F.gap.Br, n = B.length;
+    const bMax = Math.max(...B.map(Math.abs)) * 1.15 || 1;
+    const X = (j) => mL + (PW * j) / (n - 1);
+    const Y = (b) => mT + PH / 2 - (PH / 2) * (b / bMax);
+    const path = Array.from(B, (b, j) => `${j ? "L" : "M"} ${X(j).toFixed(1)} ${Y(b).toFixed(1)}`).join(" ");
+    // fundamental reconstructed from its OWN Fourier coefficients — amplitude and phase —
+    // so the dashed sine lies on the solved wave instead of being phase-guessed
+    const pp = F.msh.poles / 2;
+    let fre = 0, fim = 0;
+    for (let j = 0; j < n; j++) {
+        const th = ((j + 0.5) * 2 * Math.PI) / n;
+        fre += B[j] * Math.cos(pp * th);
+        fim += B[j] * Math.sin(pp * th);
+    }
+    fre *= 2 / n;
+    fim *= 2 / n;
+    const fPath = Array.from({ length: n }, (_, j) => {
+        const th = ((j + 0.5) * 2 * Math.PI) / n;
+        return `${j ? "L" : "M"} ${X(j).toFixed(1)} ${Y(fre * Math.cos(pp * th) + fim * Math.sin(pp * th)).toFixed(1)}`;
+    }).join(" ");
+    return (React.createElement("svg", { id: "svg-gapwave", xmlns: "http://www.w3.org/2000/svg", viewBox: `0 0 ${W} ${H}`, className: "chart" },
+        React.createElement("style", null, SVGCSS),
+        React.createElement("line", { x1: mL, y1: mT + PH / 2, x2: W - mR, y2: mT + PH / 2, stroke: AXIS, strokeWidth: "0.7" }),
+        React.createElement("path", { d: fPath, fill: "none", stroke: "#B45309", strokeWidth: "1.1", strokeDasharray: "5 3" }),
+        React.createElement("path", { d: path, fill: "none", stroke: "#2563EB", strokeWidth: "1.4" }),
+        React.createElement("line", { x1: mL, y1: mT, x2: mL, y2: mT + PH, stroke: AXIS }),
+        React.createElement("text", { x: mL - 5, y: mT + 6, textAnchor: "end", className: "tick" }, bMax.toFixed(2)),
+        React.createElement("text", { x: mL - 5, y: mT + PH, textAnchor: "end", className: "tick" }, (-bMax).toFixed(2)),
+        React.createElement("text", { x: mL + PW / 2, y: H - 5, textAnchor: "middle", className: "axis" }, "rotor position (one revolution)"),
+        React.createElement("text", { x: 13, y: mT + PH / 2, textAnchor: "middle", transform: `rotate(-90 13 ${mT + PH / 2})`, className: "axis" }, "B radial (T)"),
+        React.createElement("text", { x: mL + 4, y: H - 19, className: "dim", style: { fill: "#2563EB" } }, "solved"),
+        React.createElement("text", { x: mL + 48, y: H - 19, className: "dim", style: { fill: "#B45309" } }, `fundamental ${F.B1.toFixed(3)} T`)));
+}
 /* ---- efficiency map: contoured, from the ENGINE's efficiencyMap() — the same loss
    chain the results column reports. Pre-v60 this view carried its own duplicate
    loss model (with a (n/n0)^1.5 iron-loss guess); it no longer computes physics. ---- */
@@ -24405,6 +24941,27 @@ function MotorDesigner() {
         ? computeDesign({ ...p, calOn: "no" }) : null), [p]);
     // efficiency map + drive cycle (engine-computed; null for machine types without a curve)
     const emap = useMemo(() => efficiencyMap(p, r, {}), [p, r]);
+    // field solve is ON DEMAND — it is a ~0.2-1 s nonlinear solve, not something to run
+    // on every keystroke. `fieldOf` records the parameters it was solved for so the card
+    // can say plainly when the design has moved on since.
+    const [field, setField] = useState(null);
+    const [fieldOf, setFieldOf] = useState(null);
+    const [fieldBusy, setFieldBusy] = useState(false);
+    const [fieldRes, setFieldRes] = useState("normal");
+    const fieldStale = field && fieldOf !== JSON.stringify(p);
+    const runField = () => {
+        setFieldBusy(true);
+        // yield a frame so the button can show its working state before the solve blocks
+        setTimeout(() => {
+            const cfg = fieldRes === "fine" ? { nr: 76, nth: 432 }
+                : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288 };
+            const t0 = Date.now();
+            const F = fieldStudy(p, r, cfg);
+            setField(F && !F.err ? { ...F, ms: Date.now() - t0 } : F);
+            setFieldOf(JSON.stringify(p));
+            setFieldBusy(false);
+        }, 30);
+    };
     const [cycle, setCycle] = useState(null);
     const [cycMsg, setCycMsg] = useState("");
     const dcyc = useMemo(() => (cycle ? driveCycle(p, r, cycle) : null), [p, r, cycle]);
@@ -25569,6 +26126,59 @@ function MotorDesigner() {
                             React.createElement("div", { className: "note" }, brM
                                 ? "I = T / Kt — linear for the brushed model (armature-reaction flux knockdown not iterated). Solid to the current-limited stall point; faint continuation = winding V/R capability. Red dashed = current limit."
                                 : "I = T / Kt with the saturation bend applied — the curve steepens toward Imax as steel MMF drops knock down flux (kIT). Solid to the drive-limited stall point; faint continuation = winding V/R capability. Red dashed = drive current limit."))),
+                        (pm || brM) && !r.err.length && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
+                            React.createElement("div", { className: "cardhead" },
+                                React.createElement("h2", null, "Field solution (2-D magnetostatic)"),
+                                field && !field.err && React.createElement("button", { className: "btn mini ghost", onClick: () => exportPng("svg-field", "field-plot.png") }, "PNG \u2913")),
+                            React.createElement("div", { className: "iobar" },
+                                React.createElement("button", { className: "btn", onClick: runField, disabled: fieldBusy }, fieldBusy ? "Solving…" : field ? "Re-solve" : "Solve field"),
+                                React.createElement(Pick, { label: "", v: fieldRes, set: setFieldRes, opts: [{ v: "fast", t: "Fast" }, { v: "normal", t: "Normal" }, { v: "fine", t: "Fine" }] })),
+                            React.createElement("div", { className: "note", style: { marginTop: 2 } }, "Nonlinear vector-potential solve on a graded polar mesh, magnets as equivalent magnetization currents, the same Froelich BH curve the analytical core uses. Runs on demand \u2014 it is a real solve, not a formula."),
+                            field && field.err && React.createElement("div", { className: "warn errb" }, field.err),
+                            field && !field.err && (React.createElement(React.Fragment, null,
+                                fieldStale && React.createElement("div", { className: "warn" }, "The design has changed since this solve \u2014 re-solve to match the numbers above."),
+                                React.createElement(FieldPlot, { F: field, p: p, us: us }),
+                                React.createElement("h2", { style: { marginTop: 12 } }, "Air-gap flux density"),
+                                React.createElement(GapWaveform, { F: field, us: us }),
+                                React.createElement("div", { className: "tbl", style: { marginTop: 8 } },
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Peak / fundamental gap flux density"),
+                                        React.createElement("b", null,
+                                            field.gap.Bpk.toFixed(3),
+                                            " / ",
+                                            field.B1.toFixed(3),
+                                            " T")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "vs the magnetic-circuit model (fundamental)"),
+                                        React.createElement("b", { style: { color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" } },
+                                            r.B1.toFixed(3),
+                                            " T analytic \u00B7 ",
+                                            (field.cmp.dB1 * 100).toFixed(1),
+                                            "% difference")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Flux per pole (solved)"),
+                                        React.createElement("b", null,
+                                            (field.fluxPole * 1000).toFixed(3),
+                                            " mWb")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Peak flux density in iron"),
+                                        React.createElement("b", null,
+                                            Math.max(...field.B).toFixed(2),
+                                            " T")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Mesh \u00B7 solve"),
+                                        React.createElement("b", null,
+                                            field.nr,
+                                            "\u00D7",
+                                            field.nth,
+                                            " cells \u00B7 ",
+                                            field.ms,
+                                            " ms \u00B7 ",
+                                            field.conv ? "converged" : `residual ${field.resid.toExponential(1)}`))),
+                                React.createElement("div", { className: "note" },
+                                    "The comparison row is the point of this card: where the field solve and the magnetic circuit agree, the fast model is trustworthy for sweeps; where they diverge, the circuit is missing something (thick magnets starving the back iron is the usual culprit \u2014 the circuit keeps predicting more flux, the field says the iron ran out). ",
+                                    React.createElement("b", null, "Cogging torque is deliberately not reported here:"),
+                                    " it failed its own mesh-convergence study on this structured mesh, so the analytical cogging model above remains the source. Magnetostatic and no-load: no eddy currents, no hysteresis, no stator current."))))),
                         emap && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                             React.createElement("div", { className: "cardhead" },
                                 React.createElement("h2", null, "Efficiency map"),
