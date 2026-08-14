@@ -1127,8 +1127,11 @@ export default function MotorDesigner() {
     setFieldBusy(true);
     // yield a frame so the button can show its working state before the solve blocks
     setTimeout(() => {
-      const cfg = fieldRes === "fine" ? { nr: 76, nth: 432 }
-        : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288 };
+      // Normal/Fine verify themselves against a ~1.4x finer mesh (roughly doubles the
+      // time and is worth it): a gate can only prove convergence for the designs it
+      // tested, and at least one preset needed more iteration than the tested ones.
+      const cfg = fieldRes === "fine" ? { nr: 76, nth: 432, verify: true }
+        : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288, verify: true };
       const t0 = Date.now();
       const F = fieldStudy(p, r, cfg);
       setField(F && !F.err ? { ...F, ms: Date.now() - t0 } : F);
@@ -2429,7 +2432,7 @@ export default function MotorDesigner() {
             </div>
           )}
 
-          {(pm || brM) && !r.err.length && (
+          {pm && !r.err.length && (
             <div className="card paper" style={{ marginTop: 14 }}>
               <div className="cardhead">
                 <h2>Field solution (2-D magnetostatic)</h2>
@@ -2464,7 +2467,16 @@ export default function MotorDesigner() {
                       <b>{Math.max(...field.B).toFixed(2)} T</b></div>
                     <div className="kv"><span>Mesh · solve</span>
                       <b>{field.nr}×{field.nth} cells · {field.ms} ms · {field.conv ? "converged" : `residual ${field.resid.toExponential(1)}`}</b></div>
+                    {field.mesh && <div className="kv"><span>Mesh check (re-solved {field.mesh.nr2}×{field.mesh.nth2})</span>
+                      <b style={{ color: field.mesh.ok ? "#059669" : "#DC2626" }}>
+                        {field.mesh.ok ? "converged — " : "NOT converged — "}
+                        fundamental moves {(field.mesh.dB1 * 100).toFixed(1)}%, peak {(field.mesh.dBpk * 100).toFixed(1)}%</b></div>}
                   </div>
+                  {field.mesh && !field.mesh.ok && <div className="warn errb">
+                    This design's field numbers are NOT mesh-independent — they moved more than 5%
+                    when re-solved on a finer mesh, so do not quote them. Try Fine, or treat the
+                    analytical model as the source for this geometry.
+                  </div>}
                   <div className="note">
                     The comparison row is the point of this card: where the field solve and the
                     magnetic circuit agree, the fast model is trustworthy for sweeps; where they

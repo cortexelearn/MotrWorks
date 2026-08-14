@@ -126,12 +126,24 @@ console.log('Mesh convergence');
   ok(dF < 0.05, 'flux per pole is mesh-independent to 5%',
     `${coarse.fluxPole.toExponential(4)} -> ${fine.fluxPole.toExponential(4)} Wb (${(dF * 100).toFixed(2)}%)`);
   ok(fine.cog === undefined, 'cogging is NOT reported (failed its own convergence study)');
+  // the SELF-check must exist and agree with the two-mesh comparison above: a gate can
+  // only prove convergence for the presets it tests, so every solve carries its own proof
+  const v = M.fieldStudy(p, r, { nr: 52, nth: 288, verify: true });
+  ok(v.mesh && Number.isFinite(v.mesh.dB1), 'solve carries a per-design mesh check',
+    v.mesh ? `dB1 ${(v.mesh.dB1 * 100).toFixed(2)}% dBpk ${(v.mesh.dBpk * 100).toFixed(2)}%` : 'missing');
+  ok(v.mesh.ok, 'this design self-reports as mesh-converged');
 }
 // 9. Error paths: never throw, always explain.
 console.log('Error handling');
 {
   const p = { ...base, slotR: 0, ...M.PRESETS['ACIM 115 V · 400 Hz · 4-pole aero'] };
   ok(!!M.fieldStudy(p, M.computeDesign(p), {}).err, 'unsupported machine type returns err');
+  // brushed is inside-out (magnets on the housing, slots on the rotating armature) and
+  // this mesh models inner-rotor PM only. Solving it anyway produced confident wrong
+  // numbers — 2-pole brushed presets sat 33-40% off the circuit — so it must refuse.
+  const pb = { ...base, slotR: 0, ...M.PRESETS['Brushed 12 V · 2-pole ferrite · ~7 krpm'] };
+  const fb = M.fieldStudy(pb, M.computeDesign(pb), {});
+  ok(!!fb.err && /inside-out|inverted mesh/.test(fb.err), 'brushed topology is refused, not mis-meshed', fb.err || 'NO ERROR - solving wrong geometry');
   const pBad = { ...base, slotR: 0, ...M.PRESETS['NEMA 17 · 28 V · ~6 krpm'], rotorOD: NaN };
   ok(!!M.fieldStudy(pBad, M.computeDesign(pBad), {}).err, 'errored design returns err');
 }

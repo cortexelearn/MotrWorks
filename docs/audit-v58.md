@@ -616,3 +616,38 @@ match — doubling turns must show the saved entry at exactly half the current K
 SQLite via `tauri-plugin-sql` remains the documented next step for the desktop build (it adds
 a dependency, so it stays an ask-first decision); localStorage covers the capability today and
 keeps browser and desktop identical.
+
+---
+
+# v60.4 — the solver audits itself (2026-08-13)
+
+Prompted by an accuracy question, the field solve was cross-checked against the analytical
+circuit on EVERY pm/brushed preset at once. Two defects fell out that no single-preset gate
+would ever have caught, and both are now fixed:
+
+- **Brushed topology was being mis-meshed.** `fieldMesh` builds inner-rotor PM geometry —
+  magnets on the rotor surface, slots opening inward from the stator bore. A brushed machine
+  is inside-out: magnets bonded to the housing ID, slots on the ROTATING ARMATURE opening
+  outward. The solver was happily solving a different machine. The signature was unmistakable
+  in the sweep: 4-pole brushed presets landed within ~7% of the circuit while 2-pole ones sat
+  33–40% off — geometry error, not model error. `fieldStudy` now REFUSES brushed with an
+  explanation, the field card is PM-only, and `field-gate` asserts the refusal. Brushed field
+  solving needs an inverted mesh; that is honest future work, not a number to ship today.
+- **A gate can only prove convergence for the designs it tests.** The 24s4p chorded preset's
+  fundamental swung 1.13 → 0.63 under refinement (nonlinear iteration starved at nl=16) while
+  the two gated presets held to 1–2%. Fixed by raising the default nonlinear budget (16 → 26),
+  and — more importantly — every Normal/Fine solve now **verifies itself**: it re-solves on a
+  ~1.4× finer mesh and reports how far the fundamental and peak moved. Above 5% the card says
+  plainly that the numbers are not mesh-independent and must not be quoted. All 13 pm presets
+  now self-report converged (≤3.7%).
+
+Residual finding, left open deliberately: with the solve now mesh-stable, the 24s4p chorded
+preset still shows +31.7% circuit-vs-field on the gap fundamental (circuit 0.863 T, field
+1.13 T). Wide-arc 4-pole rotors are exactly where a FIXED 0.9 magnet-leakage factor should be
+worst, so this is the strongest evidence yet for the queued leakage refinement — and a
+concrete acceptance test for it. Across the other twelve pm presets the spread is ~1–9%.
+
+Also recorded: the brake carries TWO thermal networks that disagree — `brake.TcuB` 109 °C
+(its own pot-core model, gate-anchored, and the one the brake card displays) versus
+`therm.Tcu` 71 °C from the generic chain. The displayed number is the anchored one, so no
+shipped value is wrong, but the second number should be reconciled or suppressed.

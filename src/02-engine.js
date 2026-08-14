@@ -2105,14 +2105,25 @@ function gapHarmonic(Br9, n) {
    opts: { nr, nth, cog (rotor steps, 0 = skip), quick } ---- */
 function fieldStudy(p, r, opts) {
   const o = opts || {};
-  if (p.motorType !== "pm" && p.motorType !== "brushed") return { err: "The field solver covers BLDC/PMSM and brushed PM designs." };
+  // PM (inner-rotor) topology ONLY. `fieldMesh` builds magnets on the rotor surface and
+  // slots opening inward from the stator bore; a brushed machine is inside-out — magnets
+  // bonded to the housing ID, slots on the ROTATING ARMATURE opening outward — so meshing
+  // it with this map solves a different machine. A cross-check over every preset exposed
+  // exactly that: 4-pole brushed designs happened to land within ~7% of the circuit while
+  // 2-pole ones were off by 33–40%, which is the signature of wrong geometry, not model
+  // error. Brushed support needs an inverted mesh; until it exists this returns an error
+  // rather than a confident wrong number.
+  if (p.motorType === "brushed")
+    return { err: "The field solver models inner-rotor PM topology; a brushed machine is inside-out (magnets on the housing, slots on the rotating armature). Brushed field solving needs an inverted mesh — not yet implemented." };
+  if (p.motorType !== "pm") return { err: "The field solver covers BLDC/PMSM designs." };
   if (!r || r.err.length) return { err: "Fix the design's errors before solving the field." };
   if (!(p.magT > 0) || !(r.airgap > 0)) return { err: "Needs a positive magnet thickness and airgap." };
   const nrH = Math.max(Math.round(o.nr || 56), 20), nth = Math.max(Math.round(o.nth || 288), 96);
   const msh = fieldMesh(p, nrH, nth);
   const BrT = r.BrT;
   const M0 = magPattern(p, msh, 0, BrT);
-  const s0 = solveField(p, msh, M0, { nl: o.quick ? 8 : 16, sweeps: o.quick ? 60 : 110 });
+  const nl0 = o.nl || (o.quick ? 10 : 26), sw0 = o.sweeps || (o.quick ? 60 : 130);
+  const s0 = solveField(p, msh, M0, { nl: nl0, sweeps: sw0 });
   const g0 = gapQuantities(p, msh, s0.A);
   const pp = msh.poles / 2;
   const B1 = gapHarmonic(g0.Br, pp);
@@ -2135,8 +2146,24 @@ function fieldStudy(p, r, opts) {
   // same study. A real cogging capability needs conforming (body-fitted) elements or a
   // virtual-work / co-energy formulation, which is volume-integrated and far less
   // boundary-sensitive; until then the analytical cogging model is the app's source.
+  // ---- per-design mesh check. A gate can only prove convergence for the designs it
+  // tests; a cross-check over all presets found a 24s4p machine whose B1 swung 1.13 ->
+  // 0.63 under refinement while the tested presets held to 1-2%. So the solve verifies
+  // ITSELF: re-solve ~1.4x finer and report how far the answer moved. Anything above a
+  // few percent means this design's numbers are not converged and must not be quoted.
+  let mesh = null;
+  if (o.verify) {
+    const m2 = fieldMesh(p, Math.round(nrH * 1.4), Math.round(nth * 1.4));
+    const s2 = solveField(p, m2, magPattern(p, m2, 0, BrT), { nl: nl0, sweeps: sw0 });
+    const g2 = gapQuantities(p, m2, s2.A);
+    const B1b = gapHarmonic(g2.Br, pp);
+    const dB1m = B1 > 0 ? Math.abs(B1b - B1) / B1 : NaN;
+    const dBpk = g0.Bpk > 0 ? Math.abs(g2.Bpk - g0.Bpk) / g0.Bpk : NaN;
+    mesh = { nr2: m2.nr, nth2: Math.round(nth * 1.4), B1b, Bpk2: g2.Bpk, dB1: dB1m, dBpk,
+      ok: Number.isFinite(dB1m) && dB1m < 0.05 && Number.isFinite(dBpk) && dBpk < 0.05 };
+  }
   return {
-    msh, A: s0.A, B: s0.B, conv: s0.conv, sweeps: s0.sweeps, resid: s0.resid,
+    msh, A: s0.A, B: s0.B, conv: s0.conv, sweeps: s0.sweeps, resid: s0.resid, mesh,
     gap: g0, B1, domN, fluxPole,
     cmp: {
       BgField: g0.Bpk, BgAnalytic: r.BgAvg,
