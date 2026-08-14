@@ -2097,6 +2097,116 @@ function TorqueSpeedChart({ r, us, ghost, tLimit }) {
 }
 
 
+/* ---- sweep plot: several metrics on one canvas, each normalised to its own range
+   so shapes can be compared even though the units can't. Invalid designs are drawn
+   as a hatched band, because where a design STOPS being buildable is usually the
+   most useful feature of the curve. ---- */
+const SWEEP_COLS = ["#2563EB", "#B45309", "#059669", "#7C3AED", "#DC2626", "#0891B2"];
+function SweepChart({ sw, us, lenKeys }) {
+  if (!sw || sw.err || !sw.pts || sw.pts.length < 2) return null;
+  const W = 430, H = 250, mL = 44, mB = 42, mT = 16, mR = 96;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const isLen = lenKeys && lenKeys.indexOf(sw.key) >= 0;
+  const xv = (v) => (isLen && us === "in" ? v / 25.4 : v);
+  const X = (v) => mL + (PW * (v - sw.lo)) / Math.max(sw.hi - sw.lo, 1e-9);
+  const els = [];
+  // invalid regions first, under everything
+  let runStart = null;
+  for (let i = 0; i <= sw.pts.length; i++) {
+    const bad = i < sw.pts.length && !!sw.pts[i].err;
+    if (bad && runStart === null) runStart = i;
+    if (!bad && runStart !== null) {
+      const x0 = X(sw.pts[runStart].v), x1 = X(sw.pts[i - 1].v);
+      els.push(<rect key={"bad" + runStart} x={x0} y={mT} width={Math.max(x1 - x0, 1.5)} height={PH}
+        fill="#DC2626" opacity="0.10" />);
+      runStart = null;
+    }
+  }
+  sw.mets.forEach((mt, mi) => {
+    const rg = sw.range[mt.k];
+    if (!rg) return;
+    const span = Math.max(rg.hi - rg.lo, 1e-12);
+    const Y = (y9) => mT + PH - (PH * (y9 - rg.lo)) / span;
+    let d = "", pen = false;
+    for (const q of sw.pts) {
+      const y9 = q.m[mt.k];
+      if (q.err || !Number.isFinite(y9)) { pen = false; continue; }
+      d += `${pen ? "L" : "M"} ${X(q.v).toFixed(1)} ${Y(y9).toFixed(1)} `;
+      pen = true;
+    }
+    if (d) els.push(<path key={"m" + mt.k} d={d.trim()} fill="none" stroke={SWEEP_COLS[mi % SWEEP_COLS.length]} strokeWidth="1.6" />);
+    // legend with the value at the current design point
+    const cv = sw.cur.m[mt.k];
+    els.push(
+      <g key={"lg" + mt.k}>
+        <line x1={W - mR + 6} y1={mT + 10 + mi * 26} x2={W - mR + 20} y2={mT + 10 + mi * 26}
+          stroke={SWEEP_COLS[mi % SWEEP_COLS.length]} strokeWidth="2" />
+        <text x={W - mR + 24} y={mT + 13 + mi * 26} className="dim">{mt.lab}</text>
+        <text x={W - mR + 24} y={mT + 23 + mi * 26} className="dim" style={{ opacity: 0.75 }}>
+          {`${Number.isFinite(cv) ? (Math.abs(cv) < 1 ? cv.toFixed(4) : cv.toFixed(2)) : "—"} ${mt.unit}`}</text>
+      </g>);
+  });
+  return (
+    <svg id="svg-sweep" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      {els}
+      <line x1={X(sw.cur.v)} y1={mT} x2={X(sw.cur.v)} y2={mT + PH} stroke="#0F172A" strokeWidth="1" strokeDasharray="4 3" />
+      <text x={X(sw.cur.v)} y={mT - 4} textAnchor="middle" className="dim">now</text>
+      <line x1={mL} y1={mT + PH} x2={W - mR} y2={mT + PH} stroke={AXIS} />
+      <line x1={mL} y1={mT} x2={mL} y2={mT + PH} stroke={AXIS} />
+      {[0, 0.5, 1].map((f9) => (
+        <text key={"x" + f9} x={mL + PW * f9} y={mT + PH + 13} textAnchor="middle" className="tick">
+          {xv(sw.lo + (sw.hi - sw.lo) * f9).toFixed(2)}</text>
+      ))}
+      <text x={mL + PW / 2} y={H - 16} textAnchor="middle" className="axis">
+        {`${sw.key}${isLen ? (us === "in" ? " (in)" : " (mm)") : ""}`}</text>
+      <text x={mL + PW / 2} y={H - 4} textAnchor="middle" className="dim">
+        {`each curve normalised to its own range${sw.nErr ? ` · ${sw.nErr} of ${sw.N} points do not compute (shaded)` : ""}`}</text>
+    </svg>
+  );
+}
+
+/* ---- tornado: which inputs actually move the number you care about ---- */
+function TornadoChart({ sn }) {
+  if (!sn || sn.err || !sn.rows || !sn.rows.length) return null;
+  const rows = sn.rows.slice(0, 12);
+  const W = 430, rowH = 20, mT = 30, mL = 96, mR = 20;
+  const H = mT + rows.length * rowH + 26;
+  const PW = W - mL - mR, cx = mL + PW / 2;
+  const span = Math.max(...rows.map((r9) => Math.max(Number.isFinite(r9.pLo) ? Math.abs(r9.pLo) : 0,
+    Number.isFinite(r9.pHi) ? Math.abs(r9.pHi) : 0)), 1e-6) * 1.12;
+  const X = (pct) => cx + (PW / 2) * (pct / span);
+  return (
+    <svg id="svg-tornado" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      <text x={W / 2} y={12} textAnchor="middle" className="dim">
+        {`${sn.metric.lab} response to ±${sn.pct.toFixed(0)}% on each input`}</text>
+      <line x1={cx} y1={mT - 6} x2={cx} y2={mT + rows.length * rowH + 2} stroke="#0F172A" strokeWidth="0.9" />
+      {rows.map((r9, i9) => {
+        const y9 = mT + i9 * rowH + rowH / 2;
+        const bars = [];
+        if (Number.isFinite(r9.pLo)) bars.push(
+          <rect key="lo" x={Math.min(cx, X(r9.pLo))} y={y9 - 6} width={Math.abs(X(r9.pLo) - cx)} height={12}
+            fill="#2563EB" opacity="0.8" />);
+        if (Number.isFinite(r9.pHi)) bars.push(
+          <rect key="hi" x={Math.min(cx, X(r9.pHi))} y={y9 - 6} width={Math.abs(X(r9.pHi) - cx)} height={12}
+            fill="#B45309" opacity="0.8" />);
+        const bad = r9.errLo || r9.errHi;
+        return (
+          <g key={r9.key}>
+            {bars}
+            <text x={mL - 6} y={y9 + 3} textAnchor="end" className="dim">{r9.key}</text>
+            <text x={W - 4} y={y9 + 3} textAnchor="end" className="dim" style={{ opacity: 0.8 }}>
+              {bad ? "invalid" : `${Number.isFinite(r9.pHi) ? (r9.pHi >= 0 ? "+" : "") + r9.pHi.toFixed(1) : "—"}%`}</text>
+          </g>
+        );
+      })}
+      <text x={mL} y={H - 6} className="dim" style={{ fill: "#2563EB" }}>−{sn.pct.toFixed(0)}% input</text>
+      <text x={W - mR} y={H - 6} textAnchor="end" className="dim" style={{ fill: "#B45309" }}>+{sn.pct.toFixed(0)}% input</text>
+    </svg>
+  );
+}
+
 /* ---- field plot: flux lines (contours of the vector potential) over |B| shading,
    straight from the solver's own grid. Flux lines ARE iso-A contours in 2-D, so no
    streamline integration is needed — marching squares on the (r,θ) grid, mapped to

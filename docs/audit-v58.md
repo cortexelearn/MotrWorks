@@ -560,3 +560,37 @@ which ARE flux lines in 2-D — no streamline integration) over |B| shading to t
 saturation, geometry rings, the solved air-gap waveform with its true Fourier fundamental
 overlaid, and a comparison row against the magnetic circuit. It states plainly when the design
 has changed since the solve, and that it is magnetostatic and no-load.
+
+---
+
+# v60.2 — design exploration and the datasheet (2026-08-13)
+
+Roadmap move 5a and the document half of move 4.
+
+**Sweeps and sensitivity (engine).** `computeDesign` is pure and runs in microseconds, so
+exploring it needs no optimiser library and no second model — which is the point:
+`sweepDesign(p, key, lo, hi, n, metrics)` runs 41 FULL solves across a range and reads every
+metric off the real result, so a sweep can never disagree with the results column (the gate
+asserts equality to 1e-12 against a direct `computeDesign` at the same value). Designs that
+fail inside a sweep are kept as HOLES with their error, not dropped — where a design stops
+being buildable is usually the most useful feature of the curve, and the chart shades it.
+`sensitivity(p, keys, ±%, metric)` perturbs each input on its own and ranks by influence, so
+the top bar is the parameter worth arguing about; inputs whose perturbation breaks the design
+read "invalid" instead of vanishing.
+
+**New gate `tools/sweep-gate.mjs` (17 compute gates now)** turns this into a check on the whole
+engine, because exploration makes textbook proportionalities cheap to assert: Kt must be
+exactly linear in series turns (+10% → +10.00%) and in stack length (+10.00%), R L-L linear in
+turns, ranking monotonic, error paths clean. If anything upstream breaks those, this gate
+catches it before a person does.
+
+**UI.** Design-exploration card: pick any numeric input, a ± range, and up to six metrics;
+each curve is normalised to its own range so shapes compare across units, with a "now" marker
+at the current design and shaded invalid bands. Below it, the tornado chart for a chosen metric.
+
+**Datasheet.** The on-screen tool IS the document, printed: a `@media print` sheet drops the
+input column, tab bar, controls and file pickers, stacks the results into one measure, keeps
+cards whole across page breaks, and leads with a screen-hidden title block carrying the derived
+constants (Kt, Ke, R, L, no-load, peak torque, rated point, peak η, winding temp, fill) plus
+whether the numbers are analytical or BENCH CALIBRATED. Verified through Chromium's real print
+path (emulateMedia + page.pdf), not just by eye.

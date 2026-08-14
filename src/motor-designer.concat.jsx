@@ -2169,6 +2169,91 @@ function computeDesign(p) {
   };
 }
 
+/* ================= design exploration: sweeps and sensitivity =================
+   computeDesign is pure and runs in microseconds, so sweeping it is nearly free —
+   this is the same capability the commercial tools sell as "design exploration",
+   and it needs no solver, no optimiser library, and no second physics model.
+
+   Every metric below is READ from a computed design; none is recomputed here, so a
+   sweep can never disagree with the results column. Designs that error inside the
+   sweep are kept as holes (`err`) rather than dropped, because WHERE a design stops
+   being buildable is usually the most useful thing on the chart. ============== */
+
+const SWEEP_METRICS = [
+  { k: "Kt",     lab: "Torque constant",      unit: "N·m/A", get: (r) => r.Kt },
+  { k: "noLoad", lab: "No-load speed",        unit: "rpm",   get: (r) => r.noLoad },
+  { k: "peakT",  lab: "Peak torque",          unit: "N·m",   get: (r) => r.peakT },
+  { k: "eta",    lab: "Efficiency at rated",  unit: "%",     get: (r) => r.eta * 100 },
+  { k: "Rll",    lab: "Resistance L-L",       unit: "Ω",     get: (r) => r.Rll },
+  { k: "Tcu",    lab: "Winding temp",         unit: "°C",    get: (r) => (r.therm ? r.therm.Tcu : NaN) },
+  { k: "Icont",  lab: "Continuous current",   unit: "A",     get: (r) => (r.therm ? r.therm.Icont : NaN) },
+  { k: "fill",   lab: "Slot fill",            unit: "%",     get: (r) => r.fillGross * 100 },
+  { k: "Bt",     lab: "Tooth flux density",   unit: "T",     get: (r) => r.Bt },
+  { k: "By",     lab: "Yoke flux density",    unit: "T",     get: (r) => r.By },
+  { k: "cogTpp", lab: "Cogging (pk-pk)",      unit: "N·m",   get: (r) => (r.cog ? r.cog.Tpp : NaN) },
+  { k: "demag",  lab: "Demag margin",         unit: "%",     get: (r) => r.demagMargin * 100 },
+  { k: "mCu",    lab: "Copper mass",          unit: "kg",    get: (r) => (r.therm ? r.therm.mCu : NaN) },
+];
+
+/* Sweep one parameter. Returns points with every metric plus any errors, and the
+   per-metric range so a view can normalise without recomputing. */
+function sweepDesign(p, key, lo, hi, n9, metricKeys) {
+  if (!key || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo)
+    return { err: "Sweep needs a parameter and a low < high range." };
+  if (!(key in p)) return { err: `"${key}" is not a parameter of this design.` };
+  if (typeof p[key] !== "number") return { err: `"${key}" is not numeric — sweeps cover numeric inputs.` };
+  const N = Math.min(Math.max(Math.round(n9) || 25, 3), 121);
+  const mets = (metricKeys && metricKeys.length ? metricKeys : ["Kt", "peakT", "eta"])
+    .map((k9) => SWEEP_METRICS.find((m9) => m9.k === k9)).filter(Boolean);
+  const pts = [];
+  for (let i9 = 0; i9 < N; i9++) {
+    const v = lo + ((hi - lo) * i9) / (N - 1);
+    const r9 = computeDesign({ ...p, [key]: v });
+    const m = {};
+    for (const mt of mets) {
+      const x9 = mt.get(r9);
+      m[mt.k] = Number.isFinite(x9) ? x9 : NaN;
+    }
+    pts.push({ v, m, err: r9.err.length ? r9.err[0] : null, warn: r9.warn.length });
+  }
+  const range = {};
+  for (const mt of mets) {
+    const vals = pts.filter((q) => !q.err).map((q) => q.m[mt.k]).filter(Number.isFinite);
+    range[mt.k] = vals.length ? { lo: Math.min(...vals), hi: Math.max(...vals) } : null;
+  }
+  const cur = computeDesign(p);
+  const curM = {};
+  for (const mt of mets) curM[mt.k] = mt.get(cur);
+  return { key, lo, hi, N, mets: mets.map((m9) => ({ k: m9.k, lab: m9.lab, unit: m9.unit })),
+    pts, range, cur: { v: p[key], m: curM }, nErr: pts.filter((q) => q.err).length };
+}
+
+/* Tornado sensitivity: perturb each parameter ±pct and record what each metric does.
+   Sorted by influence, so the top bar is the parameter worth arguing about. */
+function sensitivity(p, keys, pct, metricKey) {
+  const mt = SWEEP_METRICS.find((m9) => m9.k === metricKey) || SWEEP_METRICS[0];
+  const d9 = Math.min(Math.max(Math.abs(pct) || 10, 0.5), 50) / 100;
+  const base = computeDesign(p);
+  const b9 = mt.get(base);
+  if (!Number.isFinite(b9) || b9 === 0) return { err: `"${mt.lab}" is not a usable baseline for this design.` };
+  const rows = [];
+  for (const k9 of keys) {
+    if (typeof p[k9] !== "number" || !Number.isFinite(p[k9]) || p[k9] === 0) continue;
+    const vLo = p[k9] * (1 - d9), vHi = p[k9] * (1 + d9);
+    const rLo = computeDesign({ ...p, [k9]: vLo });
+    const rHi = computeDesign({ ...p, [k9]: vHi });
+    const xLo = rLo.err.length ? NaN : mt.get(rLo);
+    const xHi = rHi.err.length ? NaN : mt.get(rHi);
+    const pLo = Number.isFinite(xLo) ? ((xLo - b9) / Math.abs(b9)) * 100 : NaN;
+    const pHi = Number.isFinite(xHi) ? ((xHi - b9) / Math.abs(b9)) * 100 : NaN;
+    const infl = Math.max(Number.isFinite(pLo) ? Math.abs(pLo) : 0, Number.isFinite(pHi) ? Math.abs(pHi) : 0);
+    rows.push({ key: k9, base: p[k9], lo: vLo, hi: vHi, pLo, pHi, infl,
+      errLo: rLo.err.length ? rLo.err[0] : null, errHi: rHi.err.length ? rHi.err[0] : null });
+  }
+  rows.sort((a9, b8) => b8.infl - a9.infl);
+  return { metric: { k: mt.k, lab: mt.lab, unit: mt.unit }, pct: d9 * 100, baseVal: b9, rows };
+}
+
 /* ================= 2-D magnetostatic field solver (FEA-light) =================
    A real field solution for the radial-flux machines, living in the same file as
    the analytical core so the gates can drive both and compare them.
@@ -5202,6 +5287,116 @@ function TorqueSpeedChart({ r, us, ghost, tLimit }) {
 }
 
 
+/* ---- sweep plot: several metrics on one canvas, each normalised to its own range
+   so shapes can be compared even though the units can't. Invalid designs are drawn
+   as a hatched band, because where a design STOPS being buildable is usually the
+   most useful feature of the curve. ---- */
+const SWEEP_COLS = ["#2563EB", "#B45309", "#059669", "#7C3AED", "#DC2626", "#0891B2"];
+function SweepChart({ sw, us, lenKeys }) {
+  if (!sw || sw.err || !sw.pts || sw.pts.length < 2) return null;
+  const W = 430, H = 250, mL = 44, mB = 42, mT = 16, mR = 96;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const isLen = lenKeys && lenKeys.indexOf(sw.key) >= 0;
+  const xv = (v) => (isLen && us === "in" ? v / 25.4 : v);
+  const X = (v) => mL + (PW * (v - sw.lo)) / Math.max(sw.hi - sw.lo, 1e-9);
+  const els = [];
+  // invalid regions first, under everything
+  let runStart = null;
+  for (let i = 0; i <= sw.pts.length; i++) {
+    const bad = i < sw.pts.length && !!sw.pts[i].err;
+    if (bad && runStart === null) runStart = i;
+    if (!bad && runStart !== null) {
+      const x0 = X(sw.pts[runStart].v), x1 = X(sw.pts[i - 1].v);
+      els.push(<rect key={"bad" + runStart} x={x0} y={mT} width={Math.max(x1 - x0, 1.5)} height={PH}
+        fill="#DC2626" opacity="0.10" />);
+      runStart = null;
+    }
+  }
+  sw.mets.forEach((mt, mi) => {
+    const rg = sw.range[mt.k];
+    if (!rg) return;
+    const span = Math.max(rg.hi - rg.lo, 1e-12);
+    const Y = (y9) => mT + PH - (PH * (y9 - rg.lo)) / span;
+    let d = "", pen = false;
+    for (const q of sw.pts) {
+      const y9 = q.m[mt.k];
+      if (q.err || !Number.isFinite(y9)) { pen = false; continue; }
+      d += `${pen ? "L" : "M"} ${X(q.v).toFixed(1)} ${Y(y9).toFixed(1)} `;
+      pen = true;
+    }
+    if (d) els.push(<path key={"m" + mt.k} d={d.trim()} fill="none" stroke={SWEEP_COLS[mi % SWEEP_COLS.length]} strokeWidth="1.6" />);
+    // legend with the value at the current design point
+    const cv = sw.cur.m[mt.k];
+    els.push(
+      <g key={"lg" + mt.k}>
+        <line x1={W - mR + 6} y1={mT + 10 + mi * 26} x2={W - mR + 20} y2={mT + 10 + mi * 26}
+          stroke={SWEEP_COLS[mi % SWEEP_COLS.length]} strokeWidth="2" />
+        <text x={W - mR + 24} y={mT + 13 + mi * 26} className="dim">{mt.lab}</text>
+        <text x={W - mR + 24} y={mT + 23 + mi * 26} className="dim" style={{ opacity: 0.75 }}>
+          {`${Number.isFinite(cv) ? (Math.abs(cv) < 1 ? cv.toFixed(4) : cv.toFixed(2)) : "—"} ${mt.unit}`}</text>
+      </g>);
+  });
+  return (
+    <svg id="svg-sweep" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      {els}
+      <line x1={X(sw.cur.v)} y1={mT} x2={X(sw.cur.v)} y2={mT + PH} stroke="#0F172A" strokeWidth="1" strokeDasharray="4 3" />
+      <text x={X(sw.cur.v)} y={mT - 4} textAnchor="middle" className="dim">now</text>
+      <line x1={mL} y1={mT + PH} x2={W - mR} y2={mT + PH} stroke={AXIS} />
+      <line x1={mL} y1={mT} x2={mL} y2={mT + PH} stroke={AXIS} />
+      {[0, 0.5, 1].map((f9) => (
+        <text key={"x" + f9} x={mL + PW * f9} y={mT + PH + 13} textAnchor="middle" className="tick">
+          {xv(sw.lo + (sw.hi - sw.lo) * f9).toFixed(2)}</text>
+      ))}
+      <text x={mL + PW / 2} y={H - 16} textAnchor="middle" className="axis">
+        {`${sw.key}${isLen ? (us === "in" ? " (in)" : " (mm)") : ""}`}</text>
+      <text x={mL + PW / 2} y={H - 4} textAnchor="middle" className="dim">
+        {`each curve normalised to its own range${sw.nErr ? ` · ${sw.nErr} of ${sw.N} points do not compute (shaded)` : ""}`}</text>
+    </svg>
+  );
+}
+
+/* ---- tornado: which inputs actually move the number you care about ---- */
+function TornadoChart({ sn }) {
+  if (!sn || sn.err || !sn.rows || !sn.rows.length) return null;
+  const rows = sn.rows.slice(0, 12);
+  const W = 430, rowH = 20, mT = 30, mL = 96, mR = 20;
+  const H = mT + rows.length * rowH + 26;
+  const PW = W - mL - mR, cx = mL + PW / 2;
+  const span = Math.max(...rows.map((r9) => Math.max(Number.isFinite(r9.pLo) ? Math.abs(r9.pLo) : 0,
+    Number.isFinite(r9.pHi) ? Math.abs(r9.pHi) : 0)), 1e-6) * 1.12;
+  const X = (pct) => cx + (PW / 2) * (pct / span);
+  return (
+    <svg id="svg-tornado" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      <text x={W / 2} y={12} textAnchor="middle" className="dim">
+        {`${sn.metric.lab} response to ±${sn.pct.toFixed(0)}% on each input`}</text>
+      <line x1={cx} y1={mT - 6} x2={cx} y2={mT + rows.length * rowH + 2} stroke="#0F172A" strokeWidth="0.9" />
+      {rows.map((r9, i9) => {
+        const y9 = mT + i9 * rowH + rowH / 2;
+        const bars = [];
+        if (Number.isFinite(r9.pLo)) bars.push(
+          <rect key="lo" x={Math.min(cx, X(r9.pLo))} y={y9 - 6} width={Math.abs(X(r9.pLo) - cx)} height={12}
+            fill="#2563EB" opacity="0.8" />);
+        if (Number.isFinite(r9.pHi)) bars.push(
+          <rect key="hi" x={Math.min(cx, X(r9.pHi))} y={y9 - 6} width={Math.abs(X(r9.pHi) - cx)} height={12}
+            fill="#B45309" opacity="0.8" />);
+        const bad = r9.errLo || r9.errHi;
+        return (
+          <g key={r9.key}>
+            {bars}
+            <text x={mL - 6} y={y9 + 3} textAnchor="end" className="dim">{r9.key}</text>
+            <text x={W - 4} y={y9 + 3} textAnchor="end" className="dim" style={{ opacity: 0.8 }}>
+              {bad ? "invalid" : `${Number.isFinite(r9.pHi) ? (r9.pHi >= 0 ? "+" : "") + r9.pHi.toFixed(1) : "—"}%`}</text>
+          </g>
+        );
+      })}
+      <text x={mL} y={H - 6} className="dim" style={{ fill: "#2563EB" }}>−{sn.pct.toFixed(0)}% input</text>
+      <text x={W - mR} y={H - 6} textAnchor="end" className="dim" style={{ fill: "#B45309" }}>+{sn.pct.toFixed(0)}% input</text>
+    </svg>
+  );
+}
+
 /* ---- field plot: flux lines (contours of the vector potential) over |B| shading,
    straight from the solver's own grid. Flux lines ARE iso-A contours in 2-D, so no
    streamline integration is needed — marching squares on the (r,θ) grid, mapped to
@@ -7445,6 +7640,40 @@ export default function MotorDesigner() {
   // field solve is ON DEMAND — it is a ~0.2-1 s nonlinear solve, not something to run
   // on every keystroke. `fieldOf` records the parameters it was solved for so the card
   // can say plainly when the design has moved on since.
+  // design exploration: sweep one input, and rank which inputs move a chosen metric
+  const [swKey, setSwKey] = useState("magT");
+  const [swSpan, setSwSpan] = useState(40);
+  const [swMets, setSwMets] = useState(["Kt", "peakT", "eta"]);
+  const [snMetric, setSnMetric] = useState("Kt");
+  const [snPct, setSnPct] = useState(10);
+  const SW_LEN_KEYS = ["statorOD", "statorID", "rotorOD", "yoke", "toothW", "slotOpen", "tipH", "stackL", "liner", "magT", "shaftD"];
+  const SW_KEYS = [...SW_LEN_KEYS, "turns", "awg", "strands", "poleArc", "Top", "Vdc", "Imax", "J", "skew", "slots", "poles"];
+  const sweep = useMemo(() => {
+    if (typeof p[swKey] !== "number" || !Number.isFinite(p[swKey]) || p[swKey] === 0) return null;
+    const f9 = Math.min(Math.max(swSpan, 5), 90) / 100;
+    return sweepDesign(p, swKey, p[swKey] * (1 - f9), p[swKey] * (1 + f9), 41, swMets);
+  }, [p, swKey, swSpan, swMets]);
+  const tornado = useMemo(() => sensitivity(p, SW_KEYS, snPct, snMetric), [p, snPct, snMetric]);
+  // datasheet header facts — derived, never entered, so a printed sheet always matches
+  // the design that produced it
+  const TYPE_NAME = { pm: "BLDC / PMSM", brushed: "Brushed PM DC", latm: "Limited-angle torquer",
+    stepper: "Stepper", induction: "Squirrel-cage ACIM", brake: "Spring-applied brake",
+    actuator: "Actuator assembly", bobbin: "Winding tooling" };
+  const sheetTitle = `${TYPE_NAME[p.motorType] || p.motorType} · Ø${lenS(p.statorOD)} ${lu} × ${lenS(p.stackL)} ${lu}`;
+  const sheetSub = `MotrWorks design sheet · ${p.slots} slots / ${p.poles} poles · ${p.mag}${p.skew > 0 ? ` · ${p.skew}° skew` : ""}`
+    + ` · ${p.statorMat} stator${p.calOn === "yes" ? " · BENCH CALIBRATED" : " · analytical model"}`;
+  const sheetFacts = r.err.length ? [["Status", `${r.err.length} error(s) — sheet is not valid`]] : [
+    ["Kt", `${fmt(r.Kt, 4)} N·m/A`],
+    ["Ke", keS(r.Ke)],
+    ["R L-L", `${fmt(r.Rll, 4)} Ω`],
+    ["L L-L", `${fmt(r.Lll * 1000, 3)} mH`],
+    ["No-load", `${fmt(r.noLoad, 0)} rpm`],
+    ["Peak torque", tqS(r.peakT)],
+    ...(r.op ? [["Rated", `${fmt(r.op.n, 0)} rpm · ${tqS(r.op.T)}`]] : []),
+    ...(emap && emap.best ? [["Peak η", `${(emap.best.eta * 100).toFixed(1)}%`]] : []),
+    ...(r.therm ? [["Winding", `${Math.round(r.therm.Tcu)} °C`]] : []),
+    ["Fill", `${fmt(r.fillGross * 100, 0)}%`],
+  ];
   const [field, setField] = useState(null);
   const [fieldOf, setFieldOf] = useState(null);
   const [fieldBusy, setFieldBusy] = useState(false);
@@ -7727,6 +7956,27 @@ export default function MotorDesigner() {
         .eyebrow{font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:${GRAY};margin:2px 2px 16px;font-weight:600}
         .grid{display:grid;grid-template-columns:290px 1fr 330px;gap:14px}
         @media(max-width:1020px){.grid{grid-template-columns:1fr}}
+        /* ---- datasheet: the on-screen tool IS the document, printed. The input
+           column, controls, and file pickers drop out; the results column and the
+           right-hand summary stack into one measure, cards never split across a
+           page, and a title block (screen-hidden) leads. ---- */
+        .sheetHdr{display:none}
+        @media print{
+          @page{margin:14mm}
+          .app{padding:0;background:#fff}
+          header.hd,.tabs,.iobar,.wiz,button,input[type=file],label.btn,details{display:none !important}
+          .grid{display:block}
+          .grid > div:first-child{display:none}
+          .sheetHdr{display:block;margin:0 0 10px;border-bottom:2px solid ${DKINK};padding-bottom:8px}
+          .sheetHdr h1{font-size:1.25rem;margin:0 0 2px;color:${DKINK}}
+          .sheetHdr .sub{font-size:.78rem;color:${CREAM_DIM}}
+          .sheetHdr .kvs{display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:6px;font-size:.74rem}
+          .sheetHdr .kvs b{font-family:'IBM Plex Mono',monospace}
+          .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none;border:1px solid #CBD5E1;margin-bottom:10px}
+          .chart{max-width:520px}
+          .note,.hint{color:#475569}
+          .warn{border:1px solid #CBD5E1;background:#fff}
+        }
         .card{background:#fff;border:1px solid ${LINE};border-radius:12px;padding:14px;color:${DKINK};box-shadow:0 1px 2px rgba(15,23,42,.05)}
         .card h2{font-size:.85rem;margin:0 0 12px;color:${DKINK};font-weight:600;letter-spacing:.01em}
         .card h2::before{content:'◈ ';color:${COPPER}}
@@ -7799,6 +8049,15 @@ export default function MotorDesigner() {
         </div>
       )}
 
+      {/* datasheet title block — hidden on screen, leads the printed sheet */}
+      <div className="sheetHdr">
+        <h1>{sheetTitle}</h1>
+        <div className="sub">{sheetSub}</div>
+        <div className="kvs">
+          {sheetFacts.map((f9) => <span key={f9[0]}>{f9[0]} <b>{f9[1]}</b></span>)}
+        </div>
+      </div>
+
       <div className="grid">
         {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} exportActuator={exportActuator} importActuator={importActuator} ioMsg={ioMsg} impPanel={impPanel} />
           : wbM ? <BobbinView p={p} s={s} us={us} switchType={switchType} exportDesign={exportDesign} importDesign={importDesign} ioMsg={ioMsg} impPanel={impPanel} /> : <>
@@ -7841,6 +8100,12 @@ export default function MotorDesigner() {
                         Import…
                         <input type="file" accept=".json,application/json" onChange={importDesign} />
                       </label>
+                      <button className="btn ghost" onClick={() => window.print()}>Datasheet ⎙</button>
+                    </div>
+                    <div className="note" style={{ marginTop: 2 }}>
+                      The datasheet is this page printed: a title block with the derived constants,
+                      then the drawings, curves and checks — inputs, controls and file pickers drop
+                      out, and cards are kept whole across page breaks. Print to PDF to share it.
                     </div>
                     {ioMsg && <div className="iomsg">{ioMsg}</div>}
                     {impPanel}
@@ -8572,6 +8837,47 @@ export default function MotorDesigner() {
                 {brM
                   ? "I = T / Kt — linear for the brushed model (armature-reaction flux knockdown not iterated). Solid to the current-limited stall point; faint continuation = winding V/R capability. Red dashed = current limit."
                   : "I = T / Kt with the saturation bend applied — the curve steepens toward Imax as steel MMF drops knock down flux (kIT). Solid to the drive-limited stall point; faint continuation = winding V/R capability. Red dashed = drive current limit."}
+              </div>
+            </div>
+          )}
+
+          {!r.err.length && !brkM && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Design exploration</h2>
+                {sweep && !sweep.err && <button className="btn mini ghost" onClick={() => exportPng("svg-sweep", "sweep.png")}>PNG ⤓</button>}
+              </div>
+              <Sel label="Sweep parameter" v={swKey} set={setSwKey} opts={SW_KEYS.filter((k9) => typeof p[k9] === "number")} />
+              <Num label="Range around the current value" unit="±%" v={swSpan} set={setSwSpan} step={5} min={5} max={90} />
+              <div className="field"><span className="fl">Metrics</span>
+                <div className="seg" style={{ flexWrap: "wrap" }}>
+                  {["Kt", "peakT", "eta", "noLoad", "Rll", "Tcu", "fill", "Bt", "cogTpp"].map((k9) => (
+                    <button key={k9} className={swMets.indexOf(k9) >= 0 ? "on" : ""}
+                      onClick={() => setSwMets((m9) => (m9.indexOf(k9) >= 0 ? m9.filter((x9) => x9 !== k9) : [...m9, k9].slice(0, 6)))}>
+                      {k9}</button>
+                  ))}
+                </div>
+              </div>
+              {sweep && sweep.err && <div className="warn">{sweep.err}</div>}
+              {sweep && !sweep.err && <SweepChart sw={sweep} us={us} lenKeys={SW_LEN_KEYS} />}
+              <div className="note">
+                41 full solves of the real engine across the range — every metric is read from a
+                computed design, so a sweep can never disagree with the results column. Shaded bands
+                are values that do not produce a buildable design.
+              </div>
+              <div className="cardhead" style={{ marginTop: 12 }}>
+                <h2>What moves it</h2>
+                {tornado && !tornado.err && <button className="btn mini ghost" onClick={() => exportPng("svg-tornado", "sensitivity.png")}>PNG ⤓</button>}
+              </div>
+              <Sel label="Metric" v={snMetric} set={setSnMetric}
+                opts={["Kt", "peakT", "eta", "noLoad", "Rll", "Tcu", "Icont", "fill", "Bt", "By", "demag"]} />
+              <Num label="Perturbation" unit="±%" v={snPct} set={setSnPct} step={5} min={1} max={50} />
+              {tornado && tornado.err && <div className="warn">{tornado.err}</div>}
+              {tornado && !tornado.err && <TornadoChart sn={tornado} />}
+              <div className="note">
+                Each input perturbed on its own, ranked by how far it moves the metric — the top bar
+                is the parameter worth arguing about. Inputs whose perturbation breaks the design read
+                "invalid" rather than being silently dropped.
               </div>
             </div>
           )}

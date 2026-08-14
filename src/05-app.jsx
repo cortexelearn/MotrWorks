@@ -1084,6 +1084,40 @@ export default function MotorDesigner() {
   // field solve is ON DEMAND — it is a ~0.2-1 s nonlinear solve, not something to run
   // on every keystroke. `fieldOf` records the parameters it was solved for so the card
   // can say plainly when the design has moved on since.
+  // design exploration: sweep one input, and rank which inputs move a chosen metric
+  const [swKey, setSwKey] = useState("magT");
+  const [swSpan, setSwSpan] = useState(40);
+  const [swMets, setSwMets] = useState(["Kt", "peakT", "eta"]);
+  const [snMetric, setSnMetric] = useState("Kt");
+  const [snPct, setSnPct] = useState(10);
+  const SW_LEN_KEYS = ["statorOD", "statorID", "rotorOD", "yoke", "toothW", "slotOpen", "tipH", "stackL", "liner", "magT", "shaftD"];
+  const SW_KEYS = [...SW_LEN_KEYS, "turns", "awg", "strands", "poleArc", "Top", "Vdc", "Imax", "J", "skew", "slots", "poles"];
+  const sweep = useMemo(() => {
+    if (typeof p[swKey] !== "number" || !Number.isFinite(p[swKey]) || p[swKey] === 0) return null;
+    const f9 = Math.min(Math.max(swSpan, 5), 90) / 100;
+    return sweepDesign(p, swKey, p[swKey] * (1 - f9), p[swKey] * (1 + f9), 41, swMets);
+  }, [p, swKey, swSpan, swMets]);
+  const tornado = useMemo(() => sensitivity(p, SW_KEYS, snPct, snMetric), [p, snPct, snMetric]);
+  // datasheet header facts — derived, never entered, so a printed sheet always matches
+  // the design that produced it
+  const TYPE_NAME = { pm: "BLDC / PMSM", brushed: "Brushed PM DC", latm: "Limited-angle torquer",
+    stepper: "Stepper", induction: "Squirrel-cage ACIM", brake: "Spring-applied brake",
+    actuator: "Actuator assembly", bobbin: "Winding tooling" };
+  const sheetTitle = `${TYPE_NAME[p.motorType] || p.motorType} · Ø${lenS(p.statorOD)} ${lu} × ${lenS(p.stackL)} ${lu}`;
+  const sheetSub = `MotrWorks design sheet · ${p.slots} slots / ${p.poles} poles · ${p.mag}${p.skew > 0 ? ` · ${p.skew}° skew` : ""}`
+    + ` · ${p.statorMat} stator${p.calOn === "yes" ? " · BENCH CALIBRATED" : " · analytical model"}`;
+  const sheetFacts = r.err.length ? [["Status", `${r.err.length} error(s) — sheet is not valid`]] : [
+    ["Kt", `${fmt(r.Kt, 4)} N·m/A`],
+    ["Ke", keS(r.Ke)],
+    ["R L-L", `${fmt(r.Rll, 4)} Ω`],
+    ["L L-L", `${fmt(r.Lll * 1000, 3)} mH`],
+    ["No-load", `${fmt(r.noLoad, 0)} rpm`],
+    ["Peak torque", tqS(r.peakT)],
+    ...(r.op ? [["Rated", `${fmt(r.op.n, 0)} rpm · ${tqS(r.op.T)}`]] : []),
+    ...(emap && emap.best ? [["Peak η", `${(emap.best.eta * 100).toFixed(1)}%`]] : []),
+    ...(r.therm ? [["Winding", `${Math.round(r.therm.Tcu)} °C`]] : []),
+    ["Fill", `${fmt(r.fillGross * 100, 0)}%`],
+  ];
   const [field, setField] = useState(null);
   const [fieldOf, setFieldOf] = useState(null);
   const [fieldBusy, setFieldBusy] = useState(false);
@@ -1366,6 +1400,27 @@ export default function MotorDesigner() {
         .eyebrow{font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:${GRAY};margin:2px 2px 16px;font-weight:600}
         .grid{display:grid;grid-template-columns:290px 1fr 330px;gap:14px}
         @media(max-width:1020px){.grid{grid-template-columns:1fr}}
+        /* ---- datasheet: the on-screen tool IS the document, printed. The input
+           column, controls, and file pickers drop out; the results column and the
+           right-hand summary stack into one measure, cards never split across a
+           page, and a title block (screen-hidden) leads. ---- */
+        .sheetHdr{display:none}
+        @media print{
+          @page{margin:14mm}
+          .app{padding:0;background:#fff}
+          header.hd,.tabs,.iobar,.wiz,button,input[type=file],label.btn,details{display:none !important}
+          .grid{display:block}
+          .grid > div:first-child{display:none}
+          .sheetHdr{display:block;margin:0 0 10px;border-bottom:2px solid ${DKINK};padding-bottom:8px}
+          .sheetHdr h1{font-size:1.25rem;margin:0 0 2px;color:${DKINK}}
+          .sheetHdr .sub{font-size:.78rem;color:${CREAM_DIM}}
+          .sheetHdr .kvs{display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:6px;font-size:.74rem}
+          .sheetHdr .kvs b{font-family:'IBM Plex Mono',monospace}
+          .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none;border:1px solid #CBD5E1;margin-bottom:10px}
+          .chart{max-width:520px}
+          .note,.hint{color:#475569}
+          .warn{border:1px solid #CBD5E1;background:#fff}
+        }
         .card{background:#fff;border:1px solid ${LINE};border-radius:12px;padding:14px;color:${DKINK};box-shadow:0 1px 2px rgba(15,23,42,.05)}
         .card h2{font-size:.85rem;margin:0 0 12px;color:${DKINK};font-weight:600;letter-spacing:.01em}
         .card h2::before{content:'◈ ';color:${COPPER}}
@@ -1438,6 +1493,15 @@ export default function MotorDesigner() {
         </div>
       )}
 
+      {/* datasheet title block — hidden on screen, leads the printed sheet */}
+      <div className="sheetHdr">
+        <h1>{sheetTitle}</h1>
+        <div className="sub">{sheetSub}</div>
+        <div className="kvs">
+          {sheetFacts.map((f9) => <span key={f9[0]}>{f9[0]} <b>{f9[1]}</b></span>)}
+        </div>
+      </div>
+
       <div className="grid">
         {actM ? <ActuatorView p={p} s={s} us={us} switchType={switchType} typeMem={typeMem} tqS={tqS} typeDefaults={TYPE_DEFAULTS} exportActuator={exportActuator} importActuator={importActuator} ioMsg={ioMsg} impPanel={impPanel} />
           : wbM ? <BobbinView p={p} s={s} us={us} switchType={switchType} exportDesign={exportDesign} importDesign={importDesign} ioMsg={ioMsg} impPanel={impPanel} /> : <>
@@ -1480,6 +1544,12 @@ export default function MotorDesigner() {
                         Import…
                         <input type="file" accept=".json,application/json" onChange={importDesign} />
                       </label>
+                      <button className="btn ghost" onClick={() => window.print()}>Datasheet ⎙</button>
+                    </div>
+                    <div className="note" style={{ marginTop: 2 }}>
+                      The datasheet is this page printed: a title block with the derived constants,
+                      then the drawings, curves and checks — inputs, controls and file pickers drop
+                      out, and cards are kept whole across page breaks. Print to PDF to share it.
                     </div>
                     {ioMsg && <div className="iomsg">{ioMsg}</div>}
                     {impPanel}
@@ -2211,6 +2281,47 @@ export default function MotorDesigner() {
                 {brM
                   ? "I = T / Kt — linear for the brushed model (armature-reaction flux knockdown not iterated). Solid to the current-limited stall point; faint continuation = winding V/R capability. Red dashed = current limit."
                   : "I = T / Kt with the saturation bend applied — the curve steepens toward Imax as steel MMF drops knock down flux (kIT). Solid to the drive-limited stall point; faint continuation = winding V/R capability. Red dashed = drive current limit."}
+              </div>
+            </div>
+          )}
+
+          {!r.err.length && !brkM && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Design exploration</h2>
+                {sweep && !sweep.err && <button className="btn mini ghost" onClick={() => exportPng("svg-sweep", "sweep.png")}>PNG ⤓</button>}
+              </div>
+              <Sel label="Sweep parameter" v={swKey} set={setSwKey} opts={SW_KEYS.filter((k9) => typeof p[k9] === "number")} />
+              <Num label="Range around the current value" unit="±%" v={swSpan} set={setSwSpan} step={5} min={5} max={90} />
+              <div className="field"><span className="fl">Metrics</span>
+                <div className="seg" style={{ flexWrap: "wrap" }}>
+                  {["Kt", "peakT", "eta", "noLoad", "Rll", "Tcu", "fill", "Bt", "cogTpp"].map((k9) => (
+                    <button key={k9} className={swMets.indexOf(k9) >= 0 ? "on" : ""}
+                      onClick={() => setSwMets((m9) => (m9.indexOf(k9) >= 0 ? m9.filter((x9) => x9 !== k9) : [...m9, k9].slice(0, 6)))}>
+                      {k9}</button>
+                  ))}
+                </div>
+              </div>
+              {sweep && sweep.err && <div className="warn">{sweep.err}</div>}
+              {sweep && !sweep.err && <SweepChart sw={sweep} us={us} lenKeys={SW_LEN_KEYS} />}
+              <div className="note">
+                41 full solves of the real engine across the range — every metric is read from a
+                computed design, so a sweep can never disagree with the results column. Shaded bands
+                are values that do not produce a buildable design.
+              </div>
+              <div className="cardhead" style={{ marginTop: 12 }}>
+                <h2>What moves it</h2>
+                {tornado && !tornado.err && <button className="btn mini ghost" onClick={() => exportPng("svg-tornado", "sensitivity.png")}>PNG ⤓</button>}
+              </div>
+              <Sel label="Metric" v={snMetric} set={setSnMetric}
+                opts={["Kt", "peakT", "eta", "noLoad", "Rll", "Tcu", "Icont", "fill", "Bt", "By", "demag"]} />
+              <Num label="Perturbation" unit="±%" v={snPct} set={setSnPct} step={5} min={1} max={50} />
+              {tornado && tornado.err && <div className="warn">{tornado.err}</div>}
+              {tornado && !tornado.err && <TornadoChart sn={tornado} />}
+              <div className="note">
+                Each input perturbed on its own, ranked by how far it moves the metric — the top bar
+                is the parameter worth arguing about. Inputs whose perturbation breaks the design read
+                "invalid" rather than being silently dropped.
               </div>
             </div>
           )}

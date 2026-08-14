@@ -1725,6 +1725,91 @@ function computeDesign(p) {
   };
 }
 
+/* ================= design exploration: sweeps and sensitivity =================
+   computeDesign is pure and runs in microseconds, so sweeping it is nearly free —
+   this is the same capability the commercial tools sell as "design exploration",
+   and it needs no solver, no optimiser library, and no second physics model.
+
+   Every metric below is READ from a computed design; none is recomputed here, so a
+   sweep can never disagree with the results column. Designs that error inside the
+   sweep are kept as holes (`err`) rather than dropped, because WHERE a design stops
+   being buildable is usually the most useful thing on the chart. ============== */
+
+const SWEEP_METRICS = [
+  { k: "Kt",     lab: "Torque constant",      unit: "N·m/A", get: (r) => r.Kt },
+  { k: "noLoad", lab: "No-load speed",        unit: "rpm",   get: (r) => r.noLoad },
+  { k: "peakT",  lab: "Peak torque",          unit: "N·m",   get: (r) => r.peakT },
+  { k: "eta",    lab: "Efficiency at rated",  unit: "%",     get: (r) => r.eta * 100 },
+  { k: "Rll",    lab: "Resistance L-L",       unit: "Ω",     get: (r) => r.Rll },
+  { k: "Tcu",    lab: "Winding temp",         unit: "°C",    get: (r) => (r.therm ? r.therm.Tcu : NaN) },
+  { k: "Icont",  lab: "Continuous current",   unit: "A",     get: (r) => (r.therm ? r.therm.Icont : NaN) },
+  { k: "fill",   lab: "Slot fill",            unit: "%",     get: (r) => r.fillGross * 100 },
+  { k: "Bt",     lab: "Tooth flux density",   unit: "T",     get: (r) => r.Bt },
+  { k: "By",     lab: "Yoke flux density",    unit: "T",     get: (r) => r.By },
+  { k: "cogTpp", lab: "Cogging (pk-pk)",      unit: "N·m",   get: (r) => (r.cog ? r.cog.Tpp : NaN) },
+  { k: "demag",  lab: "Demag margin",         unit: "%",     get: (r) => r.demagMargin * 100 },
+  { k: "mCu",    lab: "Copper mass",          unit: "kg",    get: (r) => (r.therm ? r.therm.mCu : NaN) },
+];
+
+/* Sweep one parameter. Returns points with every metric plus any errors, and the
+   per-metric range so a view can normalise without recomputing. */
+function sweepDesign(p, key, lo, hi, n9, metricKeys) {
+  if (!key || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo)
+    return { err: "Sweep needs a parameter and a low < high range." };
+  if (!(key in p)) return { err: `"${key}" is not a parameter of this design.` };
+  if (typeof p[key] !== "number") return { err: `"${key}" is not numeric — sweeps cover numeric inputs.` };
+  const N = Math.min(Math.max(Math.round(n9) || 25, 3), 121);
+  const mets = (metricKeys && metricKeys.length ? metricKeys : ["Kt", "peakT", "eta"])
+    .map((k9) => SWEEP_METRICS.find((m9) => m9.k === k9)).filter(Boolean);
+  const pts = [];
+  for (let i9 = 0; i9 < N; i9++) {
+    const v = lo + ((hi - lo) * i9) / (N - 1);
+    const r9 = computeDesign({ ...p, [key]: v });
+    const m = {};
+    for (const mt of mets) {
+      const x9 = mt.get(r9);
+      m[mt.k] = Number.isFinite(x9) ? x9 : NaN;
+    }
+    pts.push({ v, m, err: r9.err.length ? r9.err[0] : null, warn: r9.warn.length });
+  }
+  const range = {};
+  for (const mt of mets) {
+    const vals = pts.filter((q) => !q.err).map((q) => q.m[mt.k]).filter(Number.isFinite);
+    range[mt.k] = vals.length ? { lo: Math.min(...vals), hi: Math.max(...vals) } : null;
+  }
+  const cur = computeDesign(p);
+  const curM = {};
+  for (const mt of mets) curM[mt.k] = mt.get(cur);
+  return { key, lo, hi, N, mets: mets.map((m9) => ({ k: m9.k, lab: m9.lab, unit: m9.unit })),
+    pts, range, cur: { v: p[key], m: curM }, nErr: pts.filter((q) => q.err).length };
+}
+
+/* Tornado sensitivity: perturb each parameter ±pct and record what each metric does.
+   Sorted by influence, so the top bar is the parameter worth arguing about. */
+function sensitivity(p, keys, pct, metricKey) {
+  const mt = SWEEP_METRICS.find((m9) => m9.k === metricKey) || SWEEP_METRICS[0];
+  const d9 = Math.min(Math.max(Math.abs(pct) || 10, 0.5), 50) / 100;
+  const base = computeDesign(p);
+  const b9 = mt.get(base);
+  if (!Number.isFinite(b9) || b9 === 0) return { err: `"${mt.lab}" is not a usable baseline for this design.` };
+  const rows = [];
+  for (const k9 of keys) {
+    if (typeof p[k9] !== "number" || !Number.isFinite(p[k9]) || p[k9] === 0) continue;
+    const vLo = p[k9] * (1 - d9), vHi = p[k9] * (1 + d9);
+    const rLo = computeDesign({ ...p, [k9]: vLo });
+    const rHi = computeDesign({ ...p, [k9]: vHi });
+    const xLo = rLo.err.length ? NaN : mt.get(rLo);
+    const xHi = rHi.err.length ? NaN : mt.get(rHi);
+    const pLo = Number.isFinite(xLo) ? ((xLo - b9) / Math.abs(b9)) * 100 : NaN;
+    const pHi = Number.isFinite(xHi) ? ((xHi - b9) / Math.abs(b9)) * 100 : NaN;
+    const infl = Math.max(Number.isFinite(pLo) ? Math.abs(pLo) : 0, Number.isFinite(pHi) ? Math.abs(pHi) : 0);
+    rows.push({ key: k9, base: p[k9], lo: vLo, hi: vHi, pLo, pHi, infl,
+      errLo: rLo.err.length ? rLo.err[0] : null, errHi: rHi.err.length ? rHi.err[0] : null });
+  }
+  rows.sort((a9, b8) => b8.infl - a9.infl);
+  return { metric: { k: mt.k, lab: mt.lab, unit: mt.unit }, pct: d9 * 100, baseVal: b9, rows };
+}
+
 /* ================= 2-D magnetostatic field solver (FEA-light) =================
    A real field solution for the radial-flux machines, living in the same file as
    the analytical core so the gates can drive both and compare them.
