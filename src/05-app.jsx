@@ -1238,6 +1238,50 @@ export default function MotorDesigner() {
   const LSK = "motrworks-autosave-v1", LSK_OLD = "motrsynth-autosave-v1";
   const lsOK = useMemo(() => { try { localStorage.setItem("__t", "1"); localStorage.removeItem("__t"); return true; } catch { return false; } }, []);
   const [restore, setRestore] = useState(null);
+  /* ---- design library: named snapshots kept locally, with a live comparison of the
+     shortlist against the current design. Same guarded-localStorage posture as the
+     autosave — nothing leaves the machine, and a blocked store degrades to "off"
+     rather than throwing. Entries hold the parameter set only; every number shown is
+     recomputed from the engine, so a stored design can never carry stale results. ---- */
+  const LIBK = "motrworks-library-v1";
+  const [lib, setLib] = useState([]);
+  const [libSel, setLibSel] = useState([]);
+  const [libName, setLibName] = useState("");
+  const [libMsg, setLibMsg] = useState("");
+  useEffect(() => {
+    if (!lsOK) return;
+    try {
+      const j = JSON.parse(localStorage.getItem(LIBK) || "[]");
+      if (Array.isArray(j)) setLib(j.filter((e9) => e9 && e9.name && e9.design));
+    } catch { /* corrupt library — start empty rather than block the app */ }
+  }, [lsOK]);
+  const libWrite = (next) => {
+    setLib(next);
+    if (!lsOK) { setLibMsg("Local storage is blocked — the library is session-only."); return; }
+    try { localStorage.setItem(LIBK, JSON.stringify(next)); }
+    catch { setLibMsg("Could not save — local storage is full."); }
+  };
+  const libSave = () => {
+    const nm = (libName || "").trim() || `${p.motorType} ${p.slots}s${p.poles}p ${Math.round(p.statorOD)}mm`;
+    const entry = { name: nm, ts: Date.now(), design: { ...p } };
+    const next = [entry, ...lib.filter((e9) => e9.name !== nm)].slice(0, 40);
+    libWrite(next);
+    setLibName("");
+    setLibMsg(`Saved “${nm}”.`);
+  };
+  const libLoad = (e9) => {
+    const merged = { ...p };
+    for (const k9 of Object.keys(merged)) if (k9 in e9.design && typeof e9.design[k9] === typeof merged[k9]) merged[k9] = e9.design[k9];
+    setP(merged);
+    setLibMsg(`Loaded “${e9.name}”.`);
+  };
+  const libDel = (nm) => { libWrite(lib.filter((e9) => e9.name !== nm)); setLibMsg(`Removed “${nm}”.`); };
+  const libRows = useMemo(() => libSel.map((nm) => {
+    const e9 = lib.find((x9) => x9.name === nm);
+    if (!e9) return null;
+    const rr = computeDesign({ ...p, ...e9.design });
+    return { name: nm, r: rr };
+  }).filter(Boolean), [libSel, lib, p]);
   const undoRef = React.useRef([]);
   const lastSnapRef = React.useRef(null);
   const skipPushRef = React.useRef(false);
@@ -2284,6 +2328,65 @@ export default function MotorDesigner() {
               </div>
             </div>
           )}
+
+          <div className="card paper" style={{ marginTop: 14 }}>
+            <h2>Design library</h2>
+            <div className="iobar">
+              <input type="text" value={libName} placeholder="name this design"
+                onChange={(e9) => setLibName(e9.target.value)}
+                style={{ flex: "1 1 150px", minWidth: 120, padding: "6px 8px", border: "1px solid #CBD5E1",
+                  borderRadius: 8, font: "inherit", fontSize: ".78rem" }} />
+              <button className="btn" onClick={libSave}>Save current</button>
+            </div>
+            {libMsg && <div className="iomsg">{libMsg}</div>}
+            {!lib.length && <div className="note" style={{ marginTop: 6 }}>
+              Nothing saved yet. Saved designs are kept on this machine only, and store the
+              parameters — every number in the comparison is recomputed by the engine, so an
+              entry can never show stale results.
+            </div>}
+            {lib.length > 0 && (
+              <div className="tbl" style={{ marginTop: 8 }}>
+                {lib.map((e9) => (
+                  <div className="kv" key={e9.name}>
+                    <span>
+                      <input type="checkbox" checked={libSel.indexOf(e9.name) >= 0}
+                        onChange={() => setLibSel((s9) => (s9.indexOf(e9.name) >= 0 ? s9.filter((x9) => x9 !== e9.name) : [...s9, e9.name].slice(0, 4)))}
+                        style={{ marginRight: 6 }} />
+                      {e9.name}
+                    </span>
+                    <b>
+                      <button className="btn mini ghost" onClick={() => libLoad(e9)}>Load</button>{" "}
+                      <button className="btn mini ghost" onClick={() => libDel(e9.name)}>✕</button>
+                    </b>
+                  </div>
+                ))}
+              </div>
+            )}
+            {libRows.length > 0 && (
+              <>
+                <h2 style={{ marginTop: 12 }}>Comparison (checked vs current)</h2>
+                <div className="tbl" style={{ overflowX: "auto" }}>
+                  {[["Kt", (x9) => fmt(x9.Kt, 4), "N·m/A"],
+                    ["No-load", (x9) => fmt(x9.noLoad, 0), "rpm"],
+                    ["Peak torque", (x9) => tqS(x9.peakT), ""],
+                    ["Efficiency", (x9) => fmt(x9.eta * 100, 1), "%"],
+                    ["R L-L", (x9) => fmt(x9.Rll, 4), "Ω"],
+                    ["Winding temp", (x9) => (x9.therm ? Math.round(x9.therm.Tcu) : "—"), "°C"],
+                    ["Slot fill", (x9) => fmt(x9.fillGross * 100, 0), "%"]].map(([lab, f9, u9]) => (
+                    <div className="kv" key={lab} style={{ alignItems: "baseline" }}>
+                      <span>{lab}{u9 ? ` (${u9})` : ""}</span>
+                      <b style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <span style={{ opacity: 0.65 }}>{f9(r)} now</span>
+                        {libRows.map((row) => <span key={row.name}>{row.r.err.length ? "err" : f9(row.r)}</span>)}
+                      </b>
+                    </div>
+                  ))}
+                  <div className="kv"><span style={{ opacity: 0.7 }}>columns</span>
+                    <b style={{ fontWeight: 400, opacity: 0.7 }}>now · {libRows.map((x9) => x9.name).join(" · ")}</b></div>
+                </div>
+              </>
+            )}
+          </div>
 
           {!r.err.length && !brkM && (
             <div className="card paper" style={{ marginTop: 14 }}>

@@ -29,7 +29,7 @@ Source of truth is `src/`, five modules concatenated in numeric order (no bundle
 | File | Contents |
 |---|---|
 | `src/01-shared.jsx` | materials (MAGNETS/STEELS/BRAKE_MATS/GEAR_MATS/BARS), wire tables, `PRESETS` (38), theme, unit context |
-| `src/02-engine.js` | `computeDesign` (physics, pure), `computeBobbin`/`solveBobbin`, `designGearTrain`, `composeActuator`, DXF/FEMM builders |
+| `src/02-engine.js` | `computeDesign` (physics, pure), `computeBobbin`/`solveBobbin`, `designGearTrain`, `composeActuator`, DXF/FEMM builders, **the 2-D field solver** (`fieldMesh`/`solveField`/`fieldStudy`), **efficiency map / drive cycle** (`lossesAt`/`efficiencyMap`/`driveCycle`), **sweeps** (`sweepDesign`/`sensitivity`) |
 | `src/03-dxf-import.js` | `parseDxf` + `analyzeLam` (lamination geometry inference) |
 | `src/04-views.jsx` | ~32 SVG views, charts, drawings, input controls |
 | `src/05-app.jsx` | `MotorDesigner` app shell: default state, tabs, cards, envelope wizard `synthEnvelope`, file IO |
@@ -89,17 +89,27 @@ Run from the repo root:
     node tools/stp-gate.mjs  tools/stp-preset-gate.mjs  tools/wind-gate.mjs
     node tools/brk-gate.mjs  tools/brk-preset-gate.mjs  tools/env-gate.mjs
     node tools/act-gate.mjs  tools/bob-gate.mjs
+    node tools/eff-gate.mjs          # efficiency map == engine η; energy conservation
+    node tools/field-gate.mjs        # field solver: flux conservation, MESH CONVERGENCE
+    node tools/sweep-gate.mjs        # sweeps == direct solves; textbook proportionalities
     # e2e (Playwright/Chromium against file://index.html)
     node tools/toggle-test.mjs  tools/stp-e2e.mjs  tools/filter-e2e.mjs
-    node tools/latm-e2e.mjs  tools/wind-e2e.mjs  tools/brk-e2e.mjs
+    node tools/latm-e2e.mjs  tools/wind-e2e.mjs  tools/brk-e2e.mjs  tools/lib-e2e.mjs
 
 `brk-tune3.mjs` and `brk-render.mjs` are tuning/rendering utilities, not gates. There is no CI —
 no `.github/` workflows exist. Gates are run by hand.
 
-**Before release:** rebuild, regenerate the concat file, then run all 14 compute gates and all 6
-e2e tests. **The full 20-test suite passes on `main` as of the v59.2 baseline — treat any failure
-as a real regression, not as expected noise.** Commit `src/` + `index.html` +
-`src/motor-designer.concat.jsx` together.
+**Before release:** rebuild, regenerate the concat file, then run all 17 compute gates and all 7
+e2e tests. **The full 24-test suite passes on the `claude/tauri-desktop-shell` branch as of
+v60.2 — treat any failure as a real regression, not as expected noise.** Commit `src/` +
+`index.html` + `src/motor-designer.concat.jsx` together.
+
+**The gate ritual is the product's accuracy story, not bureaucracy.** Two rules earned the hard
+way in the v59/v60 work: (1) an *anchored* number moves only with a same-commit re-anchor and a
+written physical reason (§ Numerical correctness); (2) a *new* number ships only if it passes a
+mesh/convergence or identity check — this is why the field solver reports gap flux but refuses
+to report cogging torque, and why the efficiency map is asserted equal to `computeDesign`'s own
+η rather than merely "looking right".
 
 One known cosmetic wart: `wind-gate.mjs` prints `default SSR: <n> (changed — check)` because it
 compares against an older hardcoded baseline. It still exits 0. Do not "fix" it by re-anchoring
@@ -149,6 +159,13 @@ Known stale documentation: `tools/README.md` quotes a healthy SSR render of 163,
 
 - **Self-contained single file.** No bundler, no package.json, no CDN, no runtime network access.
   Anything added must inline into `index.html`.
+- **One physics model per quantity.** Views render; they do not compute physics. The pre-v60
+  efficiency map carried its own loss model and drifted from the results column — that class of
+  bug is now gate-blocked (`eff-gate` asserts map η == engine η). If a view needs a number, add a
+  pure function to `02-engine.js` and read it.
+- **Expensive work is opt-in.** `computeDesign` runs on every keystroke and must stay in the
+  microseconds. The field solver (~0.2–1 s) is behind an explicit button and records the
+  parameters it solved for, so the card can say when the design has moved on.
 - **Concatenation order matters.** Modules share one scope; a symbol must be defined in a
   lower-numbered module than its first use.
 - **Pure, gate-testable cores.** `computeDesign`, `computeBobbin`, `solveBobbin`,

@@ -594,3 +594,25 @@ cards whole across page breaks, and leads with a screen-hidden title block carry
 constants (Kt, Ke, R, L, no-load, peak torque, rated point, peak η, winding temp, fill) plus
 whether the numbers are analytical or BENCH CALIBRATED. Verified through Chromium's real print
 path (emulateMedia + page.pdf), not just by eye.
+
+---
+
+# v60.3 — design library (2026-08-13)
+
+Roadmap move 5b. Named design snapshots kept on this machine (guarded localStorage, same
+posture as the autosave: blocked storage degrades to session-only rather than throwing), with
+a live comparison of up to four saved entries against the current design across Kt, no-load,
+peak torque, efficiency, resistance, winding temperature and slot fill.
+
+Entries store the PARAMETER SET only, never results — every number in the comparison is
+recomputed by the engine on render, so a saved design can never show stale or
+inconsistent numbers, and a later physics refinement automatically re-costs the whole library.
+Loading merges by key with a typeof guard, the same discipline the design-file importer uses.
+
+New `tools/lib-e2e.mjs` (7 e2e now) drives the real UI: save, perturb, compare, load back,
+reload the page, delete. Its comparison assertion is a physics check rather than a string
+match — doubling turns must show the saved entry at exactly half the current Kt.
+
+SQLite via `tauri-plugin-sql` remains the documented next step for the desktop build (it adds
+a dependency, so it stays an ask-first decision); localStorage covers the capability today and
+keeps browser and desktop identical.

@@ -1,5 +1,14 @@
 # Roadmap — taking MotrWorks to MotorSolve/JMAG-Express class
 
+> **Status 2026-08-13 (v60.2).** Moves 1, 3, 4 and 5 are LANDED — efficiency maps + drive
+> cycle (v60.0), the in-app 2-D magnetostatic solver with flux plots (v60.1), design
+> exploration + printed datasheet (v60.2), and the design library. Move 2 (physics backlog)
+> is partly done: Carter (v59.8) and drag-corrected no-load (v59.9) shipped with re-anchors;
+> magnet leakage, brushed saturation, ACIM deep-bar and the stepper permeance model remain.
+> The capability table below is the PRE-work inventory, kept as the baseline it was measured
+> against; see `audit-v58.md` v60.x for what each move actually delivered — including the
+> cogging torque the solver computes and deliberately refuses to report.
+
 *2026-08-13. Owner-facing plan. Premise per owner direction: the desktop exe IS the
 platform (browser parity not binding; Pages stays only as the calibration-collection
 channel). Goal: a tool a motor engineer would reach for instead of JMAG-Express for
