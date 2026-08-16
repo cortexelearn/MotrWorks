@@ -18746,6 +18746,7 @@ function computeDesign(p) {
         const Idrop = Ineed(gRes, Fcompr);
         const wireLen = (MLTb * Ntot) / 1000; // m
         const Rcold = ((RHO_CU * (MLTb / 1000) * Ntot) / (aBare * 1e-6 * Math.max(p.strands, 1))) + Math.max(p.Rext, 0) / 1000;
+        const Rterm20 = Rcold - Math.max(p.Rext, 0) / 1000; // copper-only 20 C terminal R (v60.5 Rll basis)
         const Bback = atGap.Phi / (2 * Math.PI * (rBoss / 1000) * (Math.max(tBack, 0.1) / 1000)); // web at the boss root
         brake = { Thold, Tdyn, re: re * 1000, reUP: reUP * 1000, faces, Fclamp, Fcompr, padP,
             pMax: matB ? matB.pMax : NaN, Tmax: matB ? matB.Tmax : NaN,
@@ -18753,7 +18754,7 @@ function computeDesign(p) {
             Bin: atGap.Bin, Bout: atGap.Bout, Barm: atSeat.Barm, Bback, NI, Rb, Ib, Pb, Ihold, Phold, eco, TcuB, RthB, Lb, tau: Lb / Math.max(Rb, 1e-6),
             Fclamp, Fcompr, sprL0, sprL1, sprCav,
             Vrel: Math.min(Vrel, 10 * p.Vdc), capT: capB, Ain: Ain * 1e6, Aout: Aout * 1e6,
-            hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, wireLen, feS: feS * 100, murBody, murNom: bodyM.mur || 700 };
+            hBuild, coilOD, clr, tBack, Ipull, Idrop, Rcold, Rterm20, wireLen, feS: feS * 100, murBody, murNom: bodyM.mur || 700 };
         op = { n: 0, T: Thold };
         peakT = Thold;
         noLoad = 0;
@@ -18829,6 +18830,7 @@ function computeDesign(p) {
         const MLTs = 2 * (p.stackL + p.toothW) + Math.PI * Math.min(hsS, 25); // around the pole body
         const rStr = ((RHO_CU * (MLTs / 1000) * NphStr) / (aBare * 1e-6 * Math.max(p.strands, 1))) * (1 + 0.00393 * (p.Tcu - 20));
         const Rs = rStr * rF + Math.max(p.Rext, 0) / 1000;
+        const Rs20 = (rStr / (1 + 0.00393 * (p.Tcu - 20))) * rF; // copper-only 20 C per-phase terminal R (v60.5 Rll basis)
         // ---- flux linkage swing per phase ----
         let dPhiPole, BtBias = 0, teethPP = 0, tPitch = 0;
         if (hyb) {
@@ -18898,7 +18900,7 @@ function computeDesign(p) {
         const stiffS = Th * kE; // N·m/rad at equilibrium
         const f0 = (1 / (2 * Math.PI)) * Math.sqrt(stiffS / Math.max(Jr, 1e-9)); // single-step natural freq
         step = { angle: stepA, stepsRev: 4 * kE, kind: hyb ? "hybrid" : "PM", wire, leads,
-            Th, Th1, Th2, detent: Td, Kt: KtPh, Rs, Ls, tau: tauS, rpmC: Math.max(rpmC2, 0), kE, hubD: hubD9, thruD: thruD9,
+            Th, Th1, Th2, detent: Td, Kt: KtPh, Rs, Rs20, Ls, tau: tauS, rpmC: Math.max(rpmC2, 0), kE, hubD: hubD9, thruD: thruD9,
             teethPP, tPitch, BtBias, stiff: stiffS, f0, J: Jr, on2, thArr: thArr6, tArr: tArr6, tNxt: tNxt6, tDet: tDet6 };
         op = { n: 0, T: Th };
         peakT = Th;
@@ -18996,7 +18998,8 @@ function computeDesign(p) {
         const rR = p.rotorOD / 2000, Lz = p.stackL / 1000;
         const coreD = Math.max((p.statorOD - p.statorID) / 2, 0.5); // ring radial depth from OD/ID
         const MLTt = 2 * (p.stackL + 2 * coreD + 3 * tw); // toroidal turn length, mm
-        const Ra2 = ((RHO_CU * (MLTt / 1000) * Ntot) / (aBare * 1e-6 * Math.max(p.strands, 1))) * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
+        const Ra20c = (RHO_CU * (MLTt / 1000) * Ntot) / (aBare * 1e-6 * Math.max(p.strands, 1)); // copper-only 20 C (v60.5 Rll basis)
+        const Ra2 = Ra20c * (1 + 0.00393 * (p.Tcu - 20)) + Math.max(p.Rext, 0) / 1000;
         const L4 = ((4e-7 * Math.PI) / Math.PI) * (((p.rotorOD / 1000) * (p.stackL / 1000)) / Math.max((airgap + tw + p.magT / mag.mur) / 1000, 1e-5)) * ((Ntot * Ntot) / (poles * poles));
         const Idrv = Math.min(p.Imax, Ra2 > 0 ? p.Vdc / Ra2 : p.Imax); // two-wire: supply/Ra, clamped by the drive limit
         // ---- torque vs angle: circular cross-correlation of the alternating pole field (fringing-
@@ -19070,7 +19073,7 @@ function computeDesign(p) {
         TstallW = Kt * (Ra2 > 0 ? Math.max(p.Vdc, 1) / Ra2 : 0);
         op = { n: 0, T: Math.max(Tstop, 0) }; // guaranteed toggle/holding torque
         noLoad = 0;
-        latm = { Kt, Tpk: tPk5, Tstop, stiff, travel, zeroAng, Ra: Ra2, L: L4, tau: L4 / Math.max(Ra2, 1e-6),
+        latm = { Kt, Tpk: tPk5, Tstop, stiff, travel, zeroAng, Ra: Ra2, Ra20: Ra20c, L: L4, tau: L4 / Math.max(Ra2, 1e-6),
             Bg: Bg4, Ntot, Idrv, thArr, tArr };
         if (poles < 2)
             w.push("LATM needs at least a 2-pole rotor.");
@@ -19503,11 +19506,30 @@ function computeDesign(p) {
         }
         therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
     }
+    // v60.5: Rll/Rphase for the non-3-phase machines report the REAL coil the physics and
+    // the UI use, at 20 C copper-only (same basis as the pm value). The pre-branch 3-phase
+    // MLT number was a PHANTOM for latm/stepper/brake — a winding those machines do not
+    // have — yet the datasheet and the golden anchors were certifying it (LATM: 118 Ohm
+    // phantom vs ~43 Ohm real terminal R).
+    let RllOut = Rll, RphOut = Rphase;
+    if (latmE && latm) {
+        RphOut = latm.Ra20;
+        RllOut = latm.Ra20;
+    }
+    else if (stpE && step) {
+        RphOut = step.Rs20;
+        RllOut = step.Rs20;
+    }
+    else if (brkE && brake) {
+        RphOut = brake.Rterm20;
+        RllOut = brake.Rterm20;
+    }
     return {
-        err, warn: w, Ns, poles, airgap, hs, w1, w2, slotArea, usableArea,
+        err, warn: w, Ns, poles, airgap,
+        hs, w1, w2, slotArea, usableArea,
         dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve,
         skewDeg, ksk, skewSlant, skewArc,
-        Nser, MLT, Rphase, Rll, Iph, Iline: IlineOut, Istall, Vph, Arms,
+        Nser, MLT, Rphase: RphOut, Rll: RllOut, Iph, Iline: IlineOut, Istall, Vph, Arms,
         Trated, nSync, nShaft, Pout: PoutN, Pcu, eta, Eph, Ke, Kt, VphAvail,
         rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
         mag, BrT, HcJT, HcJmin, demagT, kcGap, BgAvg, B1, BgEff, Hdemag, demagMargin,

@@ -40,13 +40,20 @@ const GOLD = [
   // rows moved less than the 91-point curve grid and keep their anchors.
   { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.014681, noLoad: 6937.3, Rll: 1.0409 } },
   { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 4.2091 } },
-  { preset: 'NEMA 17 · 1.8° hybrid · bipolar',          checks: { Kt: 0.22844, Rll: 3.075, peakT: 0.48458 } },
-  { preset: 'Brake 24 V · 60 mm · spring-applied',      checks: { Rll: 142.92, peakT: 3.6 } },
+  // v60.5 re-anchor — Rll for stepper/brake/LATM now reports the REAL coil at 20 C
+  // (copper-only, same basis as pm) instead of the phantom 3-phase MLT formula those
+  // machines never had. Stepper: per-phase Rs20 3.5496 (was certifying 3.075 of a
+  // nonexistent winding). Kt/peakT untouched.
+  { preset: 'NEMA 17 · 1.8° hybrid · bipolar',          checks: { Kt: 0.22844, Rll: 3.5496, peakT: 0.48458 } },
+  // v60.5 re-anchor — brake coil terminal R at 20 C: 22.976 (phantom was 142.92).
+  { preset: 'Brake 24 V · 60 mm · spring-applied',      checks: { Rll: 22.976, peakT: 3.6 } },
   // v59.8 re-anchor — LATM is slotless: the 1.05 "Carter" on its magnetic gap was a leftover
   // from the slotted branches, not physics. Removing it shortens the effective gap ~5%,
   // lifting Bg and thus Kt/peakT by +4.1% (0.054424 -> 0.056661, 0.035021 -> 0.036461).
   // ANALYTICAL ONLY — replace with the bench LATM calibration set when captured.
-  { preset: 'LATM 1.5" · 28 V · SmCo 4-pole · 45° toggle', checks: { Kt: 0.056661, Rll: 118.35, peakT: 0.036461 } },
+  // v60.5 re-anchor — LATM toroidal coil terminal R at 20 C: 35.210, matching an
+  // independent hand calculation (35.22) to 0.03%. The old 118.35 was the phantom.
+  { preset: 'LATM 1.5" · 28 V · SmCo 4-pole · 45° toggle', checks: { Kt: 0.056661, Rll: 35.210, peakT: 0.036461 } },
 ];
 
 for (const g of GOLD) {
