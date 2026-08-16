@@ -1848,9 +1848,14 @@ function computeDesign(p) {
   const COOLH = { "Sealed": 10, "Open air": 40, "Cold plate": 220 };
   const hOut = COOLH[p.cooling] || 40;
   const AslotW = Ns * ((2 * Math.max(hs, 0) + Math.max(w1, 0) + Math.max(w2, 0)) / 1000) * (p.stackL / 1000);
-  const RthCu = AslotW > 0 ? 1 / (400 * AslotW) : 99;      // impregnated winding-to-iron
+  // v60.9 thermal calibration: a bench-measured steady ΔT at a known loss scales the
+  // WHOLE two-node network (the film-coefficient buckets are the weak link, but a single
+  // measured point cannot split the nodes). Valid for the measured mount/cooling only —
+  // the capture card discloses this. Active only with calibration ON.
+  const kRth9 = p.calOn === "yes" && Number.isFinite(p.calKRth) && p.calKRth > 0 ? Math.min(Math.max(p.calKRth, 0.2), 5) : 1;
+  const RthCu = (AslotW > 0 ? 1 / (400 * AslotW) : 99) * kRth9; // impregnated winding-to-iron
   const AoutH = Math.PI * (p.statorOD / 1000) * ((p.stackL * 1.6) / 1000) + 2 * Math.PI * Math.pow(p.statorOD / 2000, 2);
-  const RthOut = 1 / (hOut * Math.max(AoutH, 1e-4));
+  const RthOut = (1 / (hOut * Math.max(AoutH, 1e-4))) * kRth9;
   let therm = null;
   if (p.motorType === "latm" && latm) {
     // stationary toroid: winding heat leaves through both ring faces over the covered arc
@@ -1859,7 +1864,7 @@ function computeDesign(p) {
     latm.RaTerm20 = Ra20 + RextO;   // terminal (incl. Rext) at ambient — v60.6: no longer clobbers the copper-only Ra20 that Rll publishes
     const kcov2 = Math.min((Math.max(p.latmSect, 1) * Math.max(p.latmSpan, 5)) / 360, 1);
     const AtorW = 2 * (Math.PI * ((p.statorID + p.statorOD) / 2 / 1000) * (p.stackL / 1000)) * kcov2; // ID + OD faces
-    const RthCuT = AtorW > 0 ? 1 / (400 * AtorW) : 99;
+    const RthCuT = (AtorW > 0 ? 1 / (400 * AtorW) : 99) * kRth9;
     const RthTot = RthCuT + RthOut;
     let Tc = p.Tamb + 40;
     for (let it3 = 0; it3 < 10; it3++) {
@@ -1884,14 +1889,14 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, RthCu: RthCuT, RthOut, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
     if (Tc > p.TcuMax) w.push(`Held-on winding temp ≈ ${Math.round(Tc)} °C exceeds the ${p.TcuMax} °C class at the ${latm.Idrv.toFixed(2)} A drive current — a toggle LATM energized continuously needs Idrv ≤ ~${Icont.toFixed(2)} A (current limit or higher-R winding), or pulse duty.`);
   } else if (brushedM && brush) {
     // rotating armature: winding heat crosses the airgap too — lump an extra series resistance
     const RextO = Math.max(p.Rext, 0) / 1000;
     const Ra20 = Math.max((brush.Ra - RextO) / (1 + 0.00393 * (p.Tcu - 20)), 1e-6);
     const Agap = Math.PI * (p.rotorOD / 1000) * (p.stackL / 1000);
-    const RthGap = 1 / (60 * Math.max(Agap, 1e-4));                 // rotating-gap convection, first-order
+    const RthGap = (1 / (60 * Math.max(Agap, 1e-4))) * kRth9;       // rotating-gap convection, first-order
     const RthTot = RthCu + RthGap + RthOut;
     let Tc = p.Tamb + 40;
     for (let it3 = 0; it3 < 10; it3++) {
@@ -1916,7 +1921,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, RthCu: RthCu + RthGap, RthOut, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   } else if (brkE && brake) {
     // v60.5: the brake reported TWO thermal answers — its own pot-core network (TcuB/RthB,
     // gate-anchored, displayed on the brake card) AND a generic lamination-stack estimate
@@ -1974,7 +1979,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthCu + RthOut, RthCu, RthOut, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   }
 
 
@@ -2632,6 +2637,33 @@ function driveCycle(p, r, samples) {
   return { dur: tTot, Eout, Ein, Ecu, Efe, Ew, etaCycle: Ein > 0 ? Eout / Ein : 0,
     Irms, Trms, PcuMean, PfeMean, Tcu, nPk, tPk, overT: over, trace,
     overFrac: over / tTot, unreachT: unreach, unreachFrac: unreach / tTot };
+}
+
+/* v60.9 one-shot overload: winding temperature vs time at a constant pulse current,
+   from the design's own two-node ladder (copper node through RthCu at tauW over the
+   machine node through RthOut at tauM). Copper heating only — iron loss during a
+   stall/low-speed pulse is second-order and NOT added (disclosed in-card). Resistance
+   is taken hot (at the Tcu rating), which is conservative early in the pulse. Pure. */
+function pulseTemp(p, r, Ipulse) {
+  if (!r || !r.therm || !(Ipulse > 0)) return { err: "Needs a computed design and a pulse current." };
+  const th = r.therm;
+  if (!(th.RthCu >= 0) || !(th.RthOut > 0) || !(th.tauW > 0)) return { err: "This machine type has no two-node pulse model." };
+  const Pc = p.motorType === "brushed" && r.brush ? Ipulse * Ipulse * r.brush.Ra + Math.max(p.brushV, 0) * Ipulse
+    : p.motorType === "latm" && r.latm ? Ipulse * Ipulse * r.latm.Ra
+    : p.motorType === "stepper" && r.step ? (r.step.on2 ? 2 : 1) * Ipulse * Ipulse * r.step.Rs
+    : 3 * Ipulse * Ipulse * r.Rhot;
+  const Tof = (t9) => p.Tamb + Pc * (th.RthCu * (1 - Math.exp(-t9 / Math.max(th.tauW, 1e-6)))
+    + th.RthOut * (1 - Math.exp(-t9 / Math.max(th.tauM, 1e-6))));
+  const Tend = p.Tamb + Pc * (th.RthCu + th.RthOut);
+  let tLimit = Infinity;
+  if (Tend > p.TcuMax && Tof(0) < p.TcuMax) {
+    let lo = 0, hi = Math.max(th.tauM * 8, 1);
+    for (let i9 = 0; i9 < 60; i9++) { const m9 = (lo + hi) / 2; if (Tof(m9) < p.TcuMax) lo = m9; else hi = m9; }
+    tLimit = (lo + hi) / 2;
+  }
+  const tMax = Number.isFinite(tLimit) ? Math.min(Math.max(tLimit * 1.5, th.tauW * 3), th.tauM * 4) : th.tauM * 4;
+  const curve = Array.from({ length: 61 }, (_, i9) => { const t9 = (tMax * i9) / 60; return { t: t9, T: Tof(t9) }; });
+  return { Pc, curve, tLimit, Tend, tMax };
 }
 
 /* ================= presentation: CortexEdge theme ================= */

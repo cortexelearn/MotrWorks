@@ -102,7 +102,7 @@ console.log('Winding tooling');
 // FEA-light: MEC saturation curve + FEMM export structure
 console.log('MEC / FEMM');
 {
-  const M2 = new Function('React', app + '\nreturn { computeDesign, buildFemmLua, PRESETS, STEELS };')(React);
+  const M2 = new Function('React', app + '\nreturn { computeDesign, buildFemmLua, pulseTemp, PRESETS, STEELS };')(React);
   const p = { ...base, slotR: 0, ...M2.PRESETS['NEMA 17 · 28 V · ~6 krpm'] };
   const r = M2.computeDesign(p);
   const mono = r.satCurve && r.satCurve.every((s, i, a) => !i || s.k <= a[i - 1].k + 1e-9);
@@ -186,6 +186,20 @@ console.log('MEC / FEMM');
   const bsOK = dKtBs < -0.02 && dKtBs > -0.08;
   console.log(`  ${bsOK ? '✓' : '✗'} brScale 0.95 lowers Kt ~5% through the full circuit (${(dKtBs * 100).toFixed(1)}%)`);
   if (!linOK || !magOK || !bsOK) fail = true;
+
+  // v60.9 pulse + thermal-calibration identities
+  const pt9 = M2.pulseTemp(p, r1x, 2 * p.Imax);
+  const endOK = !pt9.err && Math.abs(pt9.Tend - (p.Tamb + pt9.Pc * r1x.therm.Rth)) < 1e-9;
+  const monoOK = !pt9.err && pt9.curve.every((c9, i9) => i9 === 0 || c9.T >= pt9.curve[i9 - 1].T - 1e-12);
+  console.log(`  ${endOK ? '✓' : '✗'} pulse T(t→∞) equals the steady two-node answer (${pt9.err ? pt9.err : pt9.Tend.toFixed(1) + ' °C'})`);
+  console.log(`  ${monoOK ? '✓' : '✗'} pulse curve is monotone non-decreasing`);
+  const kSyn = +(((50 / 10) / r1x.therm.Rth).toFixed(4));  // synthetic bench: 50 °C rise at 10 W
+  const rKr = M2.computeDesign({ ...p, calOn: 'yes', calKRth: kSyn });
+  const capOK = Math.abs(rKr.therm.Rth * 10 - 50) < 0.05;  // captured network reproduces the measured ΔT
+  const offOK = Math.abs(M2.computeDesign({ ...p, calOn: 'no', calKRth: kSyn }).therm.Rth - r1x.therm.Rth) < 1e-12;
+  console.log(`  ${capOK ? '✓' : '✗'} captured kRth reproduces the synthetic bench ΔT (${(rKr.therm.Rth * 10).toFixed(2)} °C vs 50)`);
+  console.log(`  ${offOK ? '✓' : '✗'} kRth is inert with calibration OFF`);
+  if (!endOK || !monoOK || !capOK || !offOK) fail = true;
 }
 console.log(fail ? 'GOLDEN GATE: FAIL' : 'GOLDEN GATE: PASS');
 if (fail) process.exitCode = 1;

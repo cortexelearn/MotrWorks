@@ -970,6 +970,7 @@ const DEFAULT_P = {
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
     calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2, klOv: 0,
     costCu: 0, costFe: 0, costMag: 0, brScale: 1, tolGap: 0.05, tolMag: 0.1, tolBr: 3,
+    calKRth: 1, mDT: 0, mPw: 0, pulseI: 0, msJl: 0, msN: 1, msAng: 90, msT: 0.2, msDwell: 0.3,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
     agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
@@ -1057,9 +1058,15 @@ export default function MotorDesigner() {
         Td = Math.max(Tp - Tm, 0);
       }
     }
+    // v60.9: thermal capture — a measured steady ΔT at a known loss scales the whole
+    // 2-node network; valid for THIS mount and cooling only (the applied-factors table
+    // says so). Clamped 0.2–5 like the engine.
+    let kRth = 1;
+    if (p.mDT > 0 && p.mPw > 0 && r0.therm && r0.therm.Rth > 0)
+      kRth = Math.min(Math.max((p.mDT / p.mPw) / r0.therm.Rth, 0.2), 5);
     setP((o) => ({ ...o, calOn: "yes", calV: 2, calKR: +kR.toFixed(4), calKL: +kL.toFixed(4),
-      calKKe: +kKe.toFixed(4), calKKt: +kKt.toFixed(4), calTd: +Td.toFixed(5) }));
-    setIoMsg("Calibration captured — the model now tracks the bench, and design tweaks predict the real motor's response.");
+      calKKe: +kKe.toFixed(4), calKKt: +kKt.toFixed(4), calTd: +Td.toFixed(5), calKRth: +kRth.toFixed(4) }));
+    setIoMsg("Calibration captured — the model now tracks the bench, and design tweaks predict the real motor's response." + (kRth !== 1 ? " Thermal Rth scaled ×" + kRth.toFixed(3) + " (valid for this mount/cooling)." : ""));
   };
   const restorePrev = () => {
     if (!envPrev.current) return;
@@ -1314,7 +1321,7 @@ export default function MotorDesigner() {
   // into calKKt; the engine now applies sat(I) itself, so replaying an old capture knocks
   // torque down twice. Any stored design with calOn but no calV >= 2 gets its calibration
   // cleared with a recapture notice instead of silently double-applying.
-  const CAL_CLEAR = { calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2 };
+  const CAL_CLEAR = { calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calKRth: 1, calV: 2 };
   const legacyCal = (src) => !!src && src.calOn === "yes" && !(src.calV >= 2);
   const libLoad = (e9) => {
     // v60.6 (Codex): load onto DEFAULTS, not the current design — a library entry saved
@@ -2590,6 +2597,86 @@ export default function MotorDesigner() {
             );
           })()}
 
+          {/* v60.9: one-shot overload T(t) — the intermittent-duty question answered
+              from the design's own two-node thermal ladder. */}
+          {!r.err.length && r.therm && Number.isFinite(r.therm.RthCu) && !brkM && !actM && (() => {
+            const Ip9 = p.pulseI > 0 ? p.pulseI : 2 * p.Imax;
+            const pt = pulseTemp(p, r, Ip9);
+            if (pt.err) return null;
+            const W9 = 460, H9 = 130, mL9 = 40, mB9 = 18;
+            const tM9 = pt.tMax, TM9 = Math.max(pt.Tend, p.TcuMax * 1.05, p.Tamb + 10);
+            const X9 = (t9) => mL9 + ((W9 - mL9 - 8) * t9) / tM9;
+            const Y9 = (T9) => H9 - mB9 - ((H9 - mB9 - 8) * (T9 - p.Tamb)) / (TM9 - p.Tamb);
+            return (
+              <div className="card paper" style={{ marginTop: 14 }}>
+                <h2>Overload pulse — winding T(t)</h2>
+                <div className="iobar">
+                  <Num label={`Pulse current (0 = 2×drive limit)`} unit="A" v={p.pulseI} set={s("pulseI")} step={0.5} min={0} />
+                </div>
+                <div className="kv"><span>Pulse copper loss at {fmt(Ip9, 1)} A (hot R)</span><b>{fmt(pt.Pc, 1)} W</b></div>
+                <div className="kv"><span>Time to the {p.TcuMax} °C class limit</span>
+                  <b style={{ color: Number.isFinite(pt.tLimit) && pt.tLimit < 10 ? "#DC2626" : undefined }}>
+                    {Number.isFinite(pt.tLimit) ? `${fmt(pt.tLimit, pt.tLimit < 10 ? 2 : 1)} s` : "never (settles below the limit)"}</b></div>
+                <svg viewBox={`0 0 ${W9} ${H9}`} style={{ width: "100%", marginTop: 6 }}>
+                  <line x1={mL9} y1={Y9(p.TcuMax)} x2={W9 - 8} y2={Y9(p.TcuMax)} stroke="#DC2626" strokeDasharray="5 4" strokeWidth="1.2" />
+                  <text x={W9 - 10} y={Y9(p.TcuMax) - 4} textAnchor="end" style={{ font: "9px monospace", fill: "#DC2626" }}>{p.TcuMax} °C</text>
+                  <polyline fill="none" stroke="#3B82F6" strokeWidth="2" points={pt.curve.map((c9) => `${X9(c9.t)},${Y9(Math.min(c9.T, TM9))}`).join(" ")} />
+                  {Number.isFinite(pt.tLimit) && pt.tLimit <= tM9 && <circle cx={X9(pt.tLimit)} cy={Y9(p.TcuMax)} r="4" fill="#DC2626" />}
+                  <line x1={mL9} y1={H9 - mB9} x2={W9 - 8} y2={H9 - mB9} stroke="#64748B" />
+                  <line x1={mL9} y1={8} x2={mL9} y2={H9 - mB9} stroke="#64748B" />
+                  <text x={(W9 + mL9) / 2} y={H9 - 4} textAnchor="middle" style={{ font: "9px monospace", fill: "#64748B" }}>seconds (to {fmt(tM9, 0)} s)</text>
+                  <text x={mL9 - 4} y={Y9(p.Tamb) + 3} textAnchor="end" style={{ font: "9px monospace", fill: "#64748B" }}>{p.Tamb}°</text>
+                </svg>
+                <div className="note">Two-node ladder (winding τ {fmt(r.therm.tauW, 0)} s over machine τ {fmt(r.therm.tauM, 0)} s), copper heating only at hot resistance — stall-pulse iron loss is second-order and excluded. Valid for single pulses from thermal equilibrium; repeated pulses live in the duty-cycle model above.</div>
+              </div>
+            );
+          })()}
+
+          {/* v60.9: mission / servo matching — point-to-point move against a reflected
+              load, evaluated by the SAME drive-cycle chain as the CSV evaluator. */}
+          {!r.err.length && (pm || brM) && r.bom && Number.isFinite(r.bom.Jr) && (() => {
+            const Jl9 = Math.max(p.msJl, 0) * 1e-7;                  // g·cm² → kg·m²
+            const N9 = Math.max(p.msN, 0.1), th9 = (Math.max(p.msAng, 1) * Math.PI) / 180;
+            const T9 = Math.max(p.msT, 0.01), dw9 = Math.max(p.msDwell, 0);
+            const Jm9 = r.bom.Jr + Jl9 / (N9 * N9);
+            const alM = ((4 * th9) / (T9 * T9)) * N9;                // motor-side accel, triangle profile
+            const Tacc = Jm9 * alM;
+            const npk = (((2 * th9) / T9) * N9 * 60) / (2 * Math.PI);
+            const KS = 12, samp = [{ t: 0, n: 0, T: Tacc }];
+            for (let i9 = 1; i9 <= KS; i9++) samp.push({ t: (T9 / 2) * (i9 / KS), n: npk * (i9 / KS), T: Tacc });
+            for (let i9 = 1; i9 <= KS; i9++) samp.push({ t: T9 / 2 + (T9 / 2) * (i9 / KS), n: npk * (1 - i9 / KS), T: -Tacc });
+            samp.push({ t: T9 + Math.max(dw9, 0.001), n: 0, T: 0 });
+            const dc9 = driveCycle(p, r, samp);
+            return (
+              <div className="card paper" style={{ marginTop: 14 }}>
+                <h2>Mission check — point-to-point move</h2>
+                <div className="iobar">
+                  <Num label="Load inertia (at output)" unit="g·cm²" v={p.msJl} set={s("msJl")} step={10} min={0} />
+                  <Num label="Ratio to output" unit=":1" v={p.msN} set={s("msN")} step={1} min={0.1} />
+                  <Num label="Move angle (output)" unit="°" v={p.msAng} set={s("msAng")} step={15} min={1} />
+                  <Num label="Move time" unit="s" v={p.msT} set={s("msT")} step={0.05} min={0.01} />
+                  <Num label="Dwell" unit="s" v={p.msDwell} set={s("msDwell")} step={0.1} min={0} />
+                </div>
+                <div className="kv"><span>Accel torque at the motor (triangle profile)</span>
+                  <b style={{ color: Tacc > r.peakT ? "#DC2626" : Tacc > 0.8 * r.peakT ? "#B45309" : undefined }}>
+                    {tqS(Tacc)} of {tqS(r.peakT)} peak ({fmt((Tacc / Math.max(r.peakT, 1e-9)) * 100, 0)}%)</b></div>
+                <div className="kv"><span>Peak motor speed during the move</span><b>{fmt(npk, 0)} rpm{npk > r.noLoad ? " — EXCEEDS no-load, move is not achievable" : ""}</b></div>
+                {dc9 && !dc9.err && (
+                  <>
+                    <div className="kv"><span>Cycle RMS current vs continuous</span>
+                      <b style={{ color: r.therm && dc9.Irms > r.therm.Icont ? "#DC2626" : undefined }}>
+                        {fmt(dc9.Irms, 2)} A vs {r.therm ? fmt(r.therm.Icont, 2) : "—"} A</b></div>
+                    <div className="kv"><span>Implied steady winding temp at this duty</span>
+                      <b style={{ color: dc9.Tcu > p.TcuMax ? "#DC2626" : undefined }}>{dc9.Tcu !== null ? `${Math.round(dc9.Tcu)} °C vs ${p.TcuMax} °C class` : "—"}</b></div>
+                    <div className="kv"><span>Energy in / out per cycle</span><b>{fmt(dc9.Ein, 2)} / {fmt(dc9.Eout, 2)} J</b></div>
+                    {dc9.overFrac > 0.001 && <div className="warn">{fmt(dc9.overFrac * 100, 1)}% of the move sits above the drive envelope — slower move, bigger motor, or a different ratio.</div>}
+                  </>
+                )}
+                <div className="note">T_accel = (Jr + J_load/N²)·α with α = 4θ/T² (triangle); reflected friction is NOT modeled — add it to the load torque when it matters. Evaluated through the same drive-cycle/loss chain as the CSV evaluator (motor frame).</div>
+              </div>
+            );
+          })()}
+
           {!r.err.length && !brkM && (
             <div className="card paper" style={{ marginTop: 14 }}>
               <div className="cardhead">
@@ -3012,6 +3099,8 @@ export default function MotorDesigner() {
                 <Num label="Measured rated torque" unit={us === "in" ? "oz·in" : "N·m"} v={p.calTt} set={s("calTt")} min={0} />
                 <Num label="…at speed" unit="rpm" v={p.calTn} set={s("calTn")} step={100} min={0} />
                 <Num label="Measured stall torque" unit={us === "in" ? "oz·in" : "N·m"} v={p.calTs} set={s("calTs")} min={0} />
+                <Num label="Measured steady ΔT (winding − ambient)" unit="°C" v={p.mDT} set={s("mDT")} step={1} min={0} />
+                <Num label="…at total loss" unit="W" v={p.mPw} set={s("mPw")} step={0.5} min={0} />
                 <div className="iobar" style={{ marginTop: 8 }}>
                   <button className="btn" onClick={captureCal}>Capture factors</button>
                   <Pick label="" v={p.calOn} set={s("calOn")} opts={[{ v: "yes", t: "Active" }, { v: "no", t: "Off" }]} />
@@ -3019,6 +3108,7 @@ export default function MotorDesigner() {
                 {p.calOn === "yes" && r.cal && (
                   <div className="tbl" style={{ marginTop: 6 }}>
                     <div className="kv"><span>Applied factors R · L</span><b>×{fmt(r.cal.kR, 3)} · ×{fmt(r.cal.kL, 3)}</b></div>
+                    {p.calKRth !== 1 && <div className="kv"><span>Thermal Rth (this mount/cooling only)</span><b>×{fmt(p.calKRth, 3)}</b></div>}
                     <div className="kv"><span>Ke (no-load) · Kt (stall)</span><b>×{fmt(r.cal.kKe, 3)} · ×{fmt(r.cal.kKt, 3)}
                       {Math.abs(r.cal.kKt - r.cal.kKe) > 0.02 ? ` (${((r.cal.kKt / r.cal.kKe - 1) * 100).toFixed(1)}% sat droop)` : ""}</b></div>
                     {r.cal.Td > 0 && <div className="kv"><span>Fitted drag (friction/windage)</span><b>−{tqS(r.cal.Td)}</b></div>}
