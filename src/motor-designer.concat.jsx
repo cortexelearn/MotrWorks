@@ -1885,7 +1885,9 @@ function computeDesign(p) {
       for (let it = 0; it < 48; it++) { const mid = (lo + hi) / 2; if (Tof(mid) < Trated) lo = mid; else hi = mid; }
       sr2 = (lo + hi) / 2;
     } else {
-      w.push("Sizing torque exceeds computed breakdown torque — cage too resistive or leakage too high for this rating.");
+      // gated on Xm2: the zero-Xm withdrawal below discards these torques, and a warning
+      // describing numbers that are never published only misleads (v60.6c, Grok LOW)
+      if (Xm2 > 0) w.push("Sizing torque exceeds computed breakdown torque — cage too resistive or leakage too high for this rating.");
       sr2 = sb2 * 0.7;
     }
     for (let i = 0; i <= 110; i++) {
@@ -2904,8 +2906,12 @@ function driveCycle(p, r, samples) {
     trace.push({ t: b9.t, n: nMid, T: tMid, eta: L9.eta, Pcu: L9.Pcu, Pfe: L9.Pfe });
   }
   if (!(tTot > 0)) return { err: "Cycle has zero duration." };
-  const Irms = Math.sqrt(I2t / tTot), Trms = Math.sqrt(T2t / tTot);
-  const PcuMean = Ecu / tTot, PfeMean = Efe / tTot;
+  // v60.6c (Grok LOW): the banner promises unreachable intervals are EXCLUDED from the
+  // I·rms and copper-loss figures — so they leave the averaging denominators too, not
+  // just the integrals (over full tTot they diluted Irms by sqrt(reachable fraction))
+  const tEff = Math.max(tTot - unreach, 1e-9);
+  const Irms = Math.sqrt(I2t / tEff), Trms = Math.sqrt(T2t / tTot);
+  const PcuMean = Ecu / tEff, PfeMean = Efe / tEff;
   // steady winding temperature this cycle implies, through the design's own Rth
   const Rth9 = r.therm && Number.isFinite(r.therm.Rth) ? r.therm.Rth : null;
   const Tcu = Rth9 !== null ? p.Tamb + PcuMean * Rth9 + PfeMean * Math.max(Rth9 * 0.5, 0) : null;
