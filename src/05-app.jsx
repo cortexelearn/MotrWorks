@@ -950,6 +950,12 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
   );
 }
 
+/* ---- physics generation. Bump this whenever a change moves a published number (any
+   golden re-anchor). It is stamped into every exported design so a returned bench file
+   can be traced to the model that produced its prediction, and it is printed on the
+   datasheet so an engineer can say which engine they are quoting. ---- */
+const ENGINE_VER = "61.3b";
+
 /* ---- the canonical default parameter set. Extracted to module scope (v60.5) because
    presets must apply onto THESE defaults, not onto whatever design was loaded before:
    the old `{...current, ...preset}` merge let every key a preset omits leak through —
@@ -1162,6 +1168,7 @@ export default function MotorDesigner() {
   const sheetSub = `MotrWorks design sheet · ${p.slots} slots / ${p.poles} poles · ${p.mag}${p.skew > 0 ? ` · ${p.skew}° skew` : ""}`
     + ` · ${p.statorMat} stator${p.calOn === "yes" ? " · BENCH CALIBRATED" : " · analytical model"}`;
   const sheetFacts = r.err.length ? [["Status", `${r.err.length} error(s) — sheet is not valid`]] : [
+    ["Engine", ENGINE_VER],
     ["Kt", `${fmt(r.Kt, 4)} N·m/A`],
     ["Ke", keS(r.Ke)],
     [p.motorType === "latm" || p.motorType === "brake" ? "R coil (20 °C)"
@@ -1255,7 +1262,13 @@ export default function MotorDesigner() {
   const special = latmM || brkM || stpM;
 
   const exportDesign = () => {
-    const payload = { tool: "motrworks", version: 10, saved: new Date().toISOString(), units: us, design: p };
+    // v61.3c: stamp the PHYSICS generation, not just the file schema. `version` is the
+    // file format; `engine` is which model produced the predictions this design was
+    // calibrated against. Anchors move between generations (brushed Kt −12% and ACIM
+    // breakdown +0.75% at v60.7 alone), so a bench factor captured on one engine does
+    // not mean the same thing on another — without this, a corpus of returned JSONs
+    // cannot be sorted by what it was measured against.
+    const payload = { tool: "motrworks", version: 10, engine: ENGINE_VER, saved: new Date().toISOString(), units: us, design: p };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const el = document.createElement("a");
@@ -1275,7 +1288,7 @@ export default function MotorDesigner() {
     "finGb", "finMot", "finBrk"];
   const exportActuator = () => {
     const sub = {}; ACT_KEYS.forEach((k) => { if (k in p) sub[k] = p[k]; });
-    const payload = { tool: "motrworks", scope: "actuator", version: 10, saved: new Date().toISOString(), units: us, actuator: sub };
+    const payload = { tool: "motrworks", scope: "actuator", version: 10, engine: ENGINE_VER, saved: new Date().toISOString(), units: us, actuator: sub };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const el = document.createElement("a");
