@@ -128,8 +128,14 @@ function LatmSection({ p, r, anim }) {
   const S = 380, cx = S / 2, cy = S / 2;
   const k = (S * 0.42) / (p.statorOD / 2);
   const rCo = (p.statorOD / 2) * k, rCi = (p.statorID / 2) * k;
+  // v60.5: draw the REAL copper build, not a 10 px cap — the engine's buildX (worst-case
+  // crossover stack) governs the ID side, so a coil the numbers say touches the magnets
+  // now LOOKS like it touches the magnets. Capping the drawing hid exactly the
+  // interference this cross-section exists to show.
+  const buildX9 = r && r.latm && Number.isFinite(r.latm.buildX) ? r.latm.buildX : 0;
   const twv = Math.max(p.latmWind, 0.5) * k;
-  const rWo = rCo + Math.min(twv, 10), rWi = Math.max(rCi - Math.min(twv, 10), 8); // winding wrap past both faces
+  const twvIn = Math.max(p.latmWind, buildX9, 0.5) * k;
+  const rWo = rCo + twv, rWi = Math.max(rCi - twvIn, 8); // winding wrap past both faces
   const rRot = (p.rotorOD / 2) * k, rSh = Math.max((p.shaftD / 2) * k, 4);
   const sect = Math.max(Math.round(p.latmSect), 1);
   const spanR = (Math.max(p.latmSpan, 5) * Math.PI) / 180;

@@ -731,7 +731,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
             const g9 = GEAR_PRESETS[v9]; if (!g9) return;
             ["gbType", "gbRatio", "gbStages", "gbOD", "nPlanets"].forEach((k9) => s(k9)(g9[k9]));
           }} opts={["(pick)", ...Object.keys(GEAR_PRESETS)]} />
-          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11", "Q13"]} />
+          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11"]} />
           <Sel label="Gear material / hardness" v={GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF} set={s("gbMat")} opts={Object.keys(GEAR_MATS)} />
           {(() => { const g8 = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF]; return (
             <>
@@ -851,8 +851,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
               Synthesized from gearhead Ø, {gt.agmaQ}, {gt.presAng}° pressure angle, {gt.gbMat} ({gt.sigAllow} MPa allowable){gt.nP && gt.stages[0] && gt.stages[0].Zr ? `, ${gt.nP} planets (ring–sun assembly constraint enforced)` : ""}.
               Backlash: per-mesh allowance reflected through downstream ratios — the output stage dominates.
               Efficiency: mesh sliding (tooth-count dependent) + seal/churning drag; back-drive reverses the
-              torque-proportional losses (η_b ≈ 2 − 1/η_f per stage). Tooth cap is Lewis bending at 380 MPa
-              case-hardened allowable — first-order, verify critical designs against AGMA 2001 or the catalog.
+              torque-proportional losses (η_b ≈ 2 − 1/η_f per stage). Tooth cap is Lewis bending at the
+              selected material's {gt.sigAllow} MPa allowable ({gt.gbMat}) — first-order, verify critical
+              designs against AGMA 2001 or the catalog.
             </div>
           </div>;
         })()}
@@ -2585,8 +2586,9 @@ export default function MotorDesigner() {
                   <div className="note">
                     Midpoint integration over the samples, per-sample losses from the same chain as the map.
                     The implied winding temperature applies the design's own thermal resistance to the cycle-mean
-                    copper loss — a steady-state estimate valid when the cycle is short against the machine's
-                    thermal time constant ({r.therm && Number.isFinite(r.therm.tauM) ? Math.round(r.therm.tauM / 60) : "—"} min).
+                    copper loss, with iron loss coupled at half weight (a first-order split — iron heats the
+                    stack, not the winding directly) — a steady-state estimate valid when the cycle is short
+                    against the machine's thermal time constant ({r.therm && Number.isFinite(r.therm.tauM) ? Math.round(r.therm.tauM / 60) : "—"} min).
                   </div>
                 </>
               )}

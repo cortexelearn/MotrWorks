@@ -26,7 +26,7 @@ function yLewis(Z9, shifted) {
 const KGAMMA = { 2: 1.10, 3: 1.15, 4: 1.25, 5: 1.35, 6: 1.45 };   // planet load-share (no floating sun)
 function kvDyn(vMs, agmaQ9) {                                     // AGMA-style dynamic factor
   if (!(vMs > 0)) return 1;
-  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" ? 11 : agmaQ9 === "Q13" ? 11.5 : 9;
+  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" || agmaQ9 === "Q13" ? 11 : 9; // v60.5: Q13 removed from the picker — this Kv form flattens above Q11, so Q13 changed nothing while looking stronger; legacy saved designs map to Q11
   const B9 = 0.25 * Math.pow(12 - Math.min(Qv, 11), 2 / 3);
   const A9 = 50 + 56 * (1 - B9);
   return Math.pow((A9 + Math.sqrt(200 * vMs)) / A9, B9);
@@ -215,7 +215,11 @@ function designGearTrain(p, act, gODin, gLenIn) {
       s9.limTooth = "pinion";
     }
     const TinAllow = ((WtAllow / Kv9) * share * (PDin / 2000));           // N·m at this stage's input
-    const ToutCap = TinAllow * dsRatio * effF;
+    // v60.5: only losses DOWNSTREAM of this tooth reduce the output torque its stress
+    // allows — multiplying by the whole train eta charged upstream churn to a tooth that
+    // never carries it (conservative, but wrong)
+    const effDown = stages.slice(i9).reduce((a9, s8) => a9 * s8.ef, 1);
+    const ToutCap = TinAllow * dsRatio * effDown;
     if (ToutCap < TmaxOut) { TmaxOut = ToutCap; limStage = s9.i; }
   }
   const selfLock = effB <= 0.02;
@@ -521,6 +525,12 @@ function computeDesign(p) {
     if (p.motorType === "induction") needs.push("freq", "Vll", "rotorBars", "barA", "ringA");
     const bad = needs.filter((k9) => !Number.isFinite(p[k9]));
     if (bad.length) err.push("Non-numeric input: " + bad.join(", ") + " — fix these fields; every downstream number is meaningless until then.");
+    // v60.5 (Codex): finiteness alone let turns = -9 through to a NEGATIVE resistance and
+    // fill with zero errors. Physical quantities must be positive.
+    const pos9 = ["statorOD", "stackL", "turns", "awg", "strands", "paths"].concat(brkE ? [] : ["statorID"]);
+    const npos = pos9.filter((k9) => Number.isFinite(p[k9]) && p[k9] <= 0);
+    if (npos.length) err.push("Non-positive input: " + npos.join(", ") + " — a machine cannot be built from zero or negative " + (npos.length > 1 ? "values" : npos[0]) + ".");
+    if (Number.isFinite(p.awg) && (p.awg < 4 || p.awg > 46)) err.push("Wire gauge " + p.awg + " is outside the AWG 4-46 wire table.");
   }
   if ((p.motorType === "pm" || brushedM || latmE || stpE) && !(p.magT > 0))
     err.push("Magnet thickness must be > 0.");
@@ -1039,7 +1049,11 @@ function computeDesign(p) {
     const kF = (1 / Ain + 1 / Aout) / (2 * mu0b);                     // F = kF·Φ²
     const Ineed = (g, F) => {
       const PhiN = Math.sqrt(F / kF);
-      if (PhiN > Bsat * Amin) return Infinity;                        // saturation-unreachable
+      // v60.5 (Codex CRITICAL): the inverse checked only the BODY saturation limit while
+      // the forward model caps flux at min(body, armature). A thin armature could report
+      // a finite pull-in current for a force the iron cannot carry — a brake specified as
+      // releasable that physically cannot release. Same cap as pullAt, both limits.
+      if (PhiN > Math.min(Bsat * Amin, BsatA * AarmMin)) return Infinity;
       return (PhiN * Rtot(g)) / Ntot;
     };
     // pull-in: must beat the springs at every point of the stroke (worst case governs)
@@ -1493,7 +1507,12 @@ function computeDesign(p) {
   // net of iron/windage drag, so Pin = PoutN + Pfe + Pwind + Pcu·acFr counts each loss once
   const acF9 = latmE || brkE ? 1 : acFr;
   const PoutN = (op ? op.T : 0) * wShaft;
-  const eta = PoutN > 0 ? PoutN / (PoutN + Pcu * acF9 + Pfe + Pwind) : 0;
+  // v60.5: the AC (skin/proximity) factor applies to I2R copper only — the brush CONTACT
+  // drop (brushV*I) has no skin effect and must not be scaled by it
+  const PcuEff = brushedM && brush
+    ? Iph * Iph * brush.Ra * acF9 + Math.max(p.brushV, 0) * Iph
+    : Pcu * acF9;
+  const eta = PoutN > 0 ? PoutN / (PoutN + PcuEff + Pfe + Pwind) : 0;
 
   // ---- backdriven BEMF waveform (PM): harmonic synthesis from pole-arc flux + per-harmonic winding factors ----
   let bemf = null;
@@ -1658,7 +1677,7 @@ function computeDesign(p) {
     const PcuAllow = Math.max((p.TcuMax - p.Tamb - Pfe * RthOut) / RthTot, 0);
     const Vb = Math.max(p.brushV, 0); // solve I²·R + Vb·I = Pallow
     const Icont = (-Vb + Math.sqrt(Vb * Vb + 4 * Math.max(RhMax, 1e-6) * PcuAllow)) / (2 * Math.max(RhMax, 1e-6));
-    const mCu = 8960 * (MLT / 2) * brush.Z * Math.max(p.strands, 1) * aBare * 1e-6;
+    const mCu = 8960 * (MLT / 2) * brush.Z * aBare * 1e-6; // v60.5: Z already counts strands — the extra factor doubled duty-cycle copper mass
     const tauW = mCu * CP_CU * (RthCu + RthGap), tauM = (mCu * CP_CU + coreMass * CP_FE) * RthOut;
     let TcuDuty = null;
     if (duty9 < 1) {
@@ -1672,6 +1691,19 @@ function computeDesign(p) {
       TcuDuty = Td;
     }
     therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+  } else if (brkE && brake) {
+    // v60.5: the brake reported TWO thermal answers — its own pot-core network (TcuB/RthB,
+    // gate-anchored, displayed on the brake card) AND a generic lamination-stack estimate
+    // in therm (109 vs 71 C on the same design). therm now carries the brake's own network
+    // so every surface reports one number.
+    const RextO9 = Math.max(p.Rext, 0) / 1000;
+    const RhMaxB = brake.Rterm20 * (1 + 0.00393 * (p.TcuMax - 20)) + RextO9;
+    const PallowB = Math.max((p.TcuMax - p.Tamb) / Math.max(brake.RthB, 1e-6), 0);
+    const IcontB = Math.sqrt(PallowB / Math.max(RhMaxB, 1e-6));
+    const mCuB = 8960 * brake.wireLen * Math.max(p.strands, 1) * aBare * 1e-6;
+    therm = { Tcu: brake.TcuB, Rth: brake.RthB, Icont: IcontB, Tcont: 0,
+      mCu: mCuB, tauW: mCuB * CP_CU * brake.RthB, tauM: (mCuB * CP_CU + coreMass * CP_FE) * brake.RthB,
+      TcuDuty: null, duty: duty9 };
   } else {
     // v59.6: heat input now matches the Pcu discrimination above — this branch used the
     // 3-phase winding model (3·Iph²·Rphase) for EVERY machine that landed here, including
@@ -2234,7 +2266,7 @@ function lossesAt(p, r, n9, T9) {
     acF = Math.min(1 + ((5 * NlL * NlL - 1) / 45) * Math.pow(r.dBare / delta, 4), 4);
   }
   const Pcu9 = brushedM && r.brush
-    ? (I9 * I9 * r.brush.Ra + Math.max(p.brushV, 0) * I9) * acF
+    ? I9 * I9 * r.brush.Ra * acF + Math.max(p.brushV, 0) * I9   // v60.5: no skin effect on contact drop
     : 3 * I9 * I9 * r.Rhot * acF;
   const Pin = Pout + Pcu9 + Pfe9 + Pw9;
   return { n: n9, T: T9, I: I9, Pout, Pcu: Pcu9, Pfe: Pfe9, Pwind: Pw9, Pin,
