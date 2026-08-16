@@ -968,7 +968,7 @@ const DEFAULT_P = {
     loadMode: "J", Irate: 5, bdRpm: 1800, Tcu: 100, Rext: 20,
     Tamb: 25, cooling: "Open air", TcuMax: 130, Tmin: -40, dutyPct: 100, cycleT: 10, brkEco: 100,
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
-    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2,
+    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2, klOv: 0,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
     agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
@@ -980,7 +980,7 @@ const DEFAULT_P = {
     brkBore: 26, brkPole: 6, brkArm: 6, brkFeScale: 100, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
     brkPktID: 48, brkBossOD: 38, brkPktD: 18, brkBobID: 40.2, brkBobOD: 47, brkBobL: 15,
     stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, stpHubD: 0, stpThruD: 0, latmSect: 4, latmSpan: 60, latmTravel: 45,
-    rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
+    rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum", barH: 0,
     Vll: 400, Vdc: 48, Imax: 40, freq: 50, J: 5.5, Bg: 0.85, seq: "ABC",
 };
 
@@ -2004,6 +2004,7 @@ export default function MotorDesigner() {
                 <Num label="Rotor bars" v={p.rotorBars} set={s("rotorBars")} min={4} />
                 <Sel label="Bar / ring material" v={p.barMat} set={s("barMat")} opts={Object.keys(BARS)} />
                 <Num label="Bar area" unit="mm²" v={p.barA} set={s("barA")} step={5} min={1} />
+                <Num label="Bar depth (0 = auto 3:1)" unit="mm" v={p.barH} set={s("barH")} step={0.5} min={0} />
                 <Num label="End-ring area" unit="mm²" v={p.ringA} set={s("ringA")} step={10} min={1} />
               </>
             )}
@@ -2353,6 +2354,10 @@ export default function MotorDesigner() {
                 <div className="kv"><span>Breakdown torque @ slip {r.acim ? (r.acim.sb * 100).toFixed(1) : "—"}%</span><b>{tqS(r.peakT)}</b></div>
                 <div className="kv"><span>Rated slip (computed)</span><b>{r.acim ? (r.acim.sr * 100).toFixed(2) + "%" : "—"}</b></div>
                 <div className="kv"><span>Locked-rotor torque / current</span><b>{r.acim ? tqS(r.acim.Tlr) + " · " + fmt(r.acim.Ilr, 1) + " A" : "—"}</b></div>
+                {r.acim && Number.isFinite(r.acim.xiLR) && (
+                  <div className="kv"><span>Deep-bar at start (bar {fmt(r.acim.hBar, 1)}×{fmt(r.acim.wBar, 1)} mm{r.acim.barHAuto ? ", est. 3:1" : ""})</span>
+                    <b>ξ {fmt(r.acim.xiLR, 2)} · R×{fmt(r.acim.krLR, 2)} · X×{fmt(r.acim.kxLR, 2)}</b></div>
+                )}
                 <div className="kv"><span>Magnetizing (no-load) current</span><b>{r.acim ? fmt(r.acim.Im, 2) + " A" : "—"}</b></div>
                 <div className="kv"><span>Running current (est)</span><b>{r.acim ? fmt(r.acim.Irun, 2) + " A" : "—"}</b></div>
                 <div className="kv"><span>Rotor R referred R2'</span><b>{r.acim ? fmt(r.acim.R2p, 3) + " Ω" : "—"}</b></div>
@@ -2367,7 +2372,7 @@ export default function MotorDesigner() {
                 ? (p.conn === "wye" && p.vref === "ln"
                   ? "Center-tap (L-N) excitation: each phase limited to ±Vdc/2 about the tap and torque-per-amp halved — half the winding pair works at a time. Flat region = drive current limit."
                   : "Flat region = drive current limit; droop includes both IR and synchronous-reactance (ωLI) drop; the tail above the no-load marker is the FOC field-weakening region (absent for six-step). Dashed = winding V/R capability with no drive clamp.")
-                : "Single-cage Thevenin equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Rotor leakage reactance is a placeholder X2 = 0.8·X1 (not computed from bar geometry), and deep-bar effects (higher apparent R at start) are not modeled — starting torque and breakdown slip carry that approximation."}
+                : "Single-cage Thevenin equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. v60.7: rotor leakage X2 comes from the bar's rectangular-slot permeance (h/3w, bar depth entered or estimated at 3:1 aspect) plus a first-order 0.5 constant for end-ring/differential/zigzag, and deep-bar skin effect scales bar R (up) and bar permeance (down) with slip — locked-rotor torque and current now see the crowded bar. The 0.5 leakage floor and the auto bar aspect are first-order disclosed estimates."}
               {" "}Marker = thermally-rated operating point from J.
             </div>
           </div>}
@@ -2517,6 +2522,33 @@ export default function MotorDesigner() {
                     <div className="kv"><span>vs the magnetic-circuit model (fundamental)</span>
                       <b style={{ color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" }}>
                         {r.B1.toFixed(3)} T analytic · {(field.cmp.dB1 * 100).toFixed(1)}% difference</b></div>
+                    {/* v60.7: field-informed leakage — the kl that reconciles THIS design's circuit
+                        to its own 2-D solve. Adoption is explicit and visible; preset loads clear it
+                        (klOv lives in DEFAULT_P). A geometry closed form was tried and lost to the
+                        field referee across all PM presets — see the engine comment. */}
+                    {r.kl > 0 && field.B1 > 0 && r.B1 > 0 && (() => {
+                      const klEst = Math.min(Math.max(r.kl * (field.B1 / r.B1), 0.5), 1.0);
+                      const adopt = () => {
+                        // iterate: the saturation loop is nonlinear in kl, so one-shot
+                        // scaling under-corrects — three passes land within a fraction of a %
+                        let k9 = klEst;
+                        for (let i9 = 0; i9 < 3; i9++) {
+                          const rT = computeDesign({ ...p, klOv: k9 });
+                          if (!(rT.B1 > 0)) break;
+                          k9 = Math.min(Math.max(k9 * (field.B1 / rT.B1), 0.5), 1.0);
+                        }
+                        setP((o) => ({ ...o, klOv: +k9.toFixed(4) }));
+                      };
+                      return (
+                        <div className="kv"><span>Field-informed leakage kl (active: {r.kl.toFixed(3)}{p.klOv > 0 ? " · adopted" : " · default 0.9"})</span>
+                          <b style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                            {klEst.toFixed(3)}
+                            {p.klOv > 0
+                              ? <button className="btn mini ghost" onClick={() => setP((o) => ({ ...o, klOv: 0 }))}>Revert to 0.9</button>
+                              : <button className="btn mini" onClick={adopt}>Adopt</button>}
+                          </b></div>
+                      );
+                    })()}
                     <div className="kv"><span>Flux per pole (solved)</span><b>{(field.fluxPole * 1000).toFixed(3)} mWb</b></div>
                     <div className="kv"><span>Peak flux density in iron</span>
                       <b>{Math.max(...field.B).toFixed(2)} T</b></div>
@@ -2725,6 +2757,11 @@ export default function MotorDesigner() {
                 <div className="kv"><span>Ra @20 °C (winding only)</span><b>{fmt((r.brush.Ra - Math.max(p.Rext, 0) / 1000) / (1 + 0.00393 * (p.Tcu - 20)), 3)} Ω</b></div>
                 <div className="kv"><span>La armature (est)</span><b>{indS(r.brush.La)}</b></div>
                 <div className="kv"><span>Elec. time const La/Ra</span><b>{fmt((r.brush.La / Math.max(r.brush.Ra, 1e-6)) * 1000, 2)} ms</b></div>
+                {Number.isFinite(r.brush.erMax) && (
+                  <div className="kv"><span>Commutation reactance voltage (rated / worst on curve)</span>
+                    <b style={{ color: r.brush.erMax > 3 ? "#DC2626" : r.brush.erMax > 2.5 ? "#B45309" : undefined }}>
+                      {fmt(r.brush.er, 2)} / {fmt(r.brush.erMax, 2)} V{r.brush.erMax > 0 ? ` @ ~${Math.round(r.brush.nErMax)} rpm` : ""} (arc limit ~3 V)</b></div>
+                )}
                 <div className="kv"><span>Rated armature current</span><b>{fmt(r.Iph)} A</b></div>
                 <div className="kv"><span>Implied copper J (per path)</span><b>{fmt(r.Jimp, 1)} A/mm²</b></div>
                 <div className="kv"><span>Stall current (V−Vb)/Ra</span><b>{fmt(r.VphAvail / Math.max(r.brush.Ra, 1e-6), 1)} A</b></div>

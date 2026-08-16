@@ -48,7 +48,10 @@ chk("slot depth hs mm", r.hs, 3, 8);
 console.log("  w1(surface)", +r.w1.toPrecision(4), "> w2(bottom)", +r.w2.toPrecision(4), r.w1 > r.w2 ? "✓ taper correct" : "✗ TAPER WRONG");
 if (!(r.w1 > r.w2)) process.exitCode = 1;
 // brushed outputs
-chk("Bg avg T", r.BgAvg, 0.3, 0.9);
+// v60.7: brushed now runs the same nonlinear-steel (Hof) loop as PM — this 540-class
+// ferrite fixture's thin housing/core chokes the linear 0.3+ down to ~0.20 T, which is
+// where real ferrite 540 gaps actually sit (0.2-0.25 T). Bound widened accordingly.
+chk("Bg avg T", r.BgAvg, 0.18, 0.9);
 chk("Kt N·m/A", r.Kt, 0.003, 0.05);       // 540-class: ~5-15 mN·m/A
 chk("Ra ohm", r.brush.Ra, 0.05, 3);
 chk("La H", r.brush.La, 1e-6, 5e-3);

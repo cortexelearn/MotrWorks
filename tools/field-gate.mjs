@@ -148,5 +148,29 @@ console.log('Error handling');
   ok(!!M.fieldStudy(pBad, M.computeDesign(pBad), {}).err, 'errored design returns err');
 }
 
+// 10. v60.7 field-informed leakage: the default must stay the disclosed 0.9, and
+//     adopting the kl the field card derives (with the same 3-pass refinement the UI
+//     runs) must reconcile the circuit fundamental to the solve it came from.
+console.log('Field-informed leakage');
+{
+  const p = { ...base, slotR: 0, ...M.PRESETS['NEMA 17 · 28 V · ~6 krpm'] };
+  const r = M.computeDesign(p);
+  ok(r.kl === 0.9, 'default leakage is the disclosed 0.9', `r.kl ${r.kl}`);
+  const F = M.fieldStudy(p, r, { nr: 44, nth: 240, quick: true });
+  let klF = Math.min(Math.max(r.kl * (F.B1 / r.B1), 0.5), 1.0);
+  for (let i = 0; i < 3; i++) {
+    const rT = M.computeDesign({ ...p, klOv: klF });
+    klF = Math.min(Math.max(klF * (F.B1 / rT.B1), 0.5), 1.0);
+  }
+  const r2 = M.computeDesign({ ...p, klOv: +klF.toFixed(4) });
+  const d2 = Math.abs(r2.B1 - F.B1) / F.B1;
+  ok(d2 < 0.01, 'adopted field kl reconciles circuit B1 to the solve',
+    `kl ${klF.toFixed(4)}: ${r2.B1.toFixed(4)} vs ${F.B1.toFixed(4)} T (${(d2 * 100).toFixed(2)}%)`);
+  ok(r2.Kt !== r.Kt && r2.kl !== 0.9, 'adoption actually moves the circuit (Kt, kl)',
+    `Kt ${r.Kt.toFixed(4)} -> ${r2.Kt.toFixed(4)}`);
+  const r3 = M.computeDesign({ ...p, klOv: 0 });
+  ok(Math.abs(r3.Kt - r.Kt) < 1e-12, 'revert (klOv=0) restores the default exactly');
+}
+
 console.log(fail ? 'FIELD GATE: FAIL' : 'FIELD GATE: PASS');
 process.exit(fail ? 1 : 0);

@@ -41,12 +41,24 @@ const GOLD = [
   // subtracted from the curve, so no-load sits where EM torque just covers drag instead of
   // the pure V/Ke intercept. Ferrite 2-pole at 7 krpm: 7025.1 -> 6937.3 (-1.25%). The PM
   // rows moved less than the 91-point curve grid and keep their anchors.
-  { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.014681, noLoad: 6937.3, Rll: 1.0409 } },
+  // v60.7 re-anchor — brushed joins the nonlinear-steel loop (armature teeth + core +
+  // housing wall via Hof, with the magnetic shaft carrying its 2/poles share of the
+  // center-disc section) and the Kt·I·sat(I) torque law. The 2-pole ferrite's housing
+  // runs ~1.5 T: Bg 0.29 -> 0.254 (ksat 0.877), Kt 0.014681 -> 0.012881 (-12.3%),
+  // noLoad 6937.3 -> 7906.5 (+14%). The new Kt sits in the measured RS-380-class band
+  // (11-13 mN·m/A at 12 V). ANALYTICAL ONLY — replace with bench Kt when a unit from
+  // the calibration collection is characterised.
+  { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.012881, noLoad: 7906.5, Rll: 1.0409 } },
   // v60.5 re-anchor — ACIM torque uses the Thevenin equivalent (the series form never
   // used the magnetizing branch it computed; Xm changed 40% while breakdown moved 0.05%).
   // Vth < Vph drops breakdown 4.2091 -> 3.6579 (-13.1%). ANALYTICAL ONLY — the standing
   // note applies: replace with a measured breakdown when a cage is characterised.
-  { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 3.6579 } },
+  // v60.7 re-anchor — deep-bar R2(s) + slot-permeance X2 replace the 0.8·X1 placeholder:
+  // breakdown 3.6579 -> 3.6853 (+0.75%). At 400 Hz the locked-rotor bar runs xi=1.73
+  // (R x1.59, X x0.83) — starting torque/current now see the crowded bar. ANALYTICAL
+  // ONLY — the standing note applies: replace with a measured breakdown when a cage is
+  // characterised.
+  { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 3.6853 } },
   // v60.5 re-anchor — Rll for stepper/brake/LATM now reports the REAL coil at 20 C
   // (copper-only, same basis as pm) instead of the phantom 3-phase MLT formula those
   // machines never had. Stepper: per-phase Rs20 3.5496 (was certifying 3.075 of a

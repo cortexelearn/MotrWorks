@@ -1231,6 +1231,7 @@ function activeAssumptions(p) {
     if (p.calOn !== "yes") A.push({ t: "No bench calibration active", r: "curves are the pure analytical model; capture kR/kL/kKe/kKt + drag on the bench to compensate" });
     A.push({ t: "Iron loss model", r: "two-term (hysteresis + eddy) fit to lamination data at the electrical frequency; PWM harmonic loss not modeled" });
     if (t9 === "pm") A.push({ t: "Saturation under load (kIT)", r: "applies the full q-axis armature MMF to the d-axis magnet circuit — conservative cross-saturation mixing; validate with a loaded FEMM solve" });
+    if (t9 === "pm") A.push({ t: "Magnet leakage factor", r: (p.klOv > 0 ? `field-informed kl = ${(+p.klOv).toFixed(3)}, adopted from this design's own 2-D solve (revert on the field card)` : "fixed 0.9 first-order default — run the field solve and adopt the design-specific value it derives") });
   }
   if (t9 === "bobbin") {
     if (!(p.wbHead > 0)) A.push({ t: "Coil head per end", r: (p.wbStyle || "tooth") === "lap" ? "auto: 1.25 × throw arc at mean slot Ø (diamond head)" : "auto: tooth width + 0.8·mean slot width + 3 mm bends" });

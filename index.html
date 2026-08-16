@@ -18448,22 +18448,76 @@ function computeDesign(p) {
         return Math.min(Math.max(tauSl / (tauSl - gam * g9), 1), 1.9);
     };
     let kcGap = 1.05; // legacy default for branches without a slotted gap model
-    let BgEff = p.Bg, BgAvg = 0, B1 = 0, geSat = 0, ksat = 1, satAux = null;
+    let BgEff = p.Bg, BgAvg = 0, B1 = 0, geSat = 0, ksat = 1, satAux = null, klOut = null;
     if (brushedM) {
-        // housing-mounted magnet ring, same leakage/Carter first-order circuit as the PM branch
+        // housing-mounted magnet ring, same leakage/Carter first-order circuit as the PM
+        // branch. Leakage stays the fixed disclosed 0.9 — the 2-D solver refuses brushed
+        // (inside-out) topology, so there is no field referee to inform a better value.
         kcGap = carterK(tauS, airgap + p.magT / mag.mur, p.slotOpen);
+        klOut = 0.9;
         BgAvg = airgap > 0 ? (0.9 * BrT * p.magT) / (p.magT + mag.mur * kcGap * airgap) : 0;
+        // v60.7: brushed gets the SAME nonlinear-steel iteration the PM branch has had since
+        // v60 — armature tooth + armature core + housing-wall MMF drops fold back as an
+        // equivalent added gap (Froelich Hof). The linear formula silently over-promised Bg
+        // on saturated armatures; the PM/brushed asymmetry was a known first-order lie.
+        if (BgAvg > 0) {
+            const mu0B = 4e-7 * Math.PI;
+            const Bg0B = BgAvg;
+            const ltB = Math.max(hs + p.tipH, 0.5) / 1000; // armature tooth radial path
+            const lysB = tauP / 2 / 1000; // armature core path per pole
+            // armature core section: on a 2-pole machine the return flux crosses the CENTER
+            // disc, and the (magnetic steel) shaft carries its share of that section — core
+            // depth alone chokes the model to a Bg no bench motor shows. Shaft contribution
+            // scales as 2/poles (full radius for 2-pole, fading as flux stays near the rim).
+            const yokeB = p.yoke + ((2 / poles) * p.shaftD) / 2;
+            const hyrB = Math.max((p.statorOD - p.statorID) / 2 - p.magT, 0.5); // housing wall behind magnets
+            const lyrB = (Math.PI * p.statorID) / poles / 2 / 1000;
+            satAux = (Fext) => {
+                // converge to tolerance — a fixed 14 damped steps under-relaxes deep collapses
+                // (a choked housing can pull Bg 50%+) and left satOfI ratios > 1 from unequal
+                // truncation between the Fext = 0 and loaded evaluations
+                let Bg2 = Bg0B;
+                for (let it2 = 0; it2 < 200; it2++) {
+                    const Bt2 = (Bg2 * tauS) / (p.toothW * stM.kst);
+                    const By2 = (Bg2 * tauP) / (2 * yokeB * stM.kst);
+                    const Byh2 = ((Bg2 * (Math.PI * p.statorID)) / poles) / (2 * hyrB * rtM.kst);
+                    const F = 2 * Hof(Bt2, stM) * ltB + Hof(By2, stM) * lysB + Hof(Byh2, rtM) * lyrB + Fext;
+                    const geMM = ((mu0B * F) / Math.max(Bg2, 1e-3)) * 1000;
+                    const BgN = (0.9 * BrT * p.magT) / (p.magT + mag.mur * (kcGap * airgap + geMM));
+                    const Bg3 = 0.5 * Bg2 + 0.5 * BgN;
+                    const done = Math.abs(Bg3 - Bg2) < 1e-6;
+                    Bg2 = Bg3;
+                    if (Fext === 0)
+                        geSat = geMM;
+                    if (done && it2 > 4)
+                        break;
+                }
+                return Bg2;
+            };
+            BgAvg = satAux(0);
+            ksat = BgAvg / Bg0B;
+        }
         B1 = (4 / Math.PI) * BgAvg * Math.sin(((p.poleArc / 100) * Math.PI) / 2);
         BgEff = B1;
         if (p.Top > mag.Tmax)
             w.push(`Operating temp ${p.Top} °C exceeds ${p.mag} max working temp (${mag.Tmax} °C) — irreversible loss risk.`);
     }
     else if (p.motorType === "pm") {
-        const kLeak = 0.9;
+        // v60.7: magnet leakage. A geometry-based closed form (edge-arc leakage permeance vs
+        // gap permeance, Qu/Lipo-style) was fitted against the in-app 2-D field solve across
+        // all 13 PM presets and LOST to the fixed factor (mean |dB1| 20% vs 5%) — the
+        // preset-to-preset residuals have heterogeneous causes (slotting on tiny-gap designs,
+        // saturation split on big frames), not a single leakage law. The default therefore
+        // stays the DISCLOSED 0.9, and the honest refinement is field-informed: the field
+        // card derives the kl that reconciles this design's circuit to its own 2-D solve,
+        // and adopting it is an explicit user action (p.klOv > 0), cleared by preset loads.
+        const kLeak = p.klOv > 0 ? Math.min(Math.max(p.klOv, 0.5), 1.0) : 0.9;
+        klOut = kLeak;
         kcGap = carterK(tauS, airgap + p.magT / mag.mur, p.slotOpen);
         BgAvg = airgap > 0
             ? (kLeak * BrT * p.magT) / (p.magT + mag.mur * kcGap * airgap)
             : 0;
+        const kLeak9 = kLeak; // captured for the saturation iteration below
         // nonlinear steel: iterate tooth/yoke MMF drops as an equivalent added gap
         if (BgAvg > 0) {
             const mu0 = 4e-7 * Math.PI;
@@ -18480,7 +18534,9 @@ function computeDesign(p) {
                     const Byr2 = ((Bg2 * (Math.PI * p.rotorOD)) / poles) / (2 * hyr2 * rtM.kst);
                     const F = 2 * Hof(Bt2, stM) * lt2 + Hof(By2, stM) * lys + Hof(Byr2, rtM) * lyr + Fext;
                     const geMM = ((mu0 * F) / Math.max(Bg2, 1e-3)) * 1000;
-                    const BgN = (0.9 * BrT * p.magT) / (p.magT + mag.mur * (kcGap * airgap + geMM));
+                    // v60.7: uses the SAME leakage factor as the linear solution — the hardcoded
+                    // 0.9 here would have silently ignored an adopted field-informed kl
+                    const BgN = (kLeak9 * BrT * p.magT) / (p.magT + mag.mur * (kcGap * airgap + geMM));
                     Bg2 = 0.6 * Bg2 + 0.4 * BgN;
                     if (Fext === 0)
                         geSat = geMM;
@@ -18500,7 +18556,9 @@ function computeDesign(p) {
         kcGap = carterK(tauS, airgap, p.slotOpen);
     const Bavg = p.motorType === "pm" || brushedM ? BgAvg : (2 / Math.PI) * p.Bg; // average gap density over a pole
     const Bt = (Bavg * tauS) / (p.toothW * stM.kst); // tooth flux density (brushed: armature teeth)
-    const By = (Bavg * tauP) / (2 * p.yoke * stM.kst); // back-iron (brushed: armature core over the shaft)
+    // back-iron (brushed: armature core over the shaft — v60.7: the magnetic shaft carries
+    // its 2/poles share of the center-disc section, same basis as the saturation loop)
+    const By = (Bavg * tauP) / (2 * (brushedM ? p.yoke + ((2 / poles) * p.shaftD) / 2 : p.yoke) * stM.kst);
     // return-path web: PM = rotor hub between magnets & shaft; brushed = housing wall behind the magnet ring
     const hyr = brushedM ? (p.statorOD - p.statorID) / 2 - p.magT
         : p.motorType === "pm" ? p.rotorOD / 2 - p.magT - p.shaftD / 2 : p.rotorOD / 2 - p.shaftD / 2;
@@ -18586,8 +18644,12 @@ function computeDesign(p) {
     // torque is Kt·I·satOfI(I) everywhere, and the dense satCurve below is what views and
     // lossesAt interpolate so every screen agrees on amps for a given N·m.
     let kIT = 1, satCurve = null, satOfI = (I9) => 1;
-    if (p.motorType === "pm" && satAux && BgAvg > 0 && p.Imax > 0) {
-        const FaOf = (I9) => (1.35 * kw * Nser * Math.SQRT2 * I9) / (poles / 2);
+    if ((p.motorType === "pm" || brushedM) && satAux && BgAvg > 0 && p.Imax > 0) {
+        // v60.7: brushed joins the saturation law. Its armature-reaction MMF per pole is the
+        // peak of the triangular armature wave: F = Z·I_coil/(2·poles) with I_coil = I/paths.
+        const FaOf = brushedM
+            ? (I9) => (condPerSlot * Ns * Math.max(I9, 0)) / (pathsEff * 2 * poles)
+            : (I9) => (1.35 * kw * Nser * Math.SQRT2 * I9) / (poles / 2);
         satOfI = (I9) => Math.min(satAux(FaOf(Math.max(I9, 0))) / BgAvg, 1);
         kIT = satOfI(p.Imax);
         satCurve = Array.from({ length: 25 }, (_, i9) => {
@@ -18994,14 +19056,21 @@ function computeDesign(p) {
         if (Kt > 0 && Ra > 0) {
             const wNL = VphAvail / Kt;
             noLoad = (wNL * 60) / (2 * Math.PI);
-            peakT = KtT9 * Math.min(p.Imax, VphAvail / Ra);
-            TstallW = KtT9 * (VphAvail / Ra);
+            // v60.7: brushed torque follows the same saturation law as PM — Kt·I·sat(I).
+            // The armature-reaction MMF knockdown (satOfI, built from this machine's own
+            // Hof loop) applied to PM only since v60.5; brushed stall torque was linear.
+            const IpkB = Math.min(p.Imax, VphAvail / Ra);
+            peakT = KtT9 * IpkB * satOfI(IpkB);
+            const IstB = VphAvail / Ra;
+            TstallW = KtT9 * IstB * satOfI(IstB);
             baseN = ((Math.max(VphAvail - p.Imax * Ra, 0) / Kt) * 60) / (2 * Math.PI);
             for (let i = 0; i <= 80; i++) {
                 const wm = (wNL * i) / 80;
-                curve.push({ n: (wm * 60) / (2 * Math.PI), T: KtT9 * Math.min(Math.max((VphAvail - Kt * wm) / Ra, 0), p.Imax) });
+                const IwB = Math.min(Math.max((VphAvail - Kt * wm) / Ra, 0), p.Imax);
+                curve.push({ n: (wm * 60) / (2 * Math.PI), T: KtT9 * IwB * satOfI(IwB) });
             }
-            op = { n: ((Math.max(VphAvail - Iph * Ra, 0) / Kt) * 60) / (2 * Math.PI), T: KtT9 * Math.min(Iph, p.Imax) };
+            const IopB = Math.min(Iph, p.Imax);
+            op = { n: ((Math.max(VphAvail - Iph * Ra, 0) / Kt) * 60) / (2 * Math.PI), T: KtT9 * IopB * satOfI(IopB) };
         }
         // armature-reaction demag at the current limit: cross-field A·t per pole across magnet + gap
         if (airgap > 0 && p.magT > 0) {
@@ -19011,7 +19080,30 @@ function computeDesign(p) {
             if (demagMargin < 0.3)
                 w.push(`Demag margin ${(demagMargin * 100).toFixed(0)}% at ${p.Imax} A (armature reaction) — worst case at ${demagT} °C (HcJ ${HcJmin.toFixed(0)} kA/m). Thicken magnets or pick a higher-HcJ grade.`);
         }
-        brush = { Ra, La, Vb: p.brushV, Z, A2, segs: Ns, Bg: BgAvg }; // double-layer lap/wave: commutator bars = coils = slots
+        // v60.7: commutation reactance-voltage check. The commutated coil reverses its
+        // current (di = 2·Ia/A2) inside the brush transit window (~1.5 segment pitches);
+        // e_r = L_coil·di/dt with L_coil = La·A2²/C recovered from the terminal inductance
+        // (C coils, A2 paths → La = C·L_coil/A2²). Classical no-interpole limit ≈ 2.5–3 V
+        // before brush arcing dominates (small PM machines have no compensating winding).
+        const Ccoils = Ns; // double-layer: coils = bars = slots
+        const erAt = (n9, Ia9) => Ccoils > 0 && n9 > 0
+            ? ((La * A2 * A2) / Ccoils) * ((2 * Ia9) / A2) * ((n9 * Ccoils) / (1.5 * 60))
+            : 0;
+        let erMax = 0, nErMax = 0;
+        for (const c9 of curve) {
+            const Ia9 = KtT9 > 0 ? Math.min(Math.max((VphAvail - Kt * ((c9.n * 2 * Math.PI) / 60)) / Ra, 0), p.Imax) : 0;
+            const e9 = erAt(c9.n, Ia9);
+            if (e9 > erMax) {
+                erMax = e9;
+                nErMax = c9.n;
+            }
+        }
+        const erOp = op ? erAt(op.n, Math.min(Iph, p.Imax)) : 0;
+        if (erMax > 3)
+            w.push(`Commutation reactance voltage peaks at ${erMax.toFixed(1)} V (~${Math.round(nErMax)} rpm) — well past the ~3 V arcing threshold for machines without interpoles: expect brush fire, EMI, and rapid wear. Fewer turns per coil, more segments, or a lower bus.`);
+        else if (erMax > 2.5)
+            w.push(`Commutation reactance voltage reaches ${erMax.toFixed(1)} V (~${Math.round(nErMax)} rpm) — at the classical ~2.5–3 V no-interpole limit; expect visible sparking at load.`);
+        brush = { Ra, La, Vb: p.brushV, Z, A2, segs: Ns, Bg: BgAvg, er: erOp, erMax, nErMax }; // double-layer lap/wave: commutator bars = coils = slots
         if (poles > Ns)
             w.push("Armature slots fewer than poles — commutation will be poor; add slots.");
         if (p.pattern === "wave") {
@@ -19177,28 +19269,72 @@ function computeDesign(p) {
         const Dring = (p.rotorOD * 0.85) / 1000; // mean end-ring diameter
         const Rseg = (rhoBar * ((Math.PI * Dring) / Nb)) / Math.max(p.ringA * 1e-6, 1e-9);
         const pp2 = poles / 2;
-        const R2bar = Rbar + Rseg / (2 * Math.pow(Math.sin((Math.PI * pp2) / Nb), 2));
-        const R2p = R2bar * ((4 * 3 * Math.pow(kw * Nser, 2)) / Nb); // referred to stator
+        const Rring2 = Rseg / (2 * Math.pow(Math.sin((Math.PI * pp2) / Nb), 2));
+        const referral = (4 * 3 * Math.pow(kw * Nser, 2)) / Nb; // per-bar quantity → stator per-phase
+        const R2p = (Rbar + Rring2) * referral; // DC (low-slip) referred rotor resistance
         const we2 = 2 * Math.PI * p.freq;
-        const X1 = we2 * (Lslot + Lend), X2 = 0.8 * X1, Xt = X1 + X2, Xm2 = we2 * Lmag;
+        const X1 = we2 * (Lslot + Lend), Xm2 = we2 * Lmag;
         const R1 = Rhot;
+        // v60.7: deep-bar R2(s) + geometric rotor leakage replace the X2 = 0.8·X1 placeholder.
+        // Bar depth: p.barH input, else estimated from bar area at a 3:1 depth/width aspect
+        // (typical die-cast bar) — disclosed in-card. Rectangular-bar skin-effect factors at
+        // slip frequency (Alger/Boldea): xi = h·sqrt(π·f·s·μ0/ρ),
+        //   kr = xi(sinh2xi+sin2xi)/(cosh2xi−cos2xi)   (bar resistance rises at start)
+        //   kx = (3/2xi)(sinh2xi−sin2xi)/(cosh2xi−cos2xi) (bar slot permeance falls)
+        // kr applies to the BAR only (end ring carries no slot field); rotor leakage is the
+        // rectangular-slot permeance h/3w on the bar plus a first-order 0.5 constant for
+        // end-ring + differential + zigzag (disclosed).
+        const hBar = p.barH > 0 ? p.barH : Math.sqrt(3 * Math.max(p.barA, 1e-6));
+        const wBar = Math.max(p.barA / Math.max(hBar, 1e-6), 0.05);
+        const mu0b = 4e-7 * Math.PI;
+        const dbF = (s2) => {
+            const xi = (hBar / 1000) * Math.sqrt((Math.PI * p.freq * Math.max(s2, 1e-4) * mu0b) / rhoBar);
+            if (xi < 0.15)
+                return { kr: 1, kx: 1, xi };
+            const sh = Math.sinh(2 * xi), ch = Math.cosh(2 * xi), sn = Math.sin(2 * xi), cs = Math.cos(2 * xi);
+            return { kr: (xi * (sh + sn)) / (ch - cs), kx: (3 / (2 * xi)) * ((sh - sn) / (ch - cs)), xi };
+        };
+        const R2pOf = (s2) => (Rbar * dbF(s2).kr + Rring2) * referral;
+        const L2ref = mu0b * ((p.stackL * skewSlant) / 1000) * referral;
+        const X2Of = (s2) => we2 * L2ref * ((hBar / (3 * wBar)) * dbF(s2).kx + 0.5);
         // v60.5 (Codex HIGH): the torque expression was a SERIES circuit that never used the
-        // magnetizing branch it computed — Xm changed 40% while breakdown torque moved 0.05%.
-        // Standard single-cage treatment: Thevenin-reduce the stator (R1 + jX1 in series with
-        // the source, jXm in parallel) and drive the rotor branch from Vth/Zth. All currents
-        // below come from the SAME circuit. Deep-bar R2(s) and a real X2 remain future work
-        // (X2 = 0.8·X1 is still a placeholder, disclosed).
+        // magnetizing branch it computed. Standard single-cage treatment: Thevenin-reduce the
+        // stator (R1 + jX1 in series with the source, jXm in parallel) and drive the rotor
+        // branch from Vth/Zth. All currents below come from the SAME circuit.
         const Dth = R1 * R1 + Math.pow(X1 + Xm2, 2);
         const Vth = Xm2 > 0 ? (Vph * Xm2) / Math.sqrt(Dth) : Vph;
         const Rth = Xm2 > 0 ? (R1 * Xm2 * Xm2) / Dth : R1;
         const Xth = Xm2 > 0 ? (Xm2 * (R1 * R1 + X1 * (X1 + Xm2))) / Dth : X1;
-        const Tof = (s2) => (3 * Vth * Vth * (R2p / s2)) / (wSync * (Math.pow(Rth + R2p / s2, 2) + Math.pow(Xth + X2, 2)));
-        const sb2 = R2p / Math.sqrt(Rth * Rth + Math.pow(Xth + X2, 2));
-        // full-circuit stator current at slip s: Z = R1+jX1 + jXm || (R2p/s + jX2)
+        const Tof = (s2) => {
+            const R2s = R2pOf(s2), X2s = X2Of(s2);
+            return (3 * Vth * Vth * (R2s / s2)) / (wSync * (Math.pow(Rth + R2s / s2, 2) + Math.pow(Xth + X2s, 2)));
+        };
+        // breakdown slip: with slip-dependent R2/X2 the closed form no longer holds —
+        // log-space scan then a fine local refine (Tof is smooth and single-peaked)
+        let sb2 = 0.05, Tb9 = 0;
+        for (let i9 = 0; i9 <= 90; i9++) {
+            const s9 = Math.exp(Math.log(0.002) + ((Math.log(1) - Math.log(0.002)) * i9) / 90);
+            const T9 = Tof(s9);
+            if (T9 > Tb9) {
+                Tb9 = T9;
+                sb2 = s9;
+            }
+        }
+        for (let i9 = -20; i9 <= 20; i9++) {
+            const s9 = sb2 * (1 + i9 / 100);
+            if (s9 <= 0 || s9 > 1)
+                continue;
+            const T9 = Tof(s9);
+            if (T9 > Tb9) {
+                Tb9 = T9;
+                sb2 = s9;
+            }
+        }
+        // full-circuit stator current at slip s: Z = R1+jX1 + jXm || (R2(s)/s + jX2(s))
         const IstatAt = (s2) => {
+            const a9 = R2pOf(s2) / s2, b9 = X2Of(s2); // rotor branch
             if (!(Xm2 > 0))
-                return Vph / Math.hypot(R1 + R2p / s2, Xt);
-            const a9 = R2p / s2, b9 = X2; // rotor branch
+                return Vph / Math.hypot(R1 + a9, X1 + b9);
             // jXm || (a+jb) = Xm(-b·a + j(...)) — do it with explicit complex arithmetic
             const num = { re: -Xm2 * b9, im: Xm2 * a9 }; // jXm·(a+jb) = -Xm·b + j·Xm·a
             const den = { re: a9, im: b9 + Xm2 };
@@ -19207,7 +19343,7 @@ function computeDesign(p) {
             const zi = (num.im * den.re - num.re * den.im) / dmag;
             return Vph / Math.hypot(R1 + zr, X1 + zi);
         };
-        peakT = Tof(sb2);
+        peakT = Tb9;
         let sr2 = Math.min(sb2 * 0.5, 0.03);
         if (Trated < peakT * 0.98) {
             let lo = 1e-4, hi = sb2;
@@ -19233,12 +19369,15 @@ function computeDesign(p) {
         }
         op = { n: nSync * (1 - sr2), T: Tof(sr2) };
         // rotor and magnetizing currents from the Thevenin/full circuit (one circuit, v60.5)
-        const I2r = Vth / Math.hypot(Rth + R2p / sr2, Xth + X2);
+        const I2r = Vth / Math.hypot(Rth + R2pOf(sr2) / sr2, Xth + X2Of(sr2));
         const Im2 = Xm2 > 0 ? Vph / Math.hypot(R1, X1 + Xm2) : 0; // magnetizing current with the rotor branch open (s->0)
+        const dbLR = dbF(1); // deep-bar state at locked rotor, for the card
         acim = {
             R2p, sr: sr2, sb: sb2, Tlr: Tof(1),
             Ilr: IstatAt(1), // locked-rotor stator current, full circuit
             Im: Im2, Irun: IstatAt(sr2), // running stator current, full circuit
+            X2run: X2Of(sr2), X2lr: X2Of(1), R2lr: R2pOf(1), // v60.7 deep-bar circuit values
+            hBar, wBar, barHAuto: !(p.barH > 0), xiLR: dbLR.xi, krLR: dbLR.kr, kxLR: dbLR.kx,
         };
         // v60.6 (Grok HIGH): the loss/thermal chain ran on the J-derived winding current while
         // the card printed the honest circuit current beside it (26 A next to a 9 W copper
@@ -19648,7 +19787,7 @@ function computeDesign(p) {
         Nser, MLT, Rphase: RphOut, Rll: RllOut, Iph, Iline: IlineOut, Istall, Vph, Arms,
         Trated, nSync, nShaft, Pout: PoutN, Pcu, eta, Eph, Ke, Kt, VphAvail,
         rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
-        mag, BrT, HcJT, HcJmin, demagT, kcGap, BgAvg, B1, BgEff, Hdemag, demagMargin,
+        mag, BrT, HcJT, HcJmin, demagT, kcGap, kl: klOut, BgAvg, B1, BgEff, Hdemag, demagMargin,
         cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
         MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
         stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog,
@@ -22106,6 +22245,8 @@ function activeAssumptions(p) {
         A.push({ t: "Iron loss model", r: "two-term (hysteresis + eddy) fit to lamination data at the electrical frequency; PWM harmonic loss not modeled" });
         if (t9 === "pm")
             A.push({ t: "Saturation under load (kIT)", r: "applies the full q-axis armature MMF to the d-axis magnet circuit — conservative cross-saturation mixing; validate with a loaded FEMM solve" });
+        if (t9 === "pm")
+            A.push({ t: "Magnet leakage factor", r: (p.klOv > 0 ? `field-informed kl = ${(+p.klOv).toFixed(3)}, adopted from this design's own 2-D solve (revert on the field card)` : "fixed 0.9 first-order default — run the field solve and adopt the design-specific value it derives") });
     }
     if (t9 === "bobbin") {
         if (!(p.wbHead > 0))
@@ -25296,7 +25437,7 @@ const DEFAULT_P = {
     loadMode: "J", Irate: 5, bdRpm: 1800, Tcu: 100, Rext: 20,
     Tamb: 25, cooling: "Open air", TcuMax: 130, Tmin: -40, dutyPct: 100, cycleT: 10, brkEco: 100,
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
-    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2,
+    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2, klOv: 0,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
     agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
@@ -25308,7 +25449,7 @@ const DEFAULT_P = {
     brkBore: 26, brkPole: 6, brkArm: 6, brkFeScale: 100, brkK: 40, brkSpringN: 6, brkRo: 27, brkRi: 18, brkMat: "Organic (resin-bonded)",
     brkPktID: 48, brkBossOD: 38, brkPktD: 18, brkBobID: 40.2, brkBobOD: 47, brkBobL: 15,
     stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, stpHubD: 0, stpThruD: 0, latmSect: 4, latmSpan: 60, latmTravel: 45,
-    rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
+    rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum", barH: 0,
     Vll: 400, Vdc: 48, Imax: 40, freq: 50, J: 5.5, Bg: 0.85, seq: "ABC",
 };
 function MotorDesigner() {
@@ -26388,6 +26529,7 @@ function MotorDesigner() {
                                 React.createElement(Num, { label: "Rotor bars", v: p.rotorBars, set: s("rotorBars"), min: 4 }),
                                 React.createElement(Sel, { label: "Bar / ring material", v: p.barMat, set: s("barMat"), opts: Object.keys(BARS) }),
                                 React.createElement(Num, { label: "Bar area", unit: "mm\u00B2", v: p.barA, set: s("barA"), step: 5, min: 1 }),
+                                React.createElement(Num, { label: "Bar depth (0 = auto 3:1)", unit: "mm", v: p.barH, set: s("barH"), step: 0.5, min: 0 }),
                                 React.createElement(Num, { label: "End-ring area", unit: "mm\u00B2", v: p.ringA, set: s("ringA"), step: 10, min: 1 }))),
                             React.createElement(Num, { label: "Winding temp", unit: "\u00B0C", v: p.Tcu, set: s("Tcu"), step: 10 }),
                             React.createElement(Num, { label: brM || latmM || brkM ? "Drive + lead R" : "Drive + lead R / phase", unit: "m\u03A9", v: p.Rext, set: s("Rext"), step: 5, min: 0 }),
@@ -26767,6 +26909,22 @@ function MotorDesigner() {
                                     React.createElement("div", { className: "kv" },
                                         React.createElement("span", null, "Locked-rotor torque / current"),
                                         React.createElement("b", null, r.acim ? tqS(r.acim.Tlr) + " · " + fmt(r.acim.Ilr, 1) + " A" : "—")),
+                                    r.acim && Number.isFinite(r.acim.xiLR) && (React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null,
+                                            "Deep-bar at start (bar ",
+                                            fmt(r.acim.hBar, 1),
+                                            "\u00D7",
+                                            fmt(r.acim.wBar, 1),
+                                            " mm",
+                                            r.acim.barHAuto ? ", est. 3:1" : "",
+                                            ")"),
+                                        React.createElement("b", null,
+                                            "\u03BE ",
+                                            fmt(r.acim.xiLR, 2),
+                                            " \u00B7 R\u00D7",
+                                            fmt(r.acim.krLR, 2),
+                                            " \u00B7 X\u00D7",
+                                            fmt(r.acim.kxLR, 2)))),
                                     React.createElement("div", { className: "kv" },
                                         React.createElement("span", null, "Magnetizing (no-load) current"),
                                         React.createElement("b", null, r.acim ? fmt(r.acim.Im, 2) + " A" : "—")),
@@ -26788,7 +26946,7 @@ function MotorDesigner() {
                                         ? (p.conn === "wye" && p.vref === "ln"
                                             ? "Center-tap (L-N) excitation: each phase limited to ±Vdc/2 about the tap and torque-per-amp halved — half the winding pair works at a time. Flat region = drive current limit."
                                             : "Flat region = drive current limit; droop includes both IR and synchronous-reactance (ωLI) drop; the tail above the no-load marker is the FOC field-weakening region (absent for six-step). Dashed = winding V/R capability with no drive clamp.")
-                                        : "Single-cage Thevenin equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Rotor leakage reactance is a placeholder X2 = 0.8·X1 (not computed from bar geometry), and deep-bar effects (higher apparent R at start) are not modeled — starting torque and breakdown slip carry that approximation.",
+                                        : "Single-cage Thevenin equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. v60.7: rotor leakage X2 comes from the bar's rectangular-slot permeance (h/3w, bar depth entered or estimated at 3:1 aspect) plus a first-order 0.5 constant for end-ring/differential/zigzag, and deep-bar skin effect scales bar R (up) and bar permeance (down) with slip — locked-rotor torque and current now see the crowded bar. The 0.5 leakage floor and the auto bar aspect are first-order disclosed estimates.",
                                 " ",
                                 "Marker = thermally-rated operating point from J.")),
                         pm && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
@@ -26887,6 +27045,32 @@ function MotorDesigner() {
                                             " T analytic \u00B7 ",
                                             (field.cmp.dB1 * 100).toFixed(1),
                                             "% difference")),
+                                    r.kl > 0 && field.B1 > 0 && r.B1 > 0 && (() => {
+                                        const klEst = Math.min(Math.max(r.kl * (field.B1 / r.B1), 0.5), 1.0);
+                                        const adopt = () => {
+                                            // iterate: the saturation loop is nonlinear in kl, so one-shot
+                                            // scaling under-corrects — three passes land within a fraction of a %
+                                            let k9 = klEst;
+                                            for (let i9 = 0; i9 < 3; i9++) {
+                                                const rT = computeDesign({ ...p, klOv: k9 });
+                                                if (!(rT.B1 > 0))
+                                                    break;
+                                                k9 = Math.min(Math.max(k9 * (field.B1 / rT.B1), 0.5), 1.0);
+                                            }
+                                            setP((o) => ({ ...o, klOv: +k9.toFixed(4) }));
+                                        };
+                                        return (React.createElement("div", { className: "kv" },
+                                            React.createElement("span", null,
+                                                "Field-informed leakage kl (active: ",
+                                                r.kl.toFixed(3),
+                                                p.klOv > 0 ? " · adopted" : " · default 0.9",
+                                                ")"),
+                                            React.createElement("b", { style: { display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" } },
+                                                klEst.toFixed(3),
+                                                p.klOv > 0
+                                                    ? React.createElement("button", { className: "btn mini ghost", onClick: () => setP((o) => ({ ...o, klOv: 0 })) }, "Revert to 0.9")
+                                                    : React.createElement("button", { className: "btn mini", onClick: adopt }, "Adopt"))));
+                                    })(),
                                     React.createElement("div", { className: "kv" },
                                         React.createElement("span", null, "Flux per pole (solved)"),
                                         React.createElement("b", null,
@@ -27201,6 +27385,15 @@ function MotorDesigner() {
                                     React.createElement("b", null,
                                         fmt((r.brush.La / Math.max(r.brush.Ra, 1e-6)) * 1000, 2),
                                         " ms")),
+                                Number.isFinite(r.brush.erMax) && (React.createElement("div", { className: "kv" },
+                                    React.createElement("span", null, "Commutation reactance voltage (rated / worst on curve)"),
+                                    React.createElement("b", { style: { color: r.brush.erMax > 3 ? "#DC2626" : r.brush.erMax > 2.5 ? "#B45309" : undefined } },
+                                        fmt(r.brush.er, 2),
+                                        " / ",
+                                        fmt(r.brush.erMax, 2),
+                                        " V",
+                                        r.brush.erMax > 0 ? ` @ ~${Math.round(r.brush.nErMax)} rpm` : "",
+                                        " (arc limit ~3 V)"))),
                                 React.createElement("div", { className: "kv" },
                                     React.createElement("span", null, "Rated armature current"),
                                     React.createElement("b", null,
