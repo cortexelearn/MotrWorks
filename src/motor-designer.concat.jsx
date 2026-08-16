@@ -2812,10 +2812,14 @@ function buildLamDxf(p, r) {
     if (rc > 0.05) {
       const sl = (hw2 - hw1) / (r2 - r1);
       P(a, -(hw2 - sl * rc), r2 - rc);
-      for (let k = 1; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t) + rc, r2 - rc + rc * Math.sin(t)); }
+      // v60.5: a stray "+ rc" translated this arc one radius toward the slot centerline —
+      // the punched left corner bulged while the right was true. Center (-(hw2-rc), r2-rc),
+      // x = cx - rc·cos t, y = cy + rc·sin t is the correct quarter circle.
+      for (let k = 0; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 - rc + rc * Math.sin(t)); }
       P(a, -(hw2 - rc), r2); P(a, hw2 - rc, r2);
-      for (let k = 1; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, (hw2 - rc) + rc * Math.sin(t), r2 - rc + rc * Math.cos(t)); }
-      P(a, hw2 - sl * 0, r2 - rc);
+      // mirror the left fillet's sample positions so the faceted corners are symmetric
+      for (let k = 0; k <= 5; k++) { const u = (Math.PI / 2) * (1 - k / 5); P(a, (hw2 - rc) + rc * Math.cos(u), r2 - rc + rc * Math.sin(u)); }
+      P(a, hw2 - sl * rc, r2 - rc);
     } else {
       P(a, -hw2, r2); P(a, hw2, r2);
     }
@@ -2855,9 +2859,11 @@ function buildArmDxf(p, r) {
     if (rc > 0.05) {
       const sl = (hw1 - hw2) / Math.max(r1 - r2, 1e-6);   // wall half-width shrink per radial mm
       P(a, -(hw2 + sl * rc), r2 + rc);
-      for (let k = 1; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 + rc - rc * Math.sin(t)); }
+      for (let k = 0; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 + rc - rc * Math.sin(t)); }
       P(a, -(hw2 - rc), r2); P(a, hw2 - rc, r2);
-      for (let k = 1; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, (hw2 - rc) + rc * Math.sin(t), r2 + rc - rc * Math.cos(t)); }
+      // mirror the left fillet's sample positions (u = π/2·(1−k/5)) so the two faceted
+      // corners are exactly symmetric — same arc, symmetric polyline
+      for (let k = 0; k <= 5; k++) { const u = (Math.PI / 2) * (1 - k / 5); P(a, (hw2 - rc) + rc * Math.cos(u), r2 + rc - rc * Math.sin(u)); }
       P(a, hw2 + sl * rc, r2 + rc);
     } else {
       P(a, -hw2, r2); P(a, hw2, r2);
@@ -2885,24 +2891,30 @@ function buildArmDxf(p, r) {
 /* ---- FEMM export (Lua): full 2D planar magnetostatic model of the PM machine, one file.
    Materials carry THIS tool's Froelich BH points and magnet data, so a FEMM solve validates
    the analytical circuit apples-to-apples. Copper regions are closed at the tooth-tip radius
-   (wedge line) so slots, opening necks, and airgap mesh as separate regions. Phases follow
-   the 60-degree belt rule; circuits ship at 0 A — set currents in FEMM for loaded solves. ---- */
+   (wedge line) so slots, opening necks, and airgap mesh as separate regions. Winding comes
+   from the SAME star-of-slots layers the engine computed (v60.5 — it was a 60° belt rule
+   that disagreed with the engine on fractional-slot machines); circuits ship at 0 A. ---- */
 function buildFemmLua(p, r) {
-  const Ns = r.Ns, poles = p.poles;
+  // v60.5: the exporter used to read p.steel / p.rotSteel / p.magTemp — fields that DO NOT
+  // EXIST in app state — so every export silently got M19 steel and 20 °C magnets, and it
+  // used raw p.poles where the engine rounds to an even count. It now reads the same
+  // symbols computeDesign used, so the exported model IS the displayed machine.
+  const Ns = r.Ns, poles = r.poles;
   const r0 = p.statorID / 2, r1 = r0 + p.tipH, r2 = r1 + Math.max((p.statorOD - p.statorID) / 2 - p.yoke - p.tipH, 0);
   const rOD = p.statorOD / 2, rSh = p.shaftD / 2, rMo = p.rotorOD / 2, rMi = rMo - p.magT;
-  const stM = STEELS[p.steel] || STEELS["M19 (29 ga)"];
-  const rtM = STEELS[p.rotSteel || p.steel] || stM;
+  const stM = STEELS[p.statorMat] || STEELS["M19 (29 ga)"];
+  const rtM = STEELS[p.rotorMat] || STEELS["1018 steel (solid)"];
   const mag = MAGNETS[p.mag] || Object.values(MAGNETS)[0];
   const mu0 = 4e-7 * Math.PI;
-  const BrT9 = (mag.Br || 1.2) * (1 + ((mag.aBr || 0) / 100) * ((p.magTemp || 20) - 20)); // Br at design magnet temp
-  const HcAm = BrT9 / (mu0 * (mag.mur || 1.05));                   // A/m at p.magTemp
+  const magT9 = Number.isFinite(p.Top) ? p.Top : 20;
+  const BrT9 = (mag.Br || 1.2) * (1 + ((mag.aBr || 0) / 100) * (magT9 - 20)); // Br at the design operating temp
+  const HcAm = BrT9 / (mu0 * (mag.mur || 1.05));                   // A/m at Top
   const L = [];
   const P9 = (rr, a) => [ +(rr * Math.cos(a)).toFixed(4), +(rr * Math.sin(a)).toFixed(4) ];
   const node = (x, y) => L.push(`mi_addnode(${x},${y})`);
   const seg = (x1, y1, x2, y2) => L.push(`mi_addsegment(${x1},${y1},${x2},${y2})`);
   const arc = (x1, y1, x2, y2, deg) => L.push(`mi_addarc(${x1},${y1},${x2},${y2},${deg},2)`);
-  L.push('-- MotrWorks FEMM export: ' + Ns + ' slots / ' + poles + ' poles, stack ' + p.stackL + ' mm, magnets at ' + (p.magTemp || 20) + ' C');
+  L.push('-- MotrWorks FEMM export: ' + Ns + ' slots / ' + poles + ' poles, stack ' + p.stackL + ' mm, ' + p.statorMat + ' stator / ' + p.rotorMat + ' rotor, magnets at ' + magT9 + ' C');
   L.push('-- Open in FEMM, run this script (femm console: dofile). Solve, then torque:');
   L.push('--   mo_groupselectblock(1)  mo_blockintegral(22)   -- rotor group steady torque, N·m');
   L.push('-- With all circuits at 0 A, the airgap flux should match the analytical model (ksat-corrected Bg).');
@@ -2929,29 +2941,54 @@ function buildFemmLua(p, r) {
       L.push(`mi_setarcsegmentprop(2,"${prop}",0,0)`); L.push(`mi_clearselected()`); }
   };
   cir(rOD, "A0"); cir(r0, null); cir(rSh, null); cir(rMo, null); cir(rMi, null);
-  // slots: copper trapezoid r1..r2 (closed at r1) + opening neck r0..r1
+  // slots: copper trapezoid r1..r2 split at mid-depth into the engine's two winding
+  // layers (inner half = airgap-side topLayer, outer half = return botLayer), plus the
+  // opening neck r0..r1. Each half carries its OWN phase, sign, and conductor count from
+  // r.topLayer/r.botLayer — the same star-of-slots assignment every displayed number used.
   const hwA = (rr) => Math.max(Math.PI / Ns - (p.toothW / 2) / rr, 0.008);
   const soA = (rr) => Math.max((p.slotOpen / 2) / rr, 0.004);
+  const rM9 = (r1 + r2) / 2;
+  const twoLayer = r.layers === 2 && Array.isArray(r.botLayer) && r.botLayer.length === Ns;
+  const PH_NAME = ["A", "B", "C"];
+  const condLayer = Math.max(Math.round((r.condPerSlot || 1) / (twoLayer ? 2 : 1)), 1);
+  const label9 = (rr, a0, matPH, sgnN) => {
+    const [lx, ly] = P9(rr, a0);
+    L.push(`mi_addblocklabel(${lx},${ly})`); L.push(`mi_selectlabel(${lx},${ly})`);
+    L.push(matPH === null
+      ? `mi_setblockprop("Air",1,0,"<None>",0,0,0)`
+      : `mi_setblockprop("Copper",1,0,"${matPH}",0,0,${sgnN})`);
+    L.push(`mi_clearselected()`);
+  };
   for (let s9 = 0; s9 < Ns; s9++) {
     const a0 = (s9 * 2 * Math.PI) / Ns;
-    const n1 = hwA(r1), n2 = hwA(r2), sA0 = soA(r0), sA1 = soA(r1);
-    const c = [P9(r1, a0 - n1), P9(r2, a0 - n2), P9(r2, a0 + n2), P9(r1, a0 + n1)];
-    c.forEach((q9) => node(q9[0], q9[1]));
-    seg(c[0][0], c[0][1], c[1][0], c[1][1]); arc(c[1][0], c[1][1], c[2][0], c[2][1], (2 * n2 * 180) / Math.PI);
-    seg(c[2][0], c[2][1], c[3][0], c[3][1]); seg(c[3][0], c[3][1], c[0][0], c[0][1]);
+    const n1 = hwA(r1), n2 = hwA(r2), nM = hwA(rM9), sA0 = soA(r0), sA1 = soA(r1);
+    const c1 = P9(r1, a0 - n1), c2 = P9(r2, a0 - n2), c3 = P9(r2, a0 + n2), c4 = P9(r1, a0 + n1);
+    const m1 = P9(rM9, a0 - nM), m2 = P9(rM9, a0 + nM);
+    [c1, c2, c3, c4].forEach((q9) => node(q9[0], q9[1]));
+    if (twoLayer) { node(m1[0], m1[1]); node(m2[0], m2[1]); }
+    if (twoLayer) {
+      // side walls in two spans so the mid chord bounds two closed sub-regions
+      seg(c1[0], c1[1], m1[0], m1[1]); seg(m1[0], m1[1], c2[0], c2[1]);
+      seg(c4[0], c4[1], m2[0], m2[1]); seg(m2[0], m2[1], c3[0], c3[1]);
+      seg(m1[0], m1[1], m2[0], m2[1]);                              // layer boundary
+    } else {
+      seg(c1[0], c1[1], c2[0], c2[1]); seg(c4[0], c4[1], c3[0], c3[1]);
+    }
+    arc(c2[0], c2[1], c3[0], c3[1], (2 * n2 * 180) / Math.PI);
+    seg(c4[0], c4[1], c1[0], c1[1]);
     const o = [P9(r0, a0 - sA0), P9(r1, a0 - sA1), P9(r1, a0 + sA1), P9(r0, a0 + sA0)];
     o.forEach((q9) => node(q9[0], q9[1]));
     seg(o[0][0], o[0][1], o[1][0], o[1][1]); seg(o[1][0], o[1][1], o[2][0], o[2][1]);
     seg(o[2][0], o[2][1], o[3][0], o[3][1]);
-    // labels: copper w/ circuit + belt sign; opening neck air
-    const belt = Math.floor(((((s9 + 0.5) * poles * 180) / Ns) % 360) / 60);
-    const PH = ["A", "C", "B", "A", "C", "B"][belt], SGN = [1, -1, 1, -1, 1, -1][belt];
-    const [lx, ly] = P9((r1 + r2) / 2, a0);
-    L.push(`mi_addblocklabel(${lx},${ly})`); L.push(`mi_selectlabel(${lx},${ly})`);
-    L.push(`mi_setblockprop("Copper",1,0,"${PH}",0,0,${SGN * Math.max(Math.round(r.condPerSlot || 1), 1)})`); L.push(`mi_clearselected()`);
-    const [ox, oy] = P9((r0 + r1) / 2, a0);
-    L.push(`mi_addblocklabel(${ox},${oy})`); L.push(`mi_selectlabel(${ox},${oy})`);
-    L.push(`mi_setblockprop("Air",1,0,"<None>",0,0,0)`); L.push(`mi_clearselected()`);
+    const top9 = r.topLayer && r.topLayer[s9];
+    if (twoLayer) {
+      const bot9 = r.botLayer[s9];
+      label9((r1 + rM9) / 2, a0, top9 ? PH_NAME[top9.phase] : "A", (top9 ? top9.sign : 1) * condLayer);
+      label9((rM9 + r2) / 2, a0, bot9 ? PH_NAME[bot9.phase] : "A", (bot9 ? bot9.sign : 1) * condLayer);
+    } else {
+      label9((r1 + r2) / 2, a0, top9 ? PH_NAME[top9.phase] : "A", (top9 ? top9.sign : 1) * condLayer);
+    }
+    label9((r0 + r1) / 2, a0, null, 0);                             // opening neck air
   }
   // magnet pole boundaries + labels with alternating radial magnetization
   for (let k9 = 0; k9 < poles; k9++) {

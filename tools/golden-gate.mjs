@@ -76,7 +76,7 @@ console.log('Winding tooling');
 // FEA-light: MEC saturation curve + FEMM export structure
 console.log('MEC / FEMM');
 {
-  const M2 = new Function('React', app + '\nreturn { computeDesign, buildFemmLua, PRESETS };')(React);
+  const M2 = new Function('React', app + '\nreturn { computeDesign, buildFemmLua, PRESETS, STEELS };')(React);
   const p = { ...base, slotR: 0, ...M2.PRESETS['NEMA 17 · 28 V · ~6 krpm'] };
   const r = M2.computeDesign(p);
   const mono = r.satCurve && r.satCurve.every((s, i, a) => !i || s.k <= a[i - 1].k + 1e-9);
@@ -85,10 +85,40 @@ console.log('MEC / FEMM');
   if (!(mono && tie)) fail = true;
   const lua = M2.buildFemmLua(p, r);
   const c = (re) => (lua.match(re) || []).length;
-  const ok9 = !/NaN/.test(lua) && c(/setblockprop\("Copper"/g) === r.Ns && c(/setblockprop\("Magnet"/g) === p.poles &&
+  // two-layer machines emit TWO copper regions per slot (v60.5 star-of-slots winding)
+  const cuPerSlot = r.layers === 2 ? 2 : 1;
+  const ok9 = !/NaN/.test(lua) && c(/setblockprop\("Copper"/g) === r.Ns * cuPerSlot && c(/setblockprop\("Magnet"/g) === r.poles &&
     c(/mi_addbhpoint/g) === 48 && lua.includes('"A0"');
-  console.log(`  ${ok9 ? '✓' : '✗'} FEMM lua: ${r.Ns} slots, ${p.poles} poles, 48 BH points, bounded, NaN-free`);
+  console.log(`  ${ok9 ? '✓' : '✗'} FEMM lua: ${r.Ns} slots x${cuPerSlot} layers, ${r.poles} poles, 48 BH points, bounded, NaN-free`);
   if (!ok9) fail = true;
+
+  // v60.5 CONTENT assertions — the pre-v60.5 exporter read dead fields (p.steel/p.magTemp)
+  // and a 60° belt rule, so every export was M19 at 20 °C with a winding that disagreed
+  // with the engine on fractional-slot machines. The old structural check could not see
+  // any of that. These parse the emitted model and compare it to the design's own symbols.
+  const pHot = { ...base, slotR: 0, ...M2.PRESETS['4" high-temp · 270 V · Hiperco/SmCo'] };
+  const rHot = M2.computeDesign(pHot);
+  const luaHot = M2.buildFemmLua(pHot, rHot);
+  const hotM = M2.STEELS[pHot.statorMat];
+  const matOK = new RegExp(`mi_addmaterial\\("StatorSteel",${hotM.muri},`).test(luaHot)
+    && luaHot.includes(`magnets at ${pHot.Top} C`)
+    && luaHot.includes(pHot.statorMat);
+  console.log(`  ${matOK ? '✓' : '✗'} FEMM materials/temp follow the design (Hiperco muri ${hotM.muri}, Top ${pHot.Top} C)`);
+  if (!matOK) fail = true;
+  // odd pole request must export the engine's ROUNDED machine, not the raw input
+  const pOdd = { ...p, poles: 7 };
+  const rOdd = M2.computeDesign(pOdd);
+  const luaOdd = M2.buildFemmLua(pOdd, rOdd);
+  const oddOK = (luaOdd.match(/setblockprop\("Magnet"/g) || []).length === rOdd.poles && rOdd.poles === 8;
+  console.log(`  ${oddOK ? '✓' : '✗'} FEMM exports the rounded pole count (7 -> ${rOdd.poles})`);
+  if (!oddOK) fail = true;
+  // slot-0 winding must match the engine's star-of-slots, not a belt rule
+  const t0 = rHot.topLayer[0];
+  const wantPH = ['A', 'B', 'C'][t0.phase];
+  const firstCu = /setblockprop\("Copper",1,0,"([ABC])",0,0,(-?\d+)/.exec(luaHot);
+  const windOK = firstCu && firstCu[1] === wantPH && Math.sign(parseInt(firstCu[2], 10)) === Math.sign(t0.sign);
+  console.log(`  ${windOK ? '✓' : '✗'} FEMM slot-0 circuit matches engine topLayer (${wantPH}${t0.sign > 0 ? '+' : '-'})`);
+  if (!windOK) fail = true;
 }
 console.log(fail ? 'GOLDEN GATE: FAIL' : 'GOLDEN GATE: PASS');
 if (fail) process.exitCode = 1;
