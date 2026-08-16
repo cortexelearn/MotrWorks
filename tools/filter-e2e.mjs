@@ -73,5 +73,35 @@ ok = opts.every(o => !o.startsWith('Brushed') && !o.startsWith('LATM'));
 console.log(`ACIM presets: ${opts.length} listed · induction-only: ${ok ? '✓' : '✗ ' + opts.join(' | ')}`);
 if (!ok) process.exitCode = 1;
 
+// v60.5: preset loads must NOT inherit stray keys from the prior design. Contaminate
+// slotR on the current machine, load a preset that omits slotR, and the field must
+// read the default (0) — the old {...current, ...preset} merge kept the 2 mm fillet.
+await page.evaluate(() => {
+  const b = [...document.querySelectorAll('.seg button')].find(x => x.textContent.trim() === 'BLDC');
+  if (b) b.click();
+});
+await page.waitForTimeout(300);
+await page.evaluate(() => {
+  const f = [...document.querySelectorAll('.field')].find(x => x.querySelector('.fl')?.textContent.startsWith('Slot bottom corner R'));
+  const inp = f?.querySelector('input');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(inp, '2');
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+});
+await page.waitForTimeout(250);
+await openPresets();
+await page.evaluate(() => {
+  const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value.includes('choose a preset')));
+  sel.value = 'NEMA 17 · 28 V · ~6 krpm';
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page.waitForTimeout(350);
+const slotRAfter = await page.evaluate(() => {
+  const f = [...document.querySelectorAll('.field')].find(x => x.querySelector('.fl')?.textContent.startsWith('Slot bottom corner R'));
+  return f?.querySelector('input')?.value;
+});
+console.log(`preset load resets omitted keys: slotR after load = ${slotRAfter} (expect 0): ${slotRAfter === '0' ? '✓' : '✗'}`);
+if (slotRAfter !== '0') process.exitCode = 1;
+
 await browser.close();
 console.log(process.exitCode ? 'FAILED' : 'ALL FILTER/CAGE E2E TESTS PASSED');

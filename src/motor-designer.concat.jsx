@@ -682,9 +682,16 @@ function composeActuator(mr, br, cfg) {
   const w = [];
   const type9 = ["Planetary", "Harmonic", "Spur"].includes(cfg.type) ? cfg.type : "Planetary";
   const N = Math.max(Number.isFinite(cfg.ratio) ? cfg.ratio : 1, 1), st = Math.max(Math.round(cfg.stages) || 1, 1); // Math.max(NaN,1) is NaN — a NaN ratio would silently NaN every output
+  // v60.5: efficiency priority is (1) the user's override, (2) the synthesized train's
+  // detailed mesh+churn efficiency (cfg.effDet, 0..1, passed after designGearTrain runs),
+  // (3) the catalog per-stage table as a FALLBACK ONLY. The app previously mapped the
+  // torque curve with the catalog table while the gear card displayed the detailed value —
+  // two efficiencies for one gearhead on the same page.
   const ETA_STAGE = { Planetary: 0.90, Spur: 0.93, Harmonic: 0.80 };
   const etaStage = ETA_STAGE[type9];
-  const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : Math.pow(etaStage, st);
+  const etaDet = Number.isFinite(cfg.effDet) && cfg.effDet > 0 && cfg.effDet <= 1 ? cfg.effDet : null;
+  const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : (etaDet !== null ? etaDet : Math.pow(etaStage, st));
+  const etaSrc = cfg.effOv > 0 ? "override" : (etaDet !== null ? "synthesized" : "catalog");
   const spr = Math.pow(N, 1 / st);
   const win = { Planetary: [3, 10], Spur: [1.5, 6], Harmonic: [30, 160] }[type9];
   if (type9 === "Harmonic" && st > 1) w.push("Harmonic stages are almost always single — cascading flexsplines is unusual; check availability.");
@@ -700,7 +707,7 @@ function composeActuator(mr, br, cfg) {
   if (br && br.err && br.err.length) w.push("The brake design in its tab has errors — holding torque not composed.");
   const etaBack = Math.max(2 - 1 / eta, 0);                          // first-order back-drive efficiency
   const selfLock = etaBack <= 0.02 || type9 === "Harmonic" && N >= 80;
-  return { N, st, spr, eta, etaStage, type: type9, brg: cfg.brg || "radial", curve,
+  return { N, st, spr, eta, etaStage, etaSrc, type: type9, brg: cfg.brg || "radial", curve,
     noLoad: mr.noLoad / N,
     op: mr.op ? { n: mr.op.n / N, T: mr.op.T * N * eta } : null,
     peakT: (mr.peakT || 0) * N * eta,
@@ -7307,13 +7314,21 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
     : { ...p, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
   const withBrk = p.actBrake === "yes";
   const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
-  const act = composeActuator(mr, br, { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff, brg: p.gbBrg });
+  // v60.5: ONE efficiency for one gearhead. Composition runs twice: a first pass fixes
+  // N/stages so the train can be synthesized, then the final composition carries the
+  // synthesized train's detailed efficiency (unless the user override is set) — the
+  // torque curve, peak, and the gear card can no longer disagree.
+  const cfg0 = { type: p.gbType, ratio: p.gbRatio, stages: p.gbStages, effOv: p.gbEff, brg: p.gbBrg };
+  const act0 = composeActuator(mr, br, cfg0);
   const gtEnv = useMemo(() => {
-    if (act.fail) return null;
-    const env0 = actEnvelope(motorP, withBrk ? brakeP : null, act, withBrk, p.gbOD, p.gbLen);
-    return { env: env0, gt: designGearTrain(p, act, env0.gOD, env0.Lg) };
-  }, [p, act, motorP, brakeP, withBrk]);
+    if (act0.fail) return null;
+    const env0 = actEnvelope(motorP, withBrk ? brakeP : null, act0, withBrk, p.gbOD, p.gbLen);
+    return { env: env0, gt: designGearTrain(p, act0, env0.gOD, env0.Lg) };
+  }, [p, act0, motorP, brakeP, withBrk]);
   const gtAll = gtEnv ? gtEnv.gt : null;
+  const act = gtAll && !(p.gbEff > 0)
+    ? composeActuator(mr, br, { ...cfg0, effDet: gtAll.effF })
+    : act0;
   const gtLim = gtAll && Number.isFinite(gtAll.TmaxOut) ? { T: gtAll.TmaxOut, label: "tooth yield" } : null;
   const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
   const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
@@ -7510,7 +7525,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
             <>
               <div className="tbl">
                 <div className="kv"><span>Gear train</span><b>{act.type} · {act.st} stage{act.st > 1 ? "s" : ""} · {act.spr.toFixed(1)}:1 each = {act.N}:1</b></div>
-                <div className="kv"><span>Efficiency η (per stage / total)</span><b>{(act.etaStage * 100).toFixed(0)}% / {(act.eta * 100).toFixed(0)}%{p.gbEff > 0 ? " (override)" : ""}</b></div>
+                <div className="kv"><span>Efficiency η (per stage / total)</span>
+                  <b>{(Math.pow(act.eta, 1 / Math.max(act.st, 1)) * 100).toFixed(1)}% / {(act.eta * 100).toFixed(1)}%
+                    {act.etaSrc === "override" ? " (override)" : act.etaSrc === "synthesized" ? " (synthesized train)" : " (catalog fallback)"}</b></div>
                 <div className="kv"><span>Output no-load</span><b>{fmt(act.noLoad, 0)} rpm</b></div>
                 {act.op && <div className="kv"><span>Output rated point</span><b>{fmt(act.op.n, 0)} rpm · {tqS(act.op.T)} · {fmt(mr.op && mr.Kt > 0 ? mr.op.T / mr.Kt : NaN, 2)} A</b></div>}
                 <div className="kv"><span>Output peak (drive-limited)</span><b>{tqS(act.peakT)}</b></div>
@@ -7565,8 +7582,14 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
   );
 }
 
-export default function MotorDesigner() {
-  const [p, setP] = useState({
+/* ---- the canonical default parameter set. Extracted to module scope (v60.5) because
+   presets must apply onto THESE defaults, not onto whatever design was loaded before:
+   the old `{...current, ...preset}` merge let every key a preset omits leak through —
+   an active bench calibration scaled the "loaded preset" ×1.25, a stale slotR carved
+   fillets into a preset that has none, a stale loadMode moved its rated point. Same
+   contamination applied to the first visit of a machine type. Gates already used the
+   defaults+preset semantic (tools/_base.json); the app now matches it. ---- */
+const DEFAULT_P = {
     slots: 36, poles: 8, statorOD: 150, statorID: 90, rotorOD: 89,
     yoke: 12, toothW: 5.4, slotOpen: 2.5, tipH: 1.5, stackL: 80, liner: 0.25, slotR: 0, skew: 0,
     pattern: "lap", layers: 2, span: 0, turns: 2, awg: 14, strands: 2, paths: 1, insBuild: "Heavy", turnBasis: "coil",
@@ -7591,7 +7614,10 @@ export default function MotorDesigner() {
     stpNr: 50, stpKind: "hybrid", stpPP: 12, stpWire: "bip-ser", stpOn: 2, stpHubD: 0, stpThruD: 0, latmSect: 4, latmSpan: 60, latmTravel: 45,
     rotorBars: 28, barA: 60, ringA: 120, barMat: "Cast aluminum",
     Vll: 400, Vdc: 48, Imax: 40, freq: 50, J: 5.5, Bg: 0.85, seq: "ABC",
-  });
+};
+
+export default function MotorDesigner() {
+  const [p, setP] = useState(DEFAULT_P);
   const [ioMsg, setIoMsg] = useState("");
   const [us, setUs] = useState("in");
   const lu = us === "in" ? "in" : "mm", au = us === "in" ? "in²" : "mm²";
@@ -7677,8 +7703,14 @@ export default function MotorDesigner() {
     setPreset(name);
     const pr = PRESETS[name];
     if (!pr) return;
-    setP((o) => ({ ...o, ...pr }));
-    setIoMsg("Loaded preset: " + name + ". All values are starting points — tune and verify.");
+    // v60.5: presets apply onto the DEFAULTS, not the current design — every key a preset
+    // omits used to leak through from whatever was loaded before (active bench calibration
+    // scaled Kt ×1.25 silently; a stale slotR carved fillets into a preset that has none).
+    // This is the same defaults+preset semantic the gates have always used.
+    const hadCal = p.calOn === "yes";
+    setP({ ...DEFAULT_P, ...pr });
+    setIoMsg("Loaded preset: " + name + ". All values are starting points — tune and verify."
+      + (hadCal && pr.calOn !== "yes" ? " Bench calibration was cleared (it belonged to the previous design)." : ""));
   };
   const [phaseSel, setPhaseSel] = useState("all");
   const bemfView = p.conn === "delta" ? "ll" : (p.vref === "ln" ? "ph" : "ll");
@@ -7701,7 +7733,9 @@ export default function MotorDesigner() {
     const saved = typeMem.current[nt];
     if (saved) { setP({ ...saved, motorType: nt }); setIoMsg(""); return; }
     if (TYPE_DEFAULTS[nt] && PRESETS[TYPE_DEFAULTS[nt]]) {
-      setP((o) => ({ ...o, ...PRESETS[TYPE_DEFAULTS[nt]] }));
+      // first visit of a type: defaults + its starting preset (v60.5 — merging over the
+      // previous machine's state leaked its stray keys into the new type)
+      setP({ ...DEFAULT_P, ...PRESETS[TYPE_DEFAULTS[nt]] });
       setIoMsg("Loaded starting point: " + TYPE_DEFAULTS[nt] + " — see Start ▸ Presets for the others. Your previous machine's parameters are kept and restore when you toggle back.");
       return;
     }
@@ -7743,7 +7777,8 @@ export default function MotorDesigner() {
   const sheetFacts = r.err.length ? [["Status", `${r.err.length} error(s) — sheet is not valid`]] : [
     ["Kt", `${fmt(r.Kt, 4)} N·m/A`],
     ["Ke", keS(r.Ke)],
-    ["R L-L", `${fmt(r.Rll, 4)} Ω`],
+    [p.motorType === "latm" || p.motorType === "brake" ? "R coil (20 °C)"
+      : p.motorType === "stepper" ? "R phase (20 °C)" : "R L-L", `${fmt(r.Rll, 4)} Ω`],
     ["L L-L", `${fmt(r.Lll * 1000, 3)} mH`],
     ["No-load", `${fmt(r.noLoad, 0)} rpm`],
     ["Peak torque", tqS(r.peakT)],

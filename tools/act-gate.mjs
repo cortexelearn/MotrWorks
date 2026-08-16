@@ -93,3 +93,20 @@ try {
 }
 console.log(fail ? 'ACT GATE: FAIL' : 'ACT GATE: PASS');
 process.exitCode = fail;
+
+// v60.5: efficiency unification — with a synthesized train's detailed efficiency passed
+// as effDet, the composed curve must carry THAT eta (the app previously mapped the curve
+// with the catalog table while the gear card showed the detailed value). Override wins.
+console.log('efficiency unification (v60.5)');
+{
+  const a0 = M.composeActuator(mr, null, { type: 'Planetary', ratio: 25, stages: 2, effOv: 0 });
+  const gt = M.designGearTrain({ ...base, nPlanets: 3, agmaQ: 'Q9', presAng: 20 }, a0, 46, 60);
+  const a1 = M.composeActuator(mr, null, { type: 'Planetary', ratio: 25, stages: 2, effOv: 0, effDet: gt.effF });
+  ok(Math.abs(a1.eta - gt.effF) < 1e-12, `composed eta == synthesized effF (${(a1.eta * 100).toFixed(2)}%)`);
+  ok(a1.etaSrc === 'synthesized', 'eta source reported as synthesized');
+  ok(Math.abs(a1.curve[0].T - mr.curve[0].T * 25 * gt.effF) < 1e-9, 'curve torque scales with the synthesized eta');
+  const a2 = M.composeActuator(mr, null, { type: 'Planetary', ratio: 25, stages: 2, effOv: 77, effDet: gt.effF });
+  ok(Math.abs(a2.eta - 0.77) < 1e-12 && a2.etaSrc === 'override', 'user override still wins over effDet');
+  ok(a0.etaSrc === 'catalog', 'no train, no override -> catalog fallback is labeled');
+}
+if (fail) { console.log('ACT GATE: FAIL (v60.5 block)'); process.exitCode = 1; }

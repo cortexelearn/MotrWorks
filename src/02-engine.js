@@ -238,9 +238,16 @@ function composeActuator(mr, br, cfg) {
   const w = [];
   const type9 = ["Planetary", "Harmonic", "Spur"].includes(cfg.type) ? cfg.type : "Planetary";
   const N = Math.max(Number.isFinite(cfg.ratio) ? cfg.ratio : 1, 1), st = Math.max(Math.round(cfg.stages) || 1, 1); // Math.max(NaN,1) is NaN — a NaN ratio would silently NaN every output
+  // v60.5: efficiency priority is (1) the user's override, (2) the synthesized train's
+  // detailed mesh+churn efficiency (cfg.effDet, 0..1, passed after designGearTrain runs),
+  // (3) the catalog per-stage table as a FALLBACK ONLY. The app previously mapped the
+  // torque curve with the catalog table while the gear card displayed the detailed value —
+  // two efficiencies for one gearhead on the same page.
   const ETA_STAGE = { Planetary: 0.90, Spur: 0.93, Harmonic: 0.80 };
   const etaStage = ETA_STAGE[type9];
-  const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : Math.pow(etaStage, st);
+  const etaDet = Number.isFinite(cfg.effDet) && cfg.effDet > 0 && cfg.effDet <= 1 ? cfg.effDet : null;
+  const eta = cfg.effOv > 0 ? Math.min(cfg.effOv, 100) / 100 : (etaDet !== null ? etaDet : Math.pow(etaStage, st));
+  const etaSrc = cfg.effOv > 0 ? "override" : (etaDet !== null ? "synthesized" : "catalog");
   const spr = Math.pow(N, 1 / st);
   const win = { Planetary: [3, 10], Spur: [1.5, 6], Harmonic: [30, 160] }[type9];
   if (type9 === "Harmonic" && st > 1) w.push("Harmonic stages are almost always single — cascading flexsplines is unusual; check availability.");
@@ -256,7 +263,7 @@ function composeActuator(mr, br, cfg) {
   if (br && br.err && br.err.length) w.push("The brake design in its tab has errors — holding torque not composed.");
   const etaBack = Math.max(2 - 1 / eta, 0);                          // first-order back-drive efficiency
   const selfLock = etaBack <= 0.02 || type9 === "Harmonic" && N >= 80;
-  return { N, st, spr, eta, etaStage, type: type9, brg: cfg.brg || "radial", curve,
+  return { N, st, spr, eta, etaStage, etaSrc, type: type9, brg: cfg.brg || "radial", curve,
     noLoad: mr.noLoad / N,
     op: mr.op ? { n: mr.op.n / N, T: mr.op.T * N * eta } : null,
     peakT: (mr.peakT || 0) * N * eta,
