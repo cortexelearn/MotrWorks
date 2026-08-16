@@ -20120,6 +20120,12 @@ function solveField(p, msh, M, opts) {
             if (dM !== 0)
                 src[i * nth + j] = -dM * drC[i];
         }
+    // v61: loaded solve — stator winding ampere-turns enter as an extra source in the
+    // SAME discrete units as the magnet term (field-gate pins the absolute scale with a
+    // torque-vs-circuit referee, which would expose any unit slip as a ×1000 error).
+    if (o.srcJ && o.srcJ.length === N)
+        for (let k9 = 0; k9 < N; k9++)
+            src[k9] += o.srcJ[k9];
     // geometric face factors (θ-independent)
     const gRp = new Float64Array(nr), gRm = new Float64Array(nr), gT = new Float64Array(nr);
     for (let i = 0; i < nr; i++) {
@@ -20335,6 +20341,221 @@ function fieldStudy(p, r, opts) {
             B1Field: B1, B1Analytic: r.B1,
             dB1: r.B1 > 0 ? (B1 - r.B1) / r.B1 : NaN,
         },
+        nr: msh.nr, nth,
+    };
+}
+/* ---- v61 loaded field study: same solver, same mesh, same self-verification — plus
+   stator winding currents. The winding source spreads each layer's ampere-turns over
+   that layer's own slot-copper cells, phases and signs straight from the engine's
+   star-of-slots (the FEMM export's source). Torque comes from the same averaged
+   Maxwell stress as gapQuantities — under LOAD the signal is motoring-scale, far above
+   the staircase noise that disqualified cogging (and the mesh self-check still rules). */
+function windingSrc(p, r, msh, iabc) {
+    const { nr, nth, rC, drC, dth, reg, rTip, rSlotTop } = msh;
+    const src = new Float64Array(nr * nth);
+    if (!r.topLayer || !r.topLayer.length)
+        return src;
+    const two = r.layers === 2;
+    const rMid = (rTip + rSlotTop) / 2;
+    const slotPitch = (2 * Math.PI) / msh.Ns;
+    const areaTop = new Float64Array(msh.Ns), areaBot = new Float64Array(msh.Ns);
+    const cellSlot = new Int32Array(nr * nth);
+    cellSlot.fill(-1);
+    for (let i = 0; i < nr; i++) {
+        const rr = rC[i];
+        if (rr <= rTip || rr >= rSlotTop)
+            continue;
+        for (let j = 0; j < nth; j++) {
+            const k = i * nth + j;
+            if (reg[k] !== FR_AIR)
+                continue;
+            const th = (j + 0.5) * dth;
+            // slots are CENTERED on s·slotPitch (teeth on the half-pitch) in this mesh and in
+            // the FEMM export — floor() split every slot across two indices and smeared
+            // adjacent phase currents (torque came out 3x low and angle-flat)
+            const s9 = Math.round(th / slotPitch) % msh.Ns;
+            cellSlot[k] = s9;
+            const a9 = rr * dth * drC[i];
+            if (!two || rr < rMid)
+                areaTop[s9] += a9;
+            else
+                areaBot[s9] += a9;
+        }
+    }
+    // SRC_SCALE matches the magnet term's discrete units: the magnet source is written as
+    // M[A/m]·Δr[mm] = 1e3 × the physical circulation in amps, so ampere-turns enter ×1e3.
+    const SRC_SCALE = 1e3;
+    for (let i = 0; i < nr; i++) {
+        const rr = rC[i];
+        if (rr <= rTip || rr >= rSlotTop)
+            continue;
+        for (let j = 0; j < nth; j++) {
+            const k = i * nth + j;
+            const s9 = cellSlot[k];
+            if (s9 < 0)
+                continue;
+            const top = !two || rr < rMid;
+            const lay = top ? r.topLayer[s9] : r.botLayer[s9];
+            const area = top ? areaTop[s9] : areaBot[s9];
+            if (!lay || !(area > 0))
+                continue;
+            // ampere-turns per layer: each of the `turns` conductors carries i/paths
+            const At9 = (Math.max(Math.round(p.turns), 1) * lay.sign * iabc[lay.phase]) / Math.max(p.paths, 1);
+            src[k] = (At9 * SRC_SCALE * (rr * dth * drC[i])) / area;
+        }
+    }
+    return src;
+}
+/* Per-phase flux linkage from the solved vector potential: λ_ph = N·L·Σ(sign·⟨A⟩_layer)
+   per path. Volume-integrated in A (smooth), so the dq torque built on it does NOT
+   inherit the boundary-staircase noise that disqualified Maxwell-stress cogging. */
+function phaseFlux(p, r, msh, A) {
+    const { nr, nth, rC, drC, dth, reg, rTip, rSlotTop } = msh;
+    const two = r.layers === 2;
+    const rMid = (rTip + rSlotTop) / 2;
+    const slotPitch = (2 * Math.PI) / msh.Ns;
+    const sumA = [new Float64Array(msh.Ns), new Float64Array(msh.Ns)];
+    const sumW = [new Float64Array(msh.Ns), new Float64Array(msh.Ns)];
+    for (let i = 0; i < nr; i++) {
+        const rr = rC[i];
+        if (rr <= rTip || rr >= rSlotTop)
+            continue;
+        for (let j = 0; j < nth; j++) {
+            const k = i * nth + j;
+            if (reg[k] !== FR_AIR)
+                continue;
+            const th = (j + 0.5) * dth;
+            const s9 = Math.round(th / slotPitch) % msh.Ns;
+            const li = !two || rr < rMid ? 0 : 1;
+            const w9 = rr * dth * drC[i];
+            sumA[li][s9] += A[k] * w9;
+            sumW[li][s9] += w9;
+        }
+    }
+    const lam = [0, 0, 0];
+    const N9 = Math.max(Math.round(p.turns), 1), lays = two ? 2 : 1;
+    for (let s9 = 0; s9 < msh.Ns; s9++) {
+        for (let li = 0; li < lays; li++) {
+            if (!(sumW[li][s9] > 0))
+                continue;
+            const lay = li === 0 ? r.topLayer[s9] : r.botLayer[s9];
+            if (!lay)
+                continue;
+            lam[lay.phase] += lay.sign * N9 * (sumA[li][s9] / sumW[li][s9]);
+        }
+    }
+    // solver A is in T·mm (= 1e-3 Wb/m); λ[Wb] = ΣA_SI · stack[m] / paths
+    const kL = ((p.stackL / 1000) * 1e-3) / Math.max(p.paths, 1);
+    return [lam[0] * kL, lam[1] * kL, lam[2] * kL];
+}
+/* Loaded study entry. opts: { I (rms phase amps, default rated), nr, nth, nAng, quick,
+   verify }. Sweeps the electrical angle for peak torque (no dq transform assumptions),
+   then reports torque vs the circuit's own Kt·I·sat(I) as a referee, the loaded gap
+   field, and a spatial demagnetization map of the magnet ring at the design's
+   worst-case magnet temperature (HcJmin already includes the cold-ferrite corner). */
+function fieldStudyLoaded(p, r, opts) {
+    const o = opts || {};
+    if (p.motorType !== "pm")
+        return { err: "The loaded field study covers BLDC/PMSM designs." };
+    if (!r || r.err.length)
+        return { err: "Fix the design's errors before solving the field." };
+    if (!(p.magT > 0) || !(r.airgap > 0))
+        return { err: "Needs a positive magnet thickness and airgap." };
+    const Irms = o.I > 0 ? o.I : Math.max(r.Iph, 0.1);
+    const Ipk = Math.SQRT2 * Irms; // sinusoidal phase currents (FOC-style)
+    const nrH = Math.max(Math.round(o.nr || 56), 20);
+    // snap the angular grid to a slot multiple — a non-integer cells-per-slot count smears
+    // the winding source unevenly from slot to slot (the 9s8p torque diverged 47% under
+    // refinement from exactly this; snapped, it converges like the 12-slot machines)
+    const NsQ = Math.max(3, Math.round(p.slots));
+    const nth = NsQ * Math.max(Math.round(Math.max(Math.round(o.nth || 288), 96) / NsQ), 12);
+    const msh = fieldMesh(p, nrH, nth);
+    const M0 = magPattern(p, msh, 0, r.BrT);
+    const nl0 = o.nl || (o.quick ? 10 : 26), sw0 = o.sweeps || (o.quick ? 60 : 130);
+    const pp = msh.poles / 2;
+    const nAng = Math.max(Math.round(o.nAng || 7), 3);
+    const TdqOf = (A9, iabc9) => {
+        // amplitude-invariant Clarke on λ and i, then T = (3/2)·p·(λα·iβ − λβ·iα)
+        const lm = phaseFlux(p, r, msh, A9);
+        const alI = (2 / 3) * (iabc9[0] - iabc9[1] / 2 - iabc9[2] / 2), beI = (iabc9[1] - iabc9[2]) / Math.sqrt(3);
+        const alL = (2 / 3) * (lm[0] - lm[1] / 2 - lm[2] / 2), beL = (lm[1] - lm[2]) / Math.sqrt(3);
+        return 1.5 * pp * (alL * beI - beL * alI);
+    };
+    let best = null, warm = null;
+    for (let a9 = 0; a9 < nAng; a9++) {
+        const thE = (Math.PI * a9) / nAng; // electrical angle sweep over half a cycle
+        const iabc = [Ipk * Math.cos(thE), Ipk * Math.cos(thE - (2 * Math.PI) / 3), Ipk * Math.cos(thE + (2 * Math.PI) / 3)];
+        const srcJ = windingSrc(p, r, msh, iabc);
+        const s9 = solveField(p, msh, M0, { nl: nl0, sweeps: sw0, srcJ, warm });
+        warm = s9.A;
+        const g9 = gapQuantities(p, msh, s9.A);
+        const Tdq9 = TdqOf(s9.A, iabc);
+        if (!best || Math.abs(Tdq9) > Math.abs(best.T))
+            best = { T: Tdq9, Tstress: g9.T, thE, A: s9.A, B: s9.B, g: g9, conv: s9.conv, iabc };
+    }
+    const B1L = gapHarmonic(best.g.Br, pp);
+    // ---- demagnetization map at the best-torque angle, magnet cells only:
+    // H along the magnetization = (B_r − μ0·M)/(μ0·μr); demag when it opposes M.
+    // Compared against HcJ at the design's WORST-CASE magnet temperature (r.HcJmin, kA/m).
+    const magM = MAGNETS[p.mag] || MAGNETS["N42"];
+    const HcJ = Math.max(r.HcJmin, 1) * 1000; // A/m
+    let worstMargin = Infinity, nMagCells = 0, nDemag = 0;
+    const stripN = nth, strip = new Float64Array(stripN);
+    strip.fill(Infinity);
+    for (let i = 0; i < msh.nr; i++) {
+        if (!msh.isMag[i])
+            continue;
+        for (let j = 0; j < nth; j++) {
+            const k = i * nth + j;
+            const Mc = M0[k];
+            if (Mc === 0)
+                continue; // inter-pole gap
+            nMagCells++;
+            const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+            const BrC = (best.A[i * nth + jp] - best.A[i * nth + jm]) / (2 * msh.rC[i] * msh.dth);
+            const Hr = (BrC - MU0 * Mc) / (MU0 * (magM.mur || 1.05));
+            const Hop = -Hr * Math.sign(Mc); // positive = opposing the magnetization
+            const margin = 1 - Math.max(Hop, 0) / HcJ;
+            if (margin < worstMargin)
+                worstMargin = margin;
+            if (margin < 0)
+                nDemag++;
+            if (margin < strip[j])
+                strip[j] = margin;
+        }
+    }
+    // ---- mesh self-check on the LOADED quantities (torque and loaded B1) — the same
+    // discipline that keeps cogging unpublished. Torque is only quotable if it holds.
+    let mesh = null;
+    if (o.verify !== false) {
+        const m2 = fieldMesh(p, Math.round(nrH * 1.4), NsQ * Math.max(Math.round((nth * 1.4) / NsQ), 12));
+        const src2 = windingSrc(p, r, m2, best.iabc);
+        // Gauss-Seidel converges slower on the finer grid — give the verify pass a larger
+        // sweep budget so the mesh check measures DISCRETIZATION, not solver truncation
+        const s2 = solveField(p, m2, magPattern(p, m2, 0, r.BrT), { nl: nl0, sweeps: Math.round(sw0 * 1.8), srcJ: src2 });
+        const g2 = gapQuantities(p, m2, s2.A);
+        // the fine-mesh dq torque needs phaseFlux on m2's geometry
+        const lm2 = (() => {
+            const sv = phaseFlux(p, r, m2, s2.A);
+            const alI = (2 / 3) * (best.iabc[0] - best.iabc[1] / 2 - best.iabc[2] / 2), beI = (best.iabc[1] - best.iabc[2]) / Math.sqrt(3);
+            const alL = (2 / 3) * (sv[0] - sv[1] / 2 - sv[2] / 2), beL = (sv[1] - sv[2]) / Math.sqrt(3);
+            return 1.5 * pp * (alL * beI - beL * alI);
+        })();
+        const dT = Math.abs(best.T) > 1e-9 ? Math.abs(lm2 - best.T) / Math.abs(best.T) : NaN;
+        const B1b = gapHarmonic(g2.Br, pp);
+        const dB1 = B1L > 0 ? Math.abs(B1b - B1L) / B1L : NaN;
+        mesh = { dT, dB1, T2: lm2, Tstress2: g2.T, ok: Number.isFinite(dT) && dT < 0.05 && Number.isFinite(dB1) && dB1 < 0.05 };
+    }
+    // circuit referee: the analytic model's own torque at this current
+    const satK = r.satCurve && r.satCurve.length && p.Imax > 0 ? satInterp(r.satCurve, Irms / p.Imax) : 1;
+    const Tcir = r.Kt * Irms * satK;
+    return {
+        msh, A: best.A, B: best.B, conv: best.conv, mesh,
+        Irms, thE: best.thE, gap: best.g, B1: B1L,
+        Tem: mesh && !mesh.ok ? null : Math.abs(best.T),
+        TemRaw: Math.abs(best.T),
+        Tcir, dTcir: Tcir > 0 ? Math.abs(best.T) / Tcir - 1 : NaN,
+        demag: { worstMargin, frac: nMagCells ? nDemag / nMagCells : NaN, nDemag, nMagCells, strip: Array.from(strip) },
         nr: msh.nr, nth,
     };
 }
@@ -25749,6 +25970,20 @@ function MotorDesigner() {
             setFieldBusy(false);
         }, 30);
     };
+    // v61: loaded field study (winding currents + demag map) — separate opt-in state
+    const [fieldL, setFieldL] = useState(null);
+    const [fieldLBusy, setFieldLBusy] = useState(false);
+    const [fieldLI, setFieldLI] = useState(0); // 0 = rated
+    const fieldLStale = fieldL && fieldL.of !== JSON.stringify(p);
+    const runFieldL = () => {
+        setFieldLBusy(true);
+        setTimeout(() => {
+            const t0 = Date.now();
+            const F = fieldStudyLoaded(p, r, { I: fieldLI > 0 ? fieldLI : 0, nAng: 9 });
+            setFieldL(F && !F.err ? { ...F, ms: Date.now() - t0, of: JSON.stringify(p) } : F);
+            setFieldLBusy(false);
+        }, 30);
+    };
     const [cycle, setCycle] = useState(null);
     const [cycMsg, setCycMsg] = useState("");
     const dcyc = useMemo(() => (cycle ? driveCycle(p, r, cycle) : null), [p, r, cycle]);
@@ -27486,7 +27721,78 @@ function MotorDesigner() {
                                 React.createElement("div", { className: "note" },
                                     "The comparison row is the point of this card: where the field solve and the magnetic circuit agree, the fast model is trustworthy for sweeps; where they diverge, the circuit is missing something (thick magnets starving the back iron is the usual culprit \u2014 the circuit keeps predicting more flux, the field says the iron ran out). ",
                                     React.createElement("b", null, "Cogging torque is deliberately not reported here:"),
-                                    " it failed its own mesh-convergence study on this structured mesh, so the analytical cogging model above remains the source. Magnetostatic and no-load: no eddy currents, no hysteresis, no stator current."))))),
+                                    " it failed its own mesh-convergence study on this structured mesh, so the analytical cogging model above remains the source. Magnetostatic and no-load: no eddy currents, no hysteresis, no stator current."))),
+                            React.createElement("div", { className: "cardhead", style: { marginTop: 14 } },
+                                React.createElement("h2", null, "Loaded solve \u2014 torque & demag map")),
+                            React.createElement("div", { className: "iobar" },
+                                React.createElement("button", { className: "btn", onClick: runFieldL, disabled: fieldLBusy }, fieldLBusy ? "Solving 9 angles…" : fieldL ? "Re-solve loaded" : "Solve loaded"),
+                                React.createElement(Num, { label: "Phase current (0 = rated)", unit: "A rms", v: fieldLI, set: setFieldLI, step: 0.5, min: 0 })),
+                            fieldL && fieldL.err && React.createElement("div", { className: "warn errb" }, fieldL.err),
+                            fieldL && !fieldL.err && (React.createElement(React.Fragment, null,
+                                fieldLStale && React.createElement("div", { className: "warn" }, "The design has changed since this loaded solve \u2014 re-solve to match."),
+                                React.createElement("div", { className: "tbl", style: { marginTop: 8 } },
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Electromagnetic torque (dq flux-linkage, best of 9 angles)"),
+                                        React.createElement("b", null,
+                                            fieldL.Tem !== null ? tqS(fieldL.Tem) : "withheld — not mesh-converged",
+                                            " @ ",
+                                            fmt(fieldL.Irms, 2),
+                                            " A")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "vs the circuit's Kt\u00B7I\u00B7sat(I)"),
+                                        React.createElement("b", { style: { color: Math.abs(fieldL.dTcir) < 0.15 ? "#059669" : Math.abs(fieldL.dTcir) < 0.3 ? "#B45309" : "#DC2626" } },
+                                            tqS(fieldL.Tcir),
+                                            " \u00B7 ",
+                                            (fieldL.dTcir * 100).toFixed(1),
+                                            "% difference")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Loaded gap fundamental (vs no-load circuit)"),
+                                        React.createElement("b", null,
+                                            fieldL.B1.toFixed(3),
+                                            " T vs ",
+                                            r.B1.toFixed(3),
+                                            " T")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null,
+                                            "Demagnetization at ",
+                                            r.demagT,
+                                            " \u00B0C worst-case (HcJ ",
+                                            fmt(r.HcJmin, 0),
+                                            " kA/m)"),
+                                        React.createElement("b", { style: { color: fieldL.demag.worstMargin < 0 ? "#DC2626" : fieldL.demag.worstMargin < 0.2 ? "#B45309" : "#059669" } },
+                                            "worst margin ",
+                                            (fieldL.demag.worstMargin * 100).toFixed(0),
+                                            "%",
+                                            fieldL.demag.nDemag > 0 ? ` · ${(fieldL.demag.frac * 100).toFixed(1)}% of magnet cells PAST the knee` : " · no cell past the knee")),
+                                    fieldL.mesh && React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Mesh check (loaded torque / loaded B1)"),
+                                        React.createElement("b", { style: { color: fieldL.mesh.ok ? "#059669" : "#DC2626" } },
+                                            fieldL.mesh.ok ? "converged" : "NOT converged",
+                                            " \u2014 \u0394T ",
+                                            (fieldL.mesh.dT * 100).toFixed(1),
+                                            "%, \u0394B1 ",
+                                            (fieldL.mesh.dB1 * 100).toFixed(1),
+                                            "%")),
+                                    React.createElement("div", { className: "kv" },
+                                        React.createElement("span", null, "Solve"),
+                                        React.createElement("b", null,
+                                            fieldL.nr,
+                                            "\u00D7",
+                                            fieldL.nth,
+                                            " cells \u00D7 9 angles + verify \u00B7 ",
+                                            fieldL.ms,
+                                            " ms \u00B7 MMF angle ",
+                                            (fieldL.thE * 180 / Math.PI).toFixed(0),
+                                            "\u00B0e"))),
+                                React.createElement("svg", { viewBox: "0 0 460 46", style: { width: "100%", marginTop: 6 } },
+                                    fieldL.demag.strip.filter((_, i9) => i9 % 2 === 0).map((m9, i9, arr9) => {
+                                        const w9 = 452 / arr9.length;
+                                        const c9 = !Number.isFinite(m9) ? "#E2E8F0" : m9 < 0 ? "#DC2626" : m9 < 0.2 ? "#F59E0B" : m9 < 0.5 ? "#84CC16" : "#059669";
+                                        return React.createElement("rect", { key: i9, x: 4 + i9 * w9, y: 6, width: Math.max(w9 - 0.5, 0.5), height: 22, fill: c9 });
+                                    }),
+                                    React.createElement("text", { x: 4, y: 42, style: { font: "9px monospace", fill: "#64748B" } }, "0\u00B0"),
+                                    React.createElement("text", { x: 456, y: 42, textAnchor: "end", style: { font: "9px monospace", fill: "#64748B" } }, "360\u00B0 \u2014 worst demag margin per mechanical angle (green \u226550% \u00B7 lime \u226520% \u00B7 amber <20% \u00B7 red past knee)")),
+                                React.createElement("div", { className: "note" }, "Same solver, same mesh discipline: winding ampere-turns from the engine's own star-of-slots layers (i/paths per conductor), sinusoidal phase currents, the electrical angle swept for peak torque. Torque is the volume-integrated dq flux-linkage form \u2014 the boundary-staircase noise that disqualified cogging does not apply \u2014 and it is withheld unless its own two-mesh check passes. The demag map compares the local opposing H in every magnet cell against HcJ at the design's worst-case magnet temperature (cold for ferrite, hot for NdFeB). 2-D: end effects and PWM ripple current are not in this number."))))),
                         emap && (React.createElement("div", { className: "card paper", style: { marginTop: 14 } },
                             React.createElement("div", { className: "cardhead" },
                                 React.createElement("h2", null, "Efficiency map"),

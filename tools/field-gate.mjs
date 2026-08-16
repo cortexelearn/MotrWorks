@@ -9,7 +9,7 @@ globalThis.document = { getElementById: () => null, createElement: () => ({ styl
 globalThis.window = { addEventListener: () => {} };
 const html = readFileSync('index.html', 'utf8');
 const app = html.slice(html.indexOf('<script>/*APP*/') + 15, html.indexOf('</script>\n<script>/*BOOT*/')).replace(/<\\\/script/g, '</script');
-const M = new Function('React', app + '\nreturn { computeDesign, fieldStudy, fieldMesh, magPattern, solveField, gapQuantities, PRESETS };')(globalThis.React);
+const M = new Function('React', app + '\nreturn { computeDesign, fieldStudy, fieldStudyLoaded, fieldMesh, magPattern, solveField, gapQuantities, PRESETS };')(globalThis.React);
 const base = JSON.parse(readFileSync('/tmp/_base.json', 'utf8'));
 let fail = false;
 const ok = (c, what, detail) => { console.log(`  ${c ? '✓' : '✗'} ${what}${detail ? ': ' + detail : ''}`); if (!c) fail = true; };
@@ -170,6 +170,33 @@ console.log('Field-informed leakage');
     `Kt ${r.Kt.toFixed(4)} -> ${r2.Kt.toFixed(4)}`);
   const r3 = M.computeDesign({ ...p, klOv: 0 });
   ok(Math.abs(r3.Kt - r.Kt) < 1e-12, 'revert (klOv=0) restores the default exactly');
+}
+
+// 11. v61 LOADED solve: winding currents + dq flux-linkage torque + demag map. The
+//     torque-vs-circuit referee is the unit anchor for the winding source (any scale
+//     slip shows as a ×1000 error); linearity and the mesh self-check keep it honest.
+console.log('Loaded solve');
+{
+  const p = { ...base, slotR: 0, ...M.PRESETS['NEMA 17 · 28 V · ~6 krpm'] };
+  const r = M.computeDesign(p);
+  const F = M.fieldStudyLoaded(p, r, { nAng: 9 });
+  ok(!F.err, 'loaded solve ran', F.err || `${F.nr}x${F.nth}, angle ${(F.thE * 180 / Math.PI).toFixed(0)}°e`);
+  if (!F.err) {
+    ok(Math.abs(F.dTcir) < 0.3, 'dq torque within 30% of the circuit Kt·I·sat referee',
+      `field ${F.TemRaw.toFixed(4)} vs circuit ${F.Tcir.toFixed(4)} N·m (${(F.dTcir * 100).toFixed(1)}%)`);
+    ok(F.mesh && F.mesh.ok, 'loaded torque and B1 are mesh-converged',
+      F.mesh ? `dT ${(F.mesh.dT * 100).toFixed(1)}% dB1 ${(F.mesh.dB1 * 100).toFixed(1)}%` : 'no mesh check');
+    const F2 = M.fieldStudyLoaded(p, r, { nAng: 9, I: F.Irms / 2, verify: false });
+    const lin = F2.TemRaw / F.TemRaw;
+    ok(Math.abs(lin - 0.5) < 0.06, 'torque is linear in current below saturation', `T(I/2)/T(I) = ${lin.toFixed(3)}`);
+    ok(F.demag.worstMargin > 0, 'no demag at rated current', `worst margin ${(F.demag.worstMargin * 100).toFixed(0)}%`);
+    const pThin = { ...p, magT: 0.8, mag: 'N52', Top: 65 };
+    const rThin = M.computeDesign(pThin);
+    const Fd = M.fieldStudyLoaded(pThin, rThin, { nAng: 5, I: F.Irms * 25, verify: false });
+    ok(!Fd.err && Fd.demag.worstMargin < F.demag.worstMargin - 0.15,
+      'thin hot magnet at 25x current erodes the demag margin',
+      Fd.err || `${(F.demag.worstMargin * 100).toFixed(0)}% -> ${(Fd.demag.worstMargin * 100).toFixed(0)}%`);
+  }
 }
 
 console.log(fail ? 'FIELD GATE: FAIL' : 'FIELD GATE: PASS');

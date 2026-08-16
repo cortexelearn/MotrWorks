@@ -1184,6 +1184,20 @@ export default function MotorDesigner() {
       setFieldBusy(false);
     }, 30);
   };
+  // v61: loaded field study (winding currents + demag map) — separate opt-in state
+  const [fieldL, setFieldL] = useState(null);
+  const [fieldLBusy, setFieldLBusy] = useState(false);
+  const [fieldLI, setFieldLI] = useState(0);           // 0 = rated
+  const fieldLStale = fieldL && fieldL.of !== JSON.stringify(p);
+  const runFieldL = () => {
+    setFieldLBusy(true);
+    setTimeout(() => {
+      const t0 = Date.now();
+      const F = fieldStudyLoaded(p, r, { I: fieldLI > 0 ? fieldLI : 0, nAng: 9 });
+      setFieldL(F && !F.err ? { ...F, ms: Date.now() - t0, of: JSON.stringify(p) } : F);
+      setFieldLBusy(false);
+    }, 30);
+  };
   const [cycle, setCycle] = useState(null);
   const [cycMsg, setCycMsg] = useState("");
   const dcyc = useMemo(() => (cycle ? driveCycle(p, r, cycle) : null), [p, r, cycle]);
@@ -2799,6 +2813,58 @@ export default function MotorDesigner() {
                     failed its own mesh-convergence study on this structured mesh, so the analytical
                     cogging model above remains the source. Magnetostatic and no-load: no eddy
                     currents, no hysteresis, no stator current.
+                  </div>
+                </>
+              )}
+
+              {/* v61: LOADED solve — winding currents in, torque + demag map out. */}
+              <div className="cardhead" style={{ marginTop: 14 }}>
+                <h2>Loaded solve — torque & demag map</h2>
+              </div>
+              <div className="iobar">
+                <button className="btn" onClick={runFieldL} disabled={fieldLBusy}>
+                  {fieldLBusy ? "Solving 9 angles…" : fieldL ? "Re-solve loaded" : "Solve loaded"}</button>
+                <Num label="Phase current (0 = rated)" unit="A rms" v={fieldLI} set={setFieldLI} step={0.5} min={0} />
+              </div>
+              {fieldL && fieldL.err && <div className="warn errb">{fieldL.err}</div>}
+              {fieldL && !fieldL.err && (
+                <>
+                  {fieldLStale && <div className="warn">The design has changed since this loaded solve — re-solve to match.</div>}
+                  <div className="tbl" style={{ marginTop: 8 }}>
+                    <div className="kv"><span>Electromagnetic torque (dq flux-linkage, best of 9 angles)</span>
+                      <b>{fieldL.Tem !== null ? tqS(fieldL.Tem) : "withheld — not mesh-converged"} @ {fmt(fieldL.Irms, 2)} A</b></div>
+                    <div className="kv"><span>vs the circuit's Kt·I·sat(I)</span>
+                      <b style={{ color: Math.abs(fieldL.dTcir) < 0.15 ? "#059669" : Math.abs(fieldL.dTcir) < 0.3 ? "#B45309" : "#DC2626" }}>
+                        {tqS(fieldL.Tcir)} · {(fieldL.dTcir * 100).toFixed(1)}% difference</b></div>
+                    <div className="kv"><span>Loaded gap fundamental (vs no-load circuit)</span>
+                      <b>{fieldL.B1.toFixed(3)} T vs {r.B1.toFixed(3)} T</b></div>
+                    <div className="kv"><span>Demagnetization at {r.demagT} °C worst-case (HcJ {fmt(r.HcJmin, 0)} kA/m)</span>
+                      <b style={{ color: fieldL.demag.worstMargin < 0 ? "#DC2626" : fieldL.demag.worstMargin < 0.2 ? "#B45309" : "#059669" }}>
+                        worst margin {(fieldL.demag.worstMargin * 100).toFixed(0)}%{fieldL.demag.nDemag > 0 ? ` · ${(fieldL.demag.frac * 100).toFixed(1)}% of magnet cells PAST the knee` : " · no cell past the knee"}</b></div>
+                    {fieldL.mesh && <div className="kv"><span>Mesh check (loaded torque / loaded B1)</span>
+                      <b style={{ color: fieldL.mesh.ok ? "#059669" : "#DC2626" }}>
+                        {fieldL.mesh.ok ? "converged" : "NOT converged"} — ΔT {(fieldL.mesh.dT * 100).toFixed(1)}%, ΔB1 {(fieldL.mesh.dB1 * 100).toFixed(1)}%</b></div>}
+                    <div className="kv"><span>Solve</span><b>{fieldL.nr}×{fieldL.nth} cells × 9 angles + verify · {fieldL.ms} ms · MMF angle {(fieldL.thE * 180 / Math.PI).toFixed(0)}°e</b></div>
+                  </div>
+                  {/* demag strip: worst margin per gap angle — where on the circumference the knee is nearest */}
+                  <svg viewBox="0 0 460 46" style={{ width: "100%", marginTop: 6 }}>
+                    {fieldL.demag.strip.filter((_, i9) => i9 % 2 === 0).map((m9, i9, arr9) => {
+                      const w9 = 452 / arr9.length;
+                      const c9 = !Number.isFinite(m9) ? "#E2E8F0" : m9 < 0 ? "#DC2626" : m9 < 0.2 ? "#F59E0B" : m9 < 0.5 ? "#84CC16" : "#059669";
+                      return <rect key={i9} x={4 + i9 * w9} y={6} width={Math.max(w9 - 0.5, 0.5)} height={22} fill={c9} />;
+                    })}
+                    <text x={4} y={42} style={{ font: "9px monospace", fill: "#64748B" }}>0°</text>
+                    <text x={456} y={42} textAnchor="end" style={{ font: "9px monospace", fill: "#64748B" }}>360° — worst demag margin per mechanical angle (green ≥50% · lime ≥20% · amber &lt;20% · red past knee)</text>
+                  </svg>
+                  <div className="note">
+                    Same solver, same mesh discipline: winding ampere-turns from the engine's own
+                    star-of-slots layers (i/paths per conductor), sinusoidal phase currents, the
+                    electrical angle swept for peak torque. Torque is the volume-integrated dq
+                    flux-linkage form — the boundary-staircase noise that disqualified cogging does
+                    not apply — and it is withheld unless its own two-mesh check passes. The demag
+                    map compares the local opposing H in every magnet cell against HcJ at the
+                    design's worst-case magnet temperature (cold for ferrite, hot for NdFeB).
+                    2-D: end effects and PWM ripple current are not in this number.
                   </div>
                 </>
               )}
