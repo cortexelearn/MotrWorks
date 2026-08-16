@@ -2156,6 +2156,17 @@ export default function MotorDesigner() {
             )}
           </div>
 
+          {/* v61: Cut Inspection — true-scale conductor cut with per-coil shades + legend */}
+          {pm && !r.err.length && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Cut inspection (true-scale conductors)</h2>
+                <button className="btn mini ghost" onClick={() => exportPng("svg-cutinspect", "cut-inspection.png")}>PNG ⤓</button>
+              </div>
+              <CutInspection p={p} r={r} us={us} />
+            </div>
+          )}
+
           {brM && <div className="card paper" style={{ marginTop: 14 }}>
             <div className="cardhead">
               <h2>Armature lamination (from the drawing fields)</h2>

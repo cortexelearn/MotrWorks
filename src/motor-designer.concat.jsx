@@ -6609,6 +6609,166 @@ function BrushedSlotDetail({ p, r, us }) {
   );
 }
 
+/* ---------- Cut Inspection (v61) ---------- */
+/* True-scale conductor cut, productized from the P7 rendering-challenge winner. EVERY
+   quantity is read from computeDesign's outputs (topLayer/botLayer, span, dIns/dBare,
+   w1/w2/hs, fill, Bt/By vs the steel ceiling) — nothing is re-derived, so this view can
+   never disagree with the results column. Each COIL gets its own shade of its phase's
+   hue, and both of a coil's sides (in-slot + return slot, `span` apart) share that
+   shade, so the winding throw reads directly off the cut; the legend table beside the
+   drawing lists every coil with its slots. */
+function CutInspection({ p, r, us }) {
+  const [phSel, setPhSel] = React.useState(-1);            // -1 = all phases
+  if (p.motorType !== "pm" || !r.topLayer || !r.topLayer.length || r.err.length) return null;
+  const S = 620, cx = 310, cy = 310;
+  const k = (S * 0.47) / (p.statorOD / 2);                 // px per mm
+  const mm = (v) => v * k;
+  const rOD = mm(p.statorOD / 2), rBore = mm(p.statorID / 2);
+  const rTip = rBore + mm(p.tipH), rSlotTop = rTip + mm(Math.max(r.hs, 0));
+  const rRot = mm(p.rotorOD / 2), rMagIn = rRot - mm(p.magT), rSh = Math.max(mm(p.shaftD / 2), 4);
+  const Ns = r.Ns, poles = r.poles, two = r.layers === 2;
+  const aOf = (i) => (i / Ns) * 2 * Math.PI - Math.PI / 2;
+  // ---- per-coil identity & shade: coil i enters slot i (airgap-side layer) and returns
+  // in slot (i+span)%Ns (outer layer). Shades ramp light→dark around each phase.
+  const PH_HUE = [33, 217, 152];
+  const phCount = [0, 0, 0];
+  const coils = r.topLayer.map((t9, i9) => {
+    const ci = phCount[t9.phase]++;
+    return { i: i9, phase: t9.phase, sign: t9.sign, inS: i9, outS: (i9 + r.span) % Ns, ci };
+  });
+  const shade = (c9) => `hsl(${PH_HUE[c9.phase]} ${72 - (c9.ci % 2) * 14}% ${40 + (28 * c9.ci) / Math.max(phCount[c9.phase] - 1, 1)}%)`;
+  const coilOfBottom = (j9) => coils[(j9 - r.span + Ns * 64) % Ns];
+  // ---- steel status tint (in-place saturation flag) ----
+  const btBad = r.Bt > r.stM.Bmax, btWarm = r.Bt > 0.88 * r.stM.Bmax;
+  const steelC = btBad ? "#DEA3A3" : btWarm ? "#CBB597" : "#AAB4C0";
+  // ---- slot punch polygons + conductor packing ----
+  const dIns = r.dIns, dBare = r.dBare, liner = Math.max(p.liner, 0);
+  const perSide = Math.max(Math.round(p.turns), 1) * Math.max(Math.round(p.strands), 1);
+  const slotEls = [], wireEls = [];
+  let overflowTot = 0;
+  const wAt = (rr) => r.w1 + ((r.w2 - r.w1) * (rr - p.statorID / 2 - p.tipH)) / Math.max(r.hs, 1e-6); // mm, at radius rr (mm)
+  for (let i9 = 0; i9 < Ns; i9++) {
+    const a0 = aOf(i9);
+    const P9 = (rad, ang) => `${(cx + rad * Math.cos(ang)).toFixed(1)},${(cy + rad * Math.sin(ang)).toFixed(1)}`;
+    const hw1 = mm(r.w1 / 2) / rTip, hw2 = mm(r.w2 / 2) / rSlotTop, hwo = Math.max(mm(p.slotOpen / 2), 0.6) / rBore;
+    slotEls.push(
+      <g key={"s" + i9}>
+        <polygon points={`${P9(rTip, a0 - hw1)} ${P9(rTip, a0 + hw1)} ${P9(rSlotTop, a0 + hw2)} ${P9(rSlotTop, a0 - hw2)}`} fill="#F1F5F9" stroke="#8492A0" strokeWidth="0.7" />
+        <polygon points={`${P9(rBore, a0 - hwo)} ${P9(rBore, a0 + hwo)} ${P9(rTip, a0 + hwo * 0.7)} ${P9(rTip, a0 - hwo * 0.7)}`} fill="#F1F5F9" stroke="#8492A0" strokeWidth="0.5" />
+        <text x={cx + ((rSlotTop + rOD) / 2) * Math.cos(a0)} y={cy + ((rSlotTop + rOD) / 2) * Math.sin(a0) + 2.5} textAnchor="middle" className="wnum" style={{ fill: "#334155" }}>{i9 + 1}</text>
+      </g>
+    );
+    // pack each layer's conductors: hex rows walking outward through the layer's radial band
+    const bands = two
+      ? [[p.statorID / 2 + p.tipH, p.statorID / 2 + p.tipH + r.hs / 2, r.topLayer[i9], coils[i9]],
+         [p.statorID / 2 + p.tipH + r.hs / 2, p.statorID / 2 + p.tipH + r.hs, r.botLayer[i9], coilOfBottom(i9)]]
+      : [[p.statorID / 2 + p.tipH, p.statorID / 2 + p.tipH + r.hs, r.topLayer[i9], coils[i9]]];
+    for (const [rInB, rOutB, lay, coil] of bands) {
+      if (!lay || !coil) continue;
+      const col = shade(coil);
+      const dimmed = phSel >= 0 && lay.phase !== phSel;
+      let placed = 0, row = 0;
+      let rr = rInB + liner + dIns / 2;
+      while (placed < perSide && rr <= rOutB - dIns / 2 + 1e-9) {
+        const wRow = wAt(rr) - 2 * liner;
+        const nRow = Math.max(Math.floor((wRow - dIns) / dIns) + 1, 0);
+        const off0 = row % 2 === 1 ? dIns / 2 : 0;
+        for (let c9 = 0; c9 < nRow && placed < perSide; c9++) {
+          const xoff = (c9 - (nRow - 1) / 2) * dIns + (row % 2 === 1 && c9 < nRow - 1 ? off0 : 0);
+          if (Math.abs(xoff) > wRow / 2 - dIns / 2 + 1e-9) continue;
+          const ang = a0 + Math.atan2(xoff, rr);
+          const rp = mm(rr);
+          wireEls.push(
+            <g key={`w${i9}-${coil.i}-${placed}`} opacity={dimmed ? 0.1 : 1}>
+              <circle cx={cx + rp * Math.cos(ang)} cy={cy + rp * Math.sin(ang)} r={Math.max(mm(dIns / 2), 0.8)} fill={col} stroke="#1E293B" strokeWidth="0.35">
+                <title>{`slot ${i9 + 1} · coil ${PHASE[coil.phase].name}${coil.ci + 1}${lay.sign > 0 ? "+" : "−"} · wire ${placed + 1}/${perSide} · Ø${dBare.toFixed(3)}/${dIns.toFixed(3)} mm`}</title>
+              </circle>
+              {mm(dBare / 2) > 1.6 && <circle cx={cx + rp * Math.cos(ang)} cy={cy + rp * Math.sin(ang)} r={mm(dBare / 2) * 0.82} fill="none" stroke="#FFFFFF" strokeWidth="0.5" opacity="0.5" />}
+            </g>
+          );
+          placed++;
+        }
+        row++; rr += dIns * 0.866;
+      }
+      if (placed < perSide) {
+        overflowTot += perSide - placed;
+        const angF = a0, rpF = mm(rOutB) - 4;
+        wireEls.push(<circle key={`of${i9}-${coil.i}`} cx={cx + rpF * Math.cos(angF)} cy={cy + rpF * Math.sin(angF)} r="4" fill="#DC2626">
+          <title>{`slot ${i9 + 1}: ${perSide - placed} of ${perSide} conductors do not pack in this layer at Ø${dIns.toFixed(3)} mm`}</title></circle>);
+      }
+    }
+  }
+  // ---- rotor: hub, magnets, N/S labels ----
+  const magEls = [];
+  const polePitch = (2 * Math.PI) / poles, arcHalf = ((p.poleArc / 100) * polePitch) / 2;
+  for (let m9 = 0; m9 < poles; m9++) {
+    const ac = m9 * polePitch - Math.PI / 2 + polePitch / 2;
+    const a1 = ac - arcHalf, a2 = ac + arcHalf;
+    const north = m9 % 2 === 0;
+    const path = `M ${cx + rMagIn * Math.cos(a1)} ${cy + rMagIn * Math.sin(a1)} A ${rMagIn} ${rMagIn} 0 0 1 ${cx + rMagIn * Math.cos(a2)} ${cy + rMagIn * Math.sin(a2)} L ${cx + rRot * Math.cos(a2)} ${cy + rRot * Math.sin(a2)} A ${rRot} ${rRot} 0 0 0 ${cx + rRot * Math.cos(a1)} ${cy + rRot * Math.sin(a1)} Z`;
+    magEls.push(<path key={"m" + m9} d={path} fill={north ? "#C9564A" : "#4A76B8"} stroke="#334155" strokeWidth="0.6" />);
+    if (m9 < 2) magEls.push(<text key={"ml" + m9} x={cx + ((rMagIn + rRot) / 2) * Math.cos(ac)} y={cy + ((rMagIn + rRot) / 2) * Math.sin(ac) + 2.5} textAnchor="middle" style={{ font: "600 8px monospace", fill: "#fff" }}>{north ? "N" : "S"}</text>);
+  }
+  const L9 = (v, d) => (us === "in" ? (v / 25.4).toFixed(d === undefined ? 3 : d) + '"' : v.toFixed(2) + " mm");
+  return (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+      <svg id="svg-cutinspect" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${S} ${S}`} style={{ flex: "1 1 380px", minWidth: 320 }}>
+        <style>{SVGCSS}</style>
+        {/* stator steel with in-place saturation tint */}
+        <circle cx={cx} cy={cy} r={rOD} fill={steelC} stroke="#334155" strokeWidth="1.2" />
+        <circle cx={cx} cy={cy} r={rBore} fill="#FFFFFF" />
+        {slotEls}
+        {/* airgap: true scale, dashed mid-gap circle */}
+        <circle cx={cx} cy={cy} r={(rRot + rBore) / 2} fill="none" stroke="#94A3B8" strokeWidth="0.6" strokeDasharray="3 3" />
+        {/* rotor */}
+        <circle cx={cx} cy={cy} r={rMagIn} fill="#8A94A2" stroke="#334155" strokeWidth="0.8" />
+        {magEls}
+        <circle cx={cx} cy={cy} r={rSh} fill="#5B6572" stroke="#334155" strokeWidth="0.8" />
+        {wireEls}
+        <text x={8} y={S - 10} className="dim">airgap {L9(r.airgap)} · bore Ø{L9(p.statorID, 2)} · OD Ø{L9(p.statorOD, 2)}{btBad ? " · TEETH PAST " + r.stM.Bmax + " T" : btWarm ? " · teeth near limit" : ""}</text>
+      </svg>
+      <div style={{ flex: "0 1 250px", minWidth: 220 }}>
+        <div className="iobar" style={{ marginBottom: 6 }}>
+          {[-1, 0, 1, 2].map((v9) => (
+            <button key={v9} className={"btn mini" + (phSel === v9 ? "" : " ghost")} onClick={() => setPhSel(v9)}>
+              {v9 < 0 ? "All" : "Phase " + PHASE[v9].name}</button>
+          ))}
+        </div>
+        <div className="kv"><span>Fill (insulated / gross slot)</span><b>{(r.fillGross * 100).toFixed(1)}%</b></div>
+        <div className="kv"><span>Fill (bare Cu / gross slot)</span><b>{(r.fillCu * 100).toFixed(1)}%</b></div>
+        <div className="kv"><span>Conductors per slot{two ? " (2 coil sides)" : ""}</span><b>{perSide * (two ? 2 : 1)}</b></div>
+        <div className="kv"><span>Wire Ø bare / insulated</span><b>{r.dBare.toFixed(3)} / {r.dIns.toFixed(3)} mm</b></div>
+        {overflowTot > 0
+          ? <div className="warn">{overflowTot} conductors do not pack at true scale (red dots) — the fill number admits what the drawing shows.</div>
+          : <div className="kv"><span>Pack check (hex lay, true Ø)</span><b style={{ color: "#059669" }}>all conductors placed</b></div>}
+        <div className="tbl" style={{ marginTop: 8, maxHeight: 330, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+            <thead><tr>
+              {["", "Coil", "In", "Out", "Sense"].map((h9, hi) => <th key={hi} style={{ textAlign: "left", padding: "2px 6px", borderBottom: "1px solid #CBD5E1", position: "sticky", top: 0, background: "#fff" }}>{h9}</th>)}
+            </tr></thead>
+            <tbody>
+              {coils.map((c9) => (
+                <tr key={c9.i} style={{ opacity: phSel >= 0 && c9.phase !== phSel ? 0.3 : 1 }}>
+                  <td style={{ padding: "1px 6px" }}><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: shade(c9), border: "1px solid #334155" }} /></td>
+                  <td style={{ padding: "1px 6px", fontFamily: "monospace" }}>{PHASE[c9.phase].name}{c9.ci + 1}</td>
+                  <td style={{ padding: "1px 6px" }}>{c9.inS + 1}</td>
+                  <td style={{ padding: "1px 6px" }}>{c9.outS + 1}</td>
+                  <td style={{ padding: "1px 6px" }}>{c9.sign > 0 ? "+" : "−"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="note" style={{ marginTop: 6 }}>
+          Each coil keeps ONE shade across both of its slots (throw {r.span}) — matching
+          colors are the same physical coil. Hover any wire for its identity. Steel tint
+          flags tooth flux vs the {r.stM.Bmax} T ceiling in place.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SlotDetail({ p, r, us }) {
   if (p.motorType === "brushed") return <BrushedSlotDetail p={p} r={r} us={us} />;
   const L = (mm, d = 3) => (us === "in" ? (mm / INCH).toFixed(d) : mm.toFixed(2));
@@ -9370,6 +9530,17 @@ export default function MotorDesigner() {
               </>
             )}
           </div>
+
+          {/* v61: Cut Inspection — true-scale conductor cut with per-coil shades + legend */}
+          {pm && !r.err.length && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Cut inspection (true-scale conductors)</h2>
+                <button className="btn mini ghost" onClick={() => exportPng("svg-cutinspect", "cut-inspection.png")}>PNG ⤓</button>
+              </div>
+              <CutInspection p={p} r={r} us={us} />
+            </div>
+          )}
 
           {brM && <div className="card paper" style={{ marginTop: 14 }}>
             <div className="cardhead">
