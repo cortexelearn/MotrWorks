@@ -95,3 +95,40 @@ const rLam = M.computeDesign(pLam);
 const lamFil = M.parseDxf(M.buildLamDxf(pLam, rLam));
 if (!slotSymmetry(lamFil.pts, rLam.Ns, 'stator(slotR=0.5)')) process.exit(1);
 console.log('✓ fillet symmetry verified on both lamination exports');
+
+// ---- v60.6 sloped-wall tangency (Grok) ----
+// Mirror symmetry cannot see this: a fillet centered for a VERTICAL wall is still
+// symmetric, but leaves a sl·rc jog (~0.13 mm on this trapezoid) where the sloped wall
+// meets the arc. Walk slot 0's points in emission order; when the profile leaves the
+// left wall line, the first off-wall point may deviate by at most the arc's faceting
+// sagitta — a jog fails, a tangent departure passes.
+function wallTangency(parsed9, p9, r9, stator9, tag) {
+  // builder local frame at slot angle 0: global = [y_local, x_local]. parseDxf samples the
+  // reference CIRCLE into pts first and subdivides long segments, so (1) drop circle
+  // samples by radius, (2) walk slot 0's left side up to where the bottom span crosses
+  // the centerline — the last point ON the wall line is the departure; the next point may
+  // deviate by at most the arc's faceting sagitta.
+  const rTip = stator9 ? p9.statorID / 2 + p9.tipH : p9.rotorOD / 2 - p9.tipH;
+  const rBot = stator9 ? rTip + Math.max(r9.hs, 0) : rTip - Math.max(r9.hs, 0);
+  const A = [-r9.w1 / 2, rTip], B = [-r9.w2 / 2, rBot];              // left wall endpoints
+  const len = Math.hypot(B[0] - A[0], B[1] - A[1]);
+  const dWall = (x, y) => Math.abs((B[0] - A[0]) * (y - A[1]) - (B[1] - A[1]) * (x - A[0])) / len;
+  const circR = parsed9.circles.map((c9) => c9.r);
+  const prof = parsed9.pts.filter(([gx, gy]) => !circR.some((cr) => Math.abs(Math.hypot(gx, gy) - cr) < 0.05));
+  const loc = [];
+  for (const [gx, gy] of prof) {                                     // local x = gy, y = gx
+    if (gy > 0.05) break;                                            // bottom span crossed the centerline: left side done
+    loc.push({ x: gy, y: gx, d: dWall(gy, gx) });
+  }
+  const rc9 = 0.5;
+  const sl9 = Math.abs((r9.w2 - r9.w1) / 2 / Math.max(Math.abs(rBot - rTip), 1e-6));
+  const sagMax = rc9 * (1 - Math.cos((Math.PI / 2 + Math.atan(sl9)) / 5)) + 0.02;
+  let iLast = -1;
+  for (let i = 0; i < loc.length - 1; i++) if (loc[i].d < 0.012) iLast = i;
+  const jog = iLast >= 0 && iLast + 1 < loc.length ? loc[iLast + 1].d : NaN;
+  console.log(`${tag} wall-to-arc departure: ${Number.isFinite(jog) ? jog.toFixed(4) : 'NaN'} mm (facet limit ${sagMax.toFixed(4)}, ${loc.length} pts walked)`);
+  return Number.isFinite(jog) && jog <= sagMax;
+}
+if (!wallTangency(lamFil, pLam, rLam, true, 'stator(trap slotR=0.5)')) process.exit(1);
+if (!wallTangency(armFil, prFil, rFil, false, 'armature(slotR=0.5)')) process.exit(1);
+console.log('✓ fillet-to-wall tangency verified on both lamination exports');

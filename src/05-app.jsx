@@ -664,13 +664,16 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
 /* ---- Actuator module: composes the motor & brake designs open in their tabs through a gearhead ---- */
 function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, exportActuator, importActuator, ioMsg, impPanel }) {
   const motorT = p.actMotor === "brushed" ? "brushed" : p.actMotor === "stepper" ? "stepper" : "pm";
+  // v60.6 (Grok): the "tab not opened yet" fallback merged the starting preset over the
+  // CURRENT design — the same contamination class the preset fix closed (a dirty PM's
+  // TcuMax/Rext leaked into the composed brake). Defaults + preset, like everywhere else.
   const motorP = typeMem.current[motorT]
     ? { ...typeMem.current[motorT], motorType: motorT }
-    : { ...p, ...(typeDefaults[motorT] ? PRESETS[typeDefaults[motorT]] : {}), motorType: motorT };
+    : { ...DEFAULT_P, ...(typeDefaults[motorT] ? PRESETS[typeDefaults[motorT]] : {}), motorType: motorT };
   const mr = React.useMemo(() => computeDesign(motorP), [JSON.stringify(motorP)]);
   const brakeP = typeMem.current.brake
     ? { ...typeMem.current.brake, motorType: "brake" }
-    : { ...p, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
+    : { ...DEFAULT_P, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
   const withBrk = p.actBrake === "yes";
   const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
   // v60.5: ONE efficiency for one gearhead. Composition runs twice: a first pass fixes
@@ -690,7 +693,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
     : act0;
   const gtLim = gtAll && Number.isFinite(gtAll.TmaxOut) ? { T: gtAll.TmaxOut, label: "tooth yield" } : null;
   const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
-  const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
+  // v60.6 (Grok): the composed I-T chart needs the MOTOR saturation curve — without it the
+  // peak marker sat at Ipk*kIT instead of the drive limit
+  const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT, satCurve: mr.satCurve };
   const pIT = { motorType: motorT === "stepper" ? "pm" : motorT, Imax: motorP.Imax }; // chart math is generic
   const srcTag = (t9) => (typeMem.current[t9] ? "from its tab (live)" : "tab not opened yet — using its default preset");
   return (
@@ -731,7 +736,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
             const g9 = GEAR_PRESETS[v9]; if (!g9) return;
             ["gbType", "gbRatio", "gbStages", "gbOD", "nPlanets"].forEach((k9) => s(k9)(g9[k9]));
           }} opts={["(pick)", ...Object.keys(GEAR_PRESETS)]} />
-          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11"]} />
+          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11", "Q13"]} />
           <Sel label="Gear material / hardness" v={GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF} set={s("gbMat")} opts={Object.keys(GEAR_MATS)} />
           {(() => { const g8 = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF]; return (
             <>
@@ -830,12 +835,15 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
                 <b>{(gt.effF * 100).toFixed(1)}% / {gt.selfLock ? "self-locking" : (gt.effB * 100).toFixed(1) + "%"}</b></div>
               <div className="kv"><span>Back-drive breakaway at the output (est.)</span><b>{gt.Tbd.toFixed(3)} N·m</b></div>
               <div className="kv"><span>Friction torque through the train (fwd, at peak output)</span>
-                <b>{(act.peakT * (1 - gt.effF)).toFixed(2)} N·m of {act.peakT.toFixed(2)}</b></div>
+                {/* v60.6 (Codex): use the SAME eta the curve uses, and the output-equivalent
+                    loss form T_out·(1/η − 1) — the old line mixed the synthesized effF with a
+                    curve built on a different eta, and (1−η) understates referred loss */}
+                <b>{(act.peakT * (1 / Math.max(act.eta, 0.05) - 1)).toFixed(2)} N·m of {act.peakT.toFixed(2)}</b></div>
               {Number.isFinite(gt.TmaxOut) && <div className="kv"><span>{gt.stages[0] && gt.stages[0].harmonic ? "Momentary peak (ratcheting limit, size class)" : `Tooth-yield torque cap (Lewis, stage ${gt.limStage})`}</span>
                 <b style={{ color: act.peakT > gt.TmaxOut ? "#DC2626" : act.peakT > 0.6 * gt.TmaxOut ? "#D97706" : "#059669" }}>{gt.TmaxOut.toFixed(1)} N·m · margin ×{(gt.TmaxOut / Math.max(act.peakT, 1e-6)).toFixed(1)} vs peak</b></div>}
               {act.op && (() => {                                       /* A3: gear heat into the housing */
                 const Pout = (act.op.T * act.op.n * 2 * Math.PI) / 60;
-                const Pg = Pout * (1 / Math.max(gt.effF, 0.05) - 1);
+                const Pg = Pout * (1 / Math.max(act.eta, 0.05) - 1);   // v60.6: heat follows the eta the curve used
                 const A9 = Math.PI * (env9.gOD / 1000) * (env9.Lg / 1000) + (Math.PI / 2) * Math.pow(env9.gOD / 1000, 2);
                 const dT = Pg / (12 * Math.max(A9, 1e-4));               /* natural convection h ~ 12 */
                 return <>
@@ -960,7 +968,7 @@ const DEFAULT_P = {
     loadMode: "J", Irate: 5, bdRpm: 1800, Tcu: 100, Rext: 20,
     Tamb: 25, cooling: "Open air", TcuMax: 130, Tmin: -40, dutyPct: 100, cycleT: 10, brkEco: 100,
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
-    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
+    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
     agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
@@ -1048,7 +1056,7 @@ export default function MotorDesigner() {
         Td = Math.max(Tp - Tm, 0);
       }
     }
-    setP((o) => ({ ...o, calOn: "yes", calKR: +kR.toFixed(4), calKL: +kL.toFixed(4),
+    setP((o) => ({ ...o, calOn: "yes", calV: 2, calKR: +kR.toFixed(4), calKL: +kL.toFixed(4),
       calKKe: +kKe.toFixed(4), calKKt: +kKt.toFixed(4), calTd: +Td.toFixed(5) }));
     setIoMsg("Calibration captured — the model now tracks the bench, and design tweaks predict the real motor's response.");
   };
@@ -1301,9 +1309,19 @@ export default function MotorDesigner() {
     setLibName("");
     setLibMsg(`Saved “${nm}”.`);
   };
+  // v60.6 (Grok): calibration schema v2. Pre-v60.5 captures folded magnetic saturation
+  // into calKKt; the engine now applies sat(I) itself, so replaying an old capture knocks
+  // torque down twice. Any stored design with calOn but no calV >= 2 gets its calibration
+  // cleared with a recapture notice instead of silently double-applying.
+  const CAL_CLEAR = { calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2 };
+  const legacyCal = (src) => !!src && src.calOn === "yes" && !(src.calV >= 2);
   const libLoad = (e9) => {
-    const merged = { ...p };
+    // v60.6 (Codex): load onto DEFAULTS, not the current design — a library entry saved
+    // before a field existed would otherwise inherit the current design's value for it
+    // (the same contamination class the preset fix closed)
+    const merged = { ...DEFAULT_P };
     for (const k9 of Object.keys(merged)) if (k9 in e9.design && typeof e9.design[k9] === typeof merged[k9]) merged[k9] = e9.design[k9];
+    if (legacyCal(e9.design)) { Object.assign(merged, CAL_CLEAR); setLibMsg(`Loaded with calibration cleared (captured before the saturation model changed) - recapture from the bench numbers.`); setP(merged); return; }
     setP(merged);
     setLibMsg(`Loaded “${e9.name}”.`);
   };
@@ -1311,7 +1329,7 @@ export default function MotorDesigner() {
   const libRows = useMemo(() => libSel.map((nm) => {
     const e9 = lib.find((x9) => x9.name === nm);
     if (!e9) return null;
-    const rr = computeDesign({ ...p, ...e9.design });
+    const rr = computeDesign({ ...DEFAULT_P, ...e9.design, ...(legacyCal(e9.design) ? CAL_CLEAR : {}) }); // v60.6: compare on defaults, not the dirty current state; legacy cal cleared
     return { name: nm, r: rr };
   }).filter(Boolean), [libSel, lib, p]);
   const undoRef = React.useRef([]);
@@ -1351,24 +1369,32 @@ export default function MotorDesigner() {
   const doRestore = () => {
     if (!restore) return;
     skipPushRef.current = true;
+    const legacy9 = legacyCal(restore.design);
     setP((o) => {
       const n = { ...o };
       Object.keys(o).forEach((k) => { if (k in restore.design && typeof restore.design[k] === typeof o[k]) n[k] = restore.design[k]; });
+      if (legacy9) Object.assign(n, CAL_CLEAR);
       return n;
     });
     if (restore.us === "in" || restore.us === "mm") setUs(restore.us);
     setRestore(null);
-    setIoMsg("Autosaved session restored.");
+    setIoMsg("Autosaved session restored." + (legacy9 ? " Calibration was cleared (captured before the saturation model changed) — recapture from the bench numbers." : ""));
   };
   const applyImport = (src, fname, fileUnits) => {
     if (fileUnits === "in" || fileUnits === "mm") setUs(fileUnits);
     setPendImp(null);
     setP((o) => {
-          const n = { ...o };
+          // v60.6 (Grok): a file that switches machine type starts from DEFAULTS — merging a
+          // stepper file over a dirty PM design leaked every key the file didn't carry.
+          // Same-type imports stay a partial merge so legacy files remain loadable.
+          const base9 = typeof src.motorType === "string" && src.motorType !== o.motorType ? DEFAULT_P : o;
+          const n = { ...base9 };
           let hits = 0;
-          Object.keys(o).forEach((k) => {
-            if (k in src && typeof src[k] === typeof o[k]) { n[k] = src[k]; hits++; }
+          Object.keys(n).forEach((k) => {
+            if (k in src && typeof src[k] === typeof n[k]) { n[k] = src[k]; hits++; }
           });
+          const legacy9 = legacyCal(src);
+          if (legacy9) Object.assign(n, CAL_CLEAR);
           ["finGb", "finMot", "finBrk"].forEach((k) => { n[k] = finMigrate(n[k]); });
           // legacy brake files: bobbin OD used to be the winding START (bore/barrel pair, ~1.6 mm apart).
           // Migrate to winding-window semantics: start = old OD, max finish = pocket − 1 mm.
@@ -1384,7 +1410,7 @@ export default function MotorDesigner() {
             n.brkBobOD = +(n.brkPktID - 1).toFixed(1);
             migrated = true;
           }
-          setIoMsg(hits ? `Imported ${fname} (${hits} parameters).${migrated ? " Bobbin fields migrated to winding-window semantics (start unchanged, max = pocket − 1 mm)." : ""}` : "No recognizable parameters in that file.");
+          setIoMsg(hits ? `Imported ${fname} (${hits} parameters).${migrated ? " Bobbin fields migrated to winding-window semantics (start unchanged, max = pocket − 1 mm)." : ""}${legacy9 ? " Calibration was cleared (captured before the saturation model changed) — recapture from the bench numbers." : ""}` : "No recognizable parameters in that file.");
           return n;
         });
   };
@@ -2341,7 +2367,7 @@ export default function MotorDesigner() {
                 ? (p.conn === "wye" && p.vref === "ln"
                   ? "Center-tap (L-N) excitation: each phase limited to ±Vdc/2 about the tap and torque-per-amp halved — half the winding pair works at a time. Flat region = drive current limit."
                   : "Flat region = drive current limit; droop includes both IR and synchronous-reactance (ωLI) drop; the tail above the no-load marker is the FOC field-weakening region (absent for six-step). Dashed = winding V/R capability with no drive clamp.")
-                : "Single-cage equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Deep-bar effects (higher apparent R at start) not modeled."}
+                : "Single-cage Thevenin equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Rotor leakage reactance is a placeholder X2 = 0.8·X1 (not computed from bar geometry), and deep-bar effects (higher apparent R at start) are not modeled — starting torque and breakdown slip carry that approximation."}
               {" "}Marker = thermally-rated operating point from J.
             </div>
           </div>}
@@ -2402,7 +2428,7 @@ export default function MotorDesigner() {
                     ["No-load", (x9) => fmt(x9.noLoad, 0), "rpm"],
                     ["Peak torque", (x9) => tqS(x9.peakT), ""],
                     ["Efficiency", (x9) => fmt(x9.eta * 100, 1), "%"],
-                    ["R L-L", (x9) => fmt(x9.Rll, 4), "Ω"],
+                    ["R terminal 20 °C", (x9) => fmt(x9.Rll, 4), "Ω"],
                     ["Winding temp", (x9) => (x9.therm ? Math.round(x9.therm.Tcu) : "—"), "°C"],
                     ["Slot fill", (x9) => fmt(x9.fillGross * 100, 0), "%"]].map(([lab, f9, u9]) => (
                     <div className="kv" key={lab} style={{ alignItems: "baseline" }}>

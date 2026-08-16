@@ -134,6 +134,27 @@ console.log('MEC / FEMM');
   const windOK = firstCu && firstCu[1] === wantPH && Math.sign(parseInt(firstCu[2], 10)) === Math.sign(t0.sign);
   console.log(`  ${windOK ? '✓' : '✗'} FEMM slot-0 circuit matches engine topLayer (${wantPH}${t0.sign > 0 ? '+' : '-'})`);
   if (!windOK) fail = true;
+  // v60.6 (Grok gap): the check above pinned only the FIRST copper region — a swapped
+  // bottom layer or a strand-inflated conductor count would still pass. Walk EVERY copper
+  // region (emitted slot 0..Ns-1, top then bottom) against the engine's own layers, and
+  // assert each carries exactly p.turns conductors (strands are parallel, not turns).
+  const PHN = ['A', 'B', 'C'];
+  const allCu = [...luaHot.matchAll(/setblockprop\("Copper",1,0,"([ABC])",0,0,(-?\d+)\)/g)]
+    .map((m9) => ({ ph: m9[1], n: parseInt(m9[2], 10) }));
+  const perSlot = rHot.layers === 2 ? 2 : 1;
+  let walkOK = allCu.length === rHot.Ns * perSlot;
+  for (let s9 = 0; walkOK && s9 < rHot.Ns; s9++) {
+    const want = perSlot === 2 ? [rHot.topLayer[s9], rHot.botLayer[s9]] : [rHot.topLayer[s9]];
+    for (let l9 = 0; l9 < perSlot; l9++) {
+      const got = allCu[s9 * perSlot + l9];
+      if (got.ph !== PHN[want[l9].phase] || Math.sign(got.n) !== Math.sign(want[l9].sign)) walkOK = false;
+    }
+  }
+  const wantTurns = Math.max(Math.round(pHot.turns), 1);
+  const turnsOK = allCu.length > 0 && allCu.every((c9) => Math.abs(c9.n) === wantTurns);
+  console.log(`  ${walkOK ? '✓' : '✗'} FEMM full-slot walk matches engine top+bottom layers (${rHot.Ns} slots x ${perSlot})`);
+  console.log(`  ${turnsOK ? '✓' : '✗'} FEMM conductor count is series turns (${wantTurns}), strands excluded`);
+  if (!walkOK || !turnsOK) fail = true;
 }
 console.log(fail ? 'GOLDEN GATE: FAIL' : 'GOLDEN GATE: PASS');
 if (fail) process.exitCode = 1;

@@ -26,7 +26,7 @@ function yLewis(Z9, shifted) {
 const KGAMMA = { 2: 1.10, 3: 1.15, 4: 1.25, 5: 1.35, 6: 1.45 };   // planet load-share (no floating sun)
 function kvDyn(vMs, agmaQ9) {                                     // AGMA-style dynamic factor
   if (!(vMs > 0)) return 1;
-  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" || agmaQ9 === "Q13" ? 11 : 9; // v60.5: Q13 removed from the picker — this Kv form flattens above Q11, so Q13 changed nothing while looking stronger; legacy saved designs map to Q11
+  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" || agmaQ9 === "Q13" ? 11 : 9; // v60.6: Q13 is BACK in the picker as a real backlash grade (AGMA_J differs) — only this Kv form flattens above Q11, and that flattening is disclosed in the gear note
   const B9 = 0.25 * Math.pow(12 - Math.min(Qv, 11), 2 / 3);
   const A9 = 50 + 56 * (1 - B9);
   return Math.pow((A9 + Math.sqrt(200 * vMs)) / A9, B9);
@@ -262,7 +262,12 @@ function composeActuator(mr, br, cfg) {
   const curve = mr.curve.map((c) => ({ n: c.n / N, T: c.T * N * eta }));
   if (mr.step && Number.isFinite(mr.step.nRes))
     w.push(`Stepper source: quasi-static pull-out bound — avoid sustained output speeds near ${(mr.step.nRes / N).toFixed(1)} rpm (mid-band resonance at the motor).`);
-  const iAtOut = (Tout) => Tout / (N * eta) / mr.Kt;                 // motor amps for an output torque (pre-saturation)
+  // v60.6 (Grok): motor amps for an output torque now invert the motor's own saturation
+  // law — the linear form silently under-read amps on a saturated PM source
+  const iAtOut = (Tout) => {
+    const Tm = Math.max(Tout / (N * eta), 0);
+    return mr.satCurve && mr.satCurve.length && mr.Imax > 0 ? satInvertI({ Imax: mr.Imax }, mr, Tm) : Tm / mr.Kt;
+  };
   const hold = br && br.brake && Number.isFinite(br.brake.Thold) ? br.brake.Thold * N : null; // static: ratio only (friction aids holding)
   if (br && br.err && br.err.length) w.push("The brake design in its tab has errors — holding torque not composed.");
   const etaBack = Math.max(2 - 1 / eta, 0);                          // first-order back-drive efficiency
@@ -527,7 +532,9 @@ function computeDesign(p) {
     if (bad.length) err.push("Non-numeric input: " + bad.join(", ") + " — fix these fields; every downstream number is meaningless until then.");
     // v60.5 (Codex): finiteness alone let turns = -9 through to a NEGATIVE resistance and
     // fill with zero errors. Physical quantities must be positive.
-    const pos9 = ["statorOD", "stackL", "turns", "awg", "strands", "paths"].concat(brkE ? [] : ["statorID"]);
+    const pos9 = ["statorOD", "stackL", "turns", "awg", "strands", "paths"]
+      .concat(brkE ? [] : ["statorID", "rotorOD"])
+      .concat(latmE || brkE ? [] : ["toothW", "yoke", "tipH", "slotOpen"]); // v60.6 (Grok): toothW=0 was a legal no-tooth machine
     const npos = pos9.filter((k9) => Number.isFinite(p[k9]) && p[k9] <= 0);
     if (npos.length) err.push("Non-positive input: " + npos.join(", ") + " — a machine cannot be built from zero or negative " + (npos.length > 1 ? "values" : npos[0]) + ".");
     if (Number.isFinite(p.awg) && (p.awg < 4 || p.awg > 46)) err.push("Wire gauge " + p.awg + " is outside the AWG 4-46 wire table.");
@@ -737,7 +744,8 @@ function computeDesign(p) {
   // ---- electrical operating point: from current density J, or from a specified rated current ----
   // brushed: armature current divides over A2 parallel paths (lap = poles × plex, wave = 2 × plex)
   const pathsEff = brushedM ? (p.pattern === "lap" ? poles * a : 2 * a) : a;
-  const Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : Math.max(p.J, 0) * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current; J clamped ≥ 0 like Irate)
+  let Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : Math.max(p.J, 0) * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current; J clamped ≥ 0 like Irate)
+  const Iph9J = Iph;                                     // the winding-J rating, kept for the ACIM dominance check (v60.6)
   const Jimp = Iph / (aBare * p.strands * pathsEff); // implied copper current density, A/mm²
   if (Jimp > 10) w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — needs forced-air or liquid cooling (passive designs usually run 3–6).`);
   else if (Jimp > 7) w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — fine with good airflow, hot for a sealed housing.`);
@@ -1410,6 +1418,7 @@ function computeDesign(p) {
     // the source, jXm in parallel) and drive the rotor branch from Vth/Zth. All currents
     // below come from the SAME circuit. Deep-bar R2(s) and a real X2 remain future work
     // (X2 = 0.8·X1 is still a placeholder, disclosed).
+    if (!(Xm2 > 0)) w.push("Magnetizing inductance computes to zero — no airgap coupling; the torque model falls back to a series circuit and is not trustworthy for this input.");
     const Dth = R1 * R1 + Math.pow(X1 + Xm2, 2);
     const Vth = Xm2 > 0 ? (Vph * Xm2) / Math.sqrt(Dth) : Vph;
     const Rth = Xm2 > 0 ? (R1 * Xm2 * Xm2) / Dth : R1;
@@ -1451,6 +1460,12 @@ function computeDesign(p) {
       Ilr: IstatAt(1),                                   // locked-rotor stator current, full circuit
       Im: Im2, Irun: IstatAt(sr2),                       // running stator current, full circuit
     };
+    // v60.6 (Grok HIGH): the loss/thermal chain ran on the J-derived winding current while
+    // the card printed the honest circuit current beside it (26 A next to a 9 W copper
+    // loss computed at 2.5 A). For induction the OPERATING current IS the circuit current.
+    Iph = acim.Irun;
+    if (Im2 > 2 * Math.max(Iph9J, 1e-9))
+      w.push(`Magnetizing current ${Im2.toFixed(1)} A dominates the winding rating (${Iph9J.toFixed(1)} A from J) — the magnetic circuit is starved; more turns, a smaller airgap, or a bigger core.`);
     if (Nb === Ns) w.push("Rotor bars = stator slots — severe locking and noise; change the bar count.");
     else if (Math.abs(Ns - Nb) === poles || Math.abs(Ns - Nb) === 2 * poles)
       w.push(`Bar count ${Nb} vs ${Ns} slots differs by ${Math.abs(Ns - Nb)} (= p or 2p) — synchronous torque cusps likely; shift the bar count.`);
@@ -1665,7 +1680,7 @@ function computeDesign(p) {
     // stationary toroid: winding heat leaves through both ring faces over the covered arc
     const RextO = Math.max(p.Rext, 0) / 1000;
     const Ra20 = Math.max((latm.Ra - RextO) / (1 + 0.00393 * (p.Tcu - 20)), 1e-6);
-    latm.Ra20 = Ra20 + RextO;                                        // terminal resistance at ambient
+    latm.RaTerm20 = Ra20 + RextO;   // terminal (incl. Rext) at ambient — v60.6: no longer clobbers the copper-only Ra20 that Rll publishes
     const kcov2 = Math.min((Math.max(p.latmSect, 1) * Math.max(p.latmSpan, 5)) / 360, 1);
     const AtorW = 2 * (Math.PI * ((p.statorID + p.statorOD) / 2 / 1000) * (p.stackL / 1000)) * kcov2; // ID + OD faces
     const RthCuT = AtorW > 0 ? 1 / (400 * AtorW) : 99;
@@ -1693,7 +1708,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
     if (Tc > p.TcuMax) w.push(`Held-on winding temp ≈ ${Math.round(Tc)} °C exceeds the ${p.TcuMax} °C class at the ${latm.Idrv.toFixed(2)} A drive current — a toggle LATM energized continuously needs Idrv ≤ ~${Icont.toFixed(2)} A (current limit or higher-R winding), or pulse duty.`);
   } else if (brushedM && brush) {
     // rotating armature: winding heat crosses the airgap too — lump an extra series resistance
@@ -1725,7 +1740,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   } else if (brkE && brake) {
     // v60.5: the brake reported TWO thermal answers — its own pot-core network (TcuB/RthB,
     // gate-anchored, displayed on the brake card) AND a generic lamination-stack estimate
@@ -1783,7 +1798,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   }
 
 
@@ -1800,7 +1815,7 @@ function computeDesign(p) {
   return {
     err, warn: w, Ns, poles, airgap,
  hs, w1, w2, slotArea, usableArea,
-    dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve,
+    dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve, Imax: p.Imax,
     skewDeg, ksk, skewSlant, skewArc,
     Nser, MLT, Rphase: RphOut, Rll: RllOut, Iph, Iline: IlineOut, Istall, Vph, Arms,
     Trated, nSync, nShaft, Pout: PoutN, Pcu, eta, Eph, Ke, Kt, VphAvail,
@@ -1828,7 +1843,7 @@ const SWEEP_METRICS = [
   { k: "noLoad", lab: "No-load speed",        unit: "rpm",   get: (r) => r.noLoad },
   { k: "peakT",  lab: "Peak torque",          unit: "N·m",   get: (r) => r.peakT },
   { k: "eta",    lab: "Efficiency at rated",  unit: "%",     get: (r) => r.eta * 100 },
-  { k: "Rll",    lab: "Resistance L-L",       unit: "Ω",     get: (r) => r.Rll },
+  { k: "Rll",    lab: "Resistance (terminal, 20 °C)", unit: "Ω", get: (r) => r.Rll },
   { k: "Tcu",    lab: "Winding temp",         unit: "°C",    get: (r) => (r.therm ? r.therm.Tcu : NaN) },
   { k: "Icont",  lab: "Continuous current",   unit: "A",     get: (r) => (r.therm ? r.therm.Icont : NaN) },
   { k: "fill",   lab: "Slot fill",            unit: "%",     get: (r) => r.fillGross * 100 },
@@ -2290,6 +2305,9 @@ function satInvertI(p, r, Tem) {
   if (!(r.Kt > 0)) return 0;
   if (!r.satCurve || !r.satCurve.length || !(p.Imax > 0)) return Tem / r.Kt;
   let lo = 0, hi = Math.max((Tem / r.Kt) * 3, 1e-6);
+  // v60.6 (Codex): if even the bracket ceiling cannot produce the demanded torque, say so —
+  // returning hi silently underreported current and copper loss for out-of-envelope demands
+  if (r.Kt * hi * satInterp(r.satCurve, hi / p.Imax) < Tem) return Infinity;
   for (let i9 = 0; i9 < 48; i9++) {
     const mid = (lo + hi) / 2;
     if (r.Kt * mid * satInterp(r.satCurve, mid / p.Imax) < Tem) lo = mid; else hi = mid;
@@ -2380,7 +2398,9 @@ function efficiencyMap(p, r, opts) {
   const op = r.op ? lossesAt(p, r, r.op.n, r.op.T) : null;
   // continuous-thermal envelope: torque the winding can hold indefinitely (from the
   // thermal model's Icont), drawn as a second line on the map
-  const Tcont = r.therm && Number.isFinite(r.therm.Icont) ? r.Kt * r.therm.Icont : null;
+  const Tcont = r.therm && Number.isFinite(r.therm.Icont)
+    ? r.Kt * r.therm.Icont * (r.satCurve && r.satCurve.length && p.Imax > 0 ? satInterp(r.satCurve, r.therm.Icont / p.Imax) : 1)
+    : null; // v60.6: continuous torque obeys the same saturation law as every other torque
   return { NC, NR, nMax, tMax, grid, inEnv, best, ridge, op, Tcont, tAt,
     envelope: Array.from({ length: NC + 1 }, (_, i9) => ({ n: (nMax * i9) / NC, T: tAt((nMax * i9) / NC) })) };
 }
@@ -2405,6 +2425,10 @@ function driveCycle(p, r, samples) {
     if (!(dt > 0)) continue;
     const nMid = (a9.n + b9.n) / 2, tMid = (a9.T + b9.T) / 2;   // midpoint rule
     const L9 = lossesAt(p, r, nMid, tMid);                      // signed: braking heats but does no useful work
+    // v60.6 (Grok): satInvertI returns Infinity when the demanded torque exceeds the
+    // saturation plateau — count that interval as over-envelope instead of poisoning
+    // every energy integral with Infinity
+    if (!Number.isFinite(L9.I)) { over += dt; tTot += dt; T2t += tMid * tMid * dt; tPk = Math.max(tPk, Math.abs(tMid)); continue; }
     Eout += L9.Pout * dt; Ein += L9.Pin * dt;
     Ecu += L9.Pcu * dt; Efe += L9.Pfe * dt; Ew += L9.Pwind * dt;
     I2t += L9.I * L9.I * dt; T2t += tMid * tMid * dt; tTot += dt;
@@ -2479,16 +2503,17 @@ function buildLamDxf(p, r) {
     // slot excursion (CCW: -x side up, across the top, +x side down)
     P(a, -so, r0); P(a, -so, r1); P(a, -hw1, r1);
     if (rc > 0.05) {
-      const sl = (hw2 - hw1) / (r2 - r1);
-      P(a, -(hw2 - sl * rc), r2 - rc);
-      // v60.5: a stray "+ rc" translated this arc one radius toward the slot centerline —
-      // the punched left corner bulged while the right was true. Center (-(hw2-rc), r2-rc),
-      // x = cx - rc·cos t, y = cy + rc·sin t is the correct quarter circle.
-      for (let k = 0; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 - rc + rc * Math.sin(t)); }
-      P(a, -(hw2 - rc), r2); P(a, hw2 - rc, r2);
-      // mirror the left fillet's sample positions so the faceted corners are symmetric
-      for (let k = 0; k <= 5; k++) { const u = (Math.PI / 2) * (1 - k / 5); P(a, (hw2 - rc) + rc * Math.cos(u), r2 - rc + rc * Math.sin(u)); }
-      P(a, hw2 - sl * rc, r2 - rc);
+      // v60.6 (Grok): TANGENT fillet for the sloped wall. The v60.5 center (hw2-rc, r2-rc)
+      // assumed a vertical side, leaving a sl·rc jog (0.13 mm on a NEMA 23 trapezoid) where
+      // the wall met the arc. The center now sits rc from the slot bottom and rc
+      // perpendicular from the wall line, the sweep extends by atan(sl) so the arc starts
+      // exactly on the wall (no extra wall vertex), and both sides sample mirrored angles.
+      // Reduces bit-exactly to the v60.5 points when sl = 0.
+      const sl = (hw2 - hw1) / Math.max(r2 - r1, 1e-6), q9 = Math.sqrt(1 + sl * sl), fW = Math.atan(sl);
+      const rcT = Math.min(rc, Math.max(hw2, 0) / (sl + q9));
+      const cxF = hw2 - sl * rcT - rcT * q9, cyF = r2 - rcT, sw = Math.PI / 2 + fW;
+      for (let k = 0; k <= 5; k++) { const f9 = Math.PI + fW - (sw * k) / 5; P(a, -cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
+      for (let k = 0; k <= 5; k++) { const f9 = Math.PI / 2 - (sw * k) / 5; P(a, cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
     } else {
       P(a, -hw2, r2); P(a, hw2, r2);
     }
@@ -2526,14 +2551,14 @@ function buildArmDxf(p, r) {
     // slot excursion inward (-x side down, across the bottom with fillets, +x side up)
     P(a, -so, y0c); P(a, -so, r1); P(a, -hw1, r1);
     if (rc > 0.05) {
-      const sl = (hw1 - hw2) / Math.max(r1 - r2, 1e-6);   // wall half-width shrink per radial mm
-      P(a, -(hw2 + sl * rc), r2 + rc);
-      for (let k = 0; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 + rc - rc * Math.sin(t)); }
-      P(a, -(hw2 - rc), r2); P(a, hw2 - rc, r2);
-      // mirror the left fillet's sample positions (u = π/2·(1−k/5)) so the two faceted
-      // corners are exactly symmetric — same arc, symmetric polyline
-      for (let k = 0; k <= 5; k++) { const u = (Math.PI / 2) * (1 - k / 5); P(a, (hw2 - rc) + rc * Math.cos(u), r2 + rc - rc * Math.sin(u)); }
-      P(a, hw2 + sl * rc, r2 + rc);
+      // v60.6 (Grok): tangent fillet for the sloped wall — same construction as the stator
+      // builder but flipped radially (slots open outward, bottom at r2 < r1). Reduces
+      // bit-exactly to the v60.5 points when sl = 0.
+      const sl = (hw1 - hw2) / Math.max(r1 - r2, 1e-6), q9 = Math.sqrt(1 + sl * sl), fW = Math.atan(sl);
+      const rcT = Math.min(rc, Math.max(hw2, 0) / Math.max(q9 - sl, 0.1));
+      const cxF = hw2 + sl * rcT - rcT * q9, cyF = r2 + rcT, sw = Math.PI / 2 - fW;
+      for (let k = 0; k <= 5; k++) { const f9 = fW - Math.PI + (sw * k) / 5; P(a, -cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
+      for (let k = 0; k <= 5; k++) { const f9 = -Math.PI / 2 + (sw * k) / 5; P(a, cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
     } else {
       P(a, -hw2, r2); P(a, hw2, r2);
     }
@@ -2619,7 +2644,10 @@ function buildFemmLua(p, r) {
   const rM9 = (r1 + r2) / 2;
   const twoLayer = r.layers === 2 && Array.isArray(r.botLayer) && r.botLayer.length === Ns;
   const PH_NAME = ["A", "B", "C"];
-  const condLayer = Math.max(Math.round((r.condPerSlot || 1) / (twoLayer ? 2 : 1)), 1);
+  // v60.6 (Codex): FEMM's turns argument is SERIES turns — strands are parallel copper,
+  // not ampere-turns. condPerSlot includes strands (it is a fill quantity), so using it
+  // overstated winding MMF by the strand count in loaded solves.
+  const condLayer = Math.max(Math.round(p.turns), 1);
   const label9 = (rr, a0, matPH, sgnN) => {
     const [lx, ly] = P9(rr, a0);
     L.push(`mi_addblocklabel(${lx},${ly})`); L.push(`mi_selectlabel(${lx},${ly})`);

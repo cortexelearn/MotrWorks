@@ -1243,7 +1243,7 @@ function activeAssumptions(p) {
   }
   if (t9 === "actuator") {
     if (!(p.gbOD > 0) || !(p.gbLen > 0)) A.push({ t: "Gearhead envelope", r: "typical shell: OD ≈ 1.1·motor (1.0 harmonic); length from per-stage proportions (0.42·OD planetary, 0.34 spur, 0.55 harmonic + bearing block)" });
-    if (!(p.gbEff > 0)) A.push({ t: "Per-stage efficiency", r: "miniature-class catalog values: planetary 90%, spur 93%, harmonic 80% — compounded per stage; premium units differ, enter the datasheet value" });
+    if (!(p.gbEff > 0)) A.push({ t: "Gearhead efficiency", r: "synthesized from the designed train (per-mesh loss + churn, compounded across stages) — the gear card labels the source; catalog values (planetary 90%, spur 93%, harmonic 80% per stage) are the fallback only when no train can be synthesized. Premium units differ; enter the datasheet value to override" });
     A.push({ t: "Brake pack length", r: "backiron + armature/disc + 4 mm hardware when the brake is composed in" });
   }
   return A;
@@ -2540,6 +2540,9 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
     return sc[sc.length - 1].k;
   };
   const iAt = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (r.Kt * m2 * satAt(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
+  // v60.6 (Grok): the traces are POLYLINES through the saturation inversion, not chords —
+  // a chord between the correct endpoints still put the rated marker off the line
+  const pl = (t0, t1, iF) => Array.from({ length: 25 }, (_, k2) => { const t9 = t0 + ((t1 - t0) * k2) / 24; return `${X(t9)},${Y(iF(t9))}`; }).join(" ");
   const iTicks = [0, 0.5, 1].map((f) => f * iMax);
   const tTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * tAxNm);
   return (
@@ -2567,12 +2570,26 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
         <line x1={X(tLimit.T)} y1={mT} x2={X(tLimit.T)} y2={H - mB} stroke="#DC2626" strokeWidth="1.3" strokeDasharray="5 4" opacity="0.85" />
         <text x={X(tLimit.T) - 4} y={mT + 10} textAnchor="end" className="tick" style={{ fill: "#DC2626" }}>{tLimit.label}</text>
       </g>}
-      {/* analytical ghost: same solver on the uncompensated constants */}
+      {/* analytical ghost: same solver on the uncompensated constants — v60.6 (Codex):
+          uses the ghost's OWN satCurve through the same interpolation as the main trace
+          (the deleted ad-hoc quadratic had survived here) */}
       {gR && (() => {
-        const bendG = (I) => I * (1 - (1 - (gR.kIT || 1)) * Math.pow(Math.min(I / Math.max(p.Imax, 1e-6), 1.5), 2));
-        const iAtG = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (gR.Kt * bendG(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
+        const satG = (I) => {
+          const sc = gR.satCurve;
+          if (!sc || !sc.length || !(p.Imax > 0)) return 1;
+          const f = I / p.Imax;
+          if (f <= sc[0].f) return sc[0].k;
+          for (let i2 = 1; i2 < sc.length; i2++) {
+            if (sc[i2].f >= f) {
+              const a2 = sc[i2 - 1], b2 = sc[i2];
+              return a2.k + ((f - a2.f) / Math.max(b2.f - a2.f, 1e-12)) * (b2.k - a2.k);
+            }
+          }
+          return sc[sc.length - 1].k;
+        };
+        const iAtG = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (gR.Kt * m2 * satG(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
         return <g>
-          <line x1={X(0)} y1={Y(0)} x2={X(gR.peakT)} y2={Y(iAtG(gR.peakT))} stroke={STEEL_DK} strokeWidth="1.6" strokeDasharray="6 4" opacity="0.8" />
+          <polyline points={pl(0, gR.peakT, iAtG)} fill="none" stroke={STEEL_DK} strokeWidth="1.6" strokeDasharray="6 4" opacity="0.8" />
           <line x1={W - mR - 96} y1={mT + 6} x2={W - mR - 78} y2={mT + 6} stroke={COPPER} strokeWidth="2.5" />
           <text x={W - mR - 74} y={mT + 9} className="tick">compensated</text>
           <line x1={W - mR - 96} y1={mT + 18} x2={W - mR - 78} y2={mT + 18} stroke={STEEL_DK} strokeWidth="1.6" strokeDasharray="6 4" />
@@ -2580,9 +2597,9 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
         </g>;
       })()}
       {/* I = T / Kt: solid to the drive-limited stall, faint beyond */}
-      <line x1={X(0)} y1={Y(0)} x2={X(r.peakT)} y2={Y(iAt(r.peakT))} stroke={COPPER} strokeWidth="2.5" />
-      <line x1={X(r.peakT)} y1={Y(iAt(r.peakT))} x2={X(Math.min(tAxNm, r.TstallW || tAxNm))}
-        y2={Y(iAt(Math.min(tAxNm, r.TstallW || tAxNm)))} stroke={STEEL_DK} strokeWidth="1.5" strokeDasharray="5 4" opacity="0.45" />
+      <polyline points={pl(0, r.peakT, iAt)} fill="none" stroke={COPPER} strokeWidth="2.5" />
+      <polyline points={pl(r.peakT, Math.min(tAxNm, r.TstallW || tAxNm), iAt)} fill="none"
+        stroke={STEEL_DK} strokeWidth="1.5" strokeDasharray="5 4" opacity="0.45" />
       {r.op && (
         <g>
           <circle cx={X(r.op.T)} cy={Y(iAt(r.op.T))} r="4.5" fill={DKINK} />
@@ -2967,7 +2984,7 @@ function AxialCutaway({ p, r, us, anim }) {
   const L = (mm, d = 3) => (us === "in" ? (mm / INCH).toFixed(d) : mm.toFixed(1));
   const un = us === "in" ? "in" : "mm";
   let hEnd;
-  if (p.motorType === "latm") hEnd = Math.max(p.latmWind, 0.5);      // toroid wrap thickness past each end
+  if (p.motorType === "latm") hEnd = Math.max(p.latmWind, r && r.latm && Number.isFinite(r.latm.buildX) ? r.latm.buildX : 0, 0.5); // toroid wrap: as-built thickness, same basis as the cross-section
   else if (p.endMode === "head") hEnd = p.headH;
   else if (p.endMode === "bobbin") hEnd = p.bobWall + r.tb;
   else hEnd = 0.5 * Math.sqrt(Math.max((r.endSide - 5) ** 2 - r.coilArc ** 2, 0)) + 4;
@@ -3224,7 +3241,7 @@ function AxialCutaway({ p, r, us, anim }) {
         <g>
           {/* slotless ring core with the toroidal winding wrapped over ID, OD and both ends */}
           {(() => {
-            const twm = Math.max(p.latmWind, 0.5);
+            const twm = Math.max(p.latmWind, r && r.latm && Number.isFinite(r.latm.buildX) ? r.latm.buildX : 0, 0.5);
             const wrap = (r1, r2, x0, x1, key) => (
               <g key={key}>
                 <rect x={x0} y={Y(r2)} width={x1 - x0} height={(r2 - r1) * k} fill="#D9A05B" stroke="#92400E" strokeWidth="0.8" />

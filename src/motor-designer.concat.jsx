@@ -470,7 +470,7 @@ function yLewis(Z9, shifted) {
 const KGAMMA = { 2: 1.10, 3: 1.15, 4: 1.25, 5: 1.35, 6: 1.45 };   // planet load-share (no floating sun)
 function kvDyn(vMs, agmaQ9) {                                     // AGMA-style dynamic factor
   if (!(vMs > 0)) return 1;
-  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" || agmaQ9 === "Q13" ? 11 : 9; // v60.5: Q13 removed from the picker — this Kv form flattens above Q11, so Q13 changed nothing while looking stronger; legacy saved designs map to Q11
+  const Qv = agmaQ9 === "Q7" ? 7 : agmaQ9 === "Q11" || agmaQ9 === "Q13" ? 11 : 9; // v60.6: Q13 is BACK in the picker as a real backlash grade (AGMA_J differs) — only this Kv form flattens above Q11, and that flattening is disclosed in the gear note
   const B9 = 0.25 * Math.pow(12 - Math.min(Qv, 11), 2 / 3);
   const A9 = 50 + 56 * (1 - B9);
   return Math.pow((A9 + Math.sqrt(200 * vMs)) / A9, B9);
@@ -706,7 +706,12 @@ function composeActuator(mr, br, cfg) {
   const curve = mr.curve.map((c) => ({ n: c.n / N, T: c.T * N * eta }));
   if (mr.step && Number.isFinite(mr.step.nRes))
     w.push(`Stepper source: quasi-static pull-out bound — avoid sustained output speeds near ${(mr.step.nRes / N).toFixed(1)} rpm (mid-band resonance at the motor).`);
-  const iAtOut = (Tout) => Tout / (N * eta) / mr.Kt;                 // motor amps for an output torque (pre-saturation)
+  // v60.6 (Grok): motor amps for an output torque now invert the motor's own saturation
+  // law — the linear form silently under-read amps on a saturated PM source
+  const iAtOut = (Tout) => {
+    const Tm = Math.max(Tout / (N * eta), 0);
+    return mr.satCurve && mr.satCurve.length && mr.Imax > 0 ? satInvertI({ Imax: mr.Imax }, mr, Tm) : Tm / mr.Kt;
+  };
   const hold = br && br.brake && Number.isFinite(br.brake.Thold) ? br.brake.Thold * N : null; // static: ratio only (friction aids holding)
   if (br && br.err && br.err.length) w.push("The brake design in its tab has errors — holding torque not composed.");
   const etaBack = Math.max(2 - 1 / eta, 0);                          // first-order back-drive efficiency
@@ -971,7 +976,9 @@ function computeDesign(p) {
     if (bad.length) err.push("Non-numeric input: " + bad.join(", ") + " — fix these fields; every downstream number is meaningless until then.");
     // v60.5 (Codex): finiteness alone let turns = -9 through to a NEGATIVE resistance and
     // fill with zero errors. Physical quantities must be positive.
-    const pos9 = ["statorOD", "stackL", "turns", "awg", "strands", "paths"].concat(brkE ? [] : ["statorID"]);
+    const pos9 = ["statorOD", "stackL", "turns", "awg", "strands", "paths"]
+      .concat(brkE ? [] : ["statorID", "rotorOD"])
+      .concat(latmE || brkE ? [] : ["toothW", "yoke", "tipH", "slotOpen"]); // v60.6 (Grok): toothW=0 was a legal no-tooth machine
     const npos = pos9.filter((k9) => Number.isFinite(p[k9]) && p[k9] <= 0);
     if (npos.length) err.push("Non-positive input: " + npos.join(", ") + " — a machine cannot be built from zero or negative " + (npos.length > 1 ? "values" : npos[0]) + ".");
     if (Number.isFinite(p.awg) && (p.awg < 4 || p.awg > 46)) err.push("Wire gauge " + p.awg + " is outside the AWG 4-46 wire table.");
@@ -1181,7 +1188,8 @@ function computeDesign(p) {
   // ---- electrical operating point: from current density J, or from a specified rated current ----
   // brushed: armature current divides over A2 parallel paths (lap = poles × plex, wave = 2 × plex)
   const pathsEff = brushedM ? (p.pattern === "lap" ? poles * a : 2 * a) : a;
-  const Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : Math.max(p.J, 0) * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current; J clamped ≥ 0 like Irate)
+  let Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : Math.max(p.J, 0) * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current; J clamped ≥ 0 like Irate)
+  const Iph9J = Iph;                                     // the winding-J rating, kept for the ACIM dominance check (v60.6)
   const Jimp = Iph / (aBare * p.strands * pathsEff); // implied copper current density, A/mm²
   if (Jimp > 10) w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — needs forced-air or liquid cooling (passive designs usually run 3–6).`);
   else if (Jimp > 7) w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — fine with good airflow, hot for a sealed housing.`);
@@ -1854,6 +1862,7 @@ function computeDesign(p) {
     // the source, jXm in parallel) and drive the rotor branch from Vth/Zth. All currents
     // below come from the SAME circuit. Deep-bar R2(s) and a real X2 remain future work
     // (X2 = 0.8·X1 is still a placeholder, disclosed).
+    if (!(Xm2 > 0)) w.push("Magnetizing inductance computes to zero — no airgap coupling; the torque model falls back to a series circuit and is not trustworthy for this input.");
     const Dth = R1 * R1 + Math.pow(X1 + Xm2, 2);
     const Vth = Xm2 > 0 ? (Vph * Xm2) / Math.sqrt(Dth) : Vph;
     const Rth = Xm2 > 0 ? (R1 * Xm2 * Xm2) / Dth : R1;
@@ -1895,6 +1904,12 @@ function computeDesign(p) {
       Ilr: IstatAt(1),                                   // locked-rotor stator current, full circuit
       Im: Im2, Irun: IstatAt(sr2),                       // running stator current, full circuit
     };
+    // v60.6 (Grok HIGH): the loss/thermal chain ran on the J-derived winding current while
+    // the card printed the honest circuit current beside it (26 A next to a 9 W copper
+    // loss computed at 2.5 A). For induction the OPERATING current IS the circuit current.
+    Iph = acim.Irun;
+    if (Im2 > 2 * Math.max(Iph9J, 1e-9))
+      w.push(`Magnetizing current ${Im2.toFixed(1)} A dominates the winding rating (${Iph9J.toFixed(1)} A from J) — the magnetic circuit is starved; more turns, a smaller airgap, or a bigger core.`);
     if (Nb === Ns) w.push("Rotor bars = stator slots — severe locking and noise; change the bar count.");
     else if (Math.abs(Ns - Nb) === poles || Math.abs(Ns - Nb) === 2 * poles)
       w.push(`Bar count ${Nb} vs ${Ns} slots differs by ${Math.abs(Ns - Nb)} (= p or 2p) — synchronous torque cusps likely; shift the bar count.`);
@@ -2109,7 +2124,7 @@ function computeDesign(p) {
     // stationary toroid: winding heat leaves through both ring faces over the covered arc
     const RextO = Math.max(p.Rext, 0) / 1000;
     const Ra20 = Math.max((latm.Ra - RextO) / (1 + 0.00393 * (p.Tcu - 20)), 1e-6);
-    latm.Ra20 = Ra20 + RextO;                                        // terminal resistance at ambient
+    latm.RaTerm20 = Ra20 + RextO;   // terminal (incl. Rext) at ambient — v60.6: no longer clobbers the copper-only Ra20 that Rll publishes
     const kcov2 = Math.min((Math.max(p.latmSect, 1) * Math.max(p.latmSpan, 5)) / 360, 1);
     const AtorW = 2 * (Math.PI * ((p.statorID + p.statorOD) / 2 / 1000) * (p.stackL / 1000)) * kcov2; // ID + OD faces
     const RthCuT = AtorW > 0 ? 1 / (400 * AtorW) : 99;
@@ -2137,7 +2152,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
     if (Tc > p.TcuMax) w.push(`Held-on winding temp ≈ ${Math.round(Tc)} °C exceeds the ${p.TcuMax} °C class at the ${latm.Idrv.toFixed(2)} A drive current — a toggle LATM energized continuously needs Idrv ≤ ~${Icont.toFixed(2)} A (current limit or higher-R winding), or pulse duty.`);
   } else if (brushedM && brush) {
     // rotating armature: winding heat crosses the airgap too — lump an extra series resistance
@@ -2169,7 +2184,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthTot, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   } else if (brkE && brake) {
     // v60.5: the brake reported TWO thermal answers — its own pot-core network (TcuB/RthB,
     // gate-anchored, displayed on the brake card) AND a generic lamination-stack estimate
@@ -2227,7 +2242,7 @@ function computeDesign(p) {
       }
       TcuDuty = Td;
     }
-    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: Kt * (Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont), mCu, tauW, tauM, TcuDuty, duty: duty9 };
+    therm = { Tcu: Tc, Rth: RthCu + RthOut, Icont, Tcont: (() => { const Ic9 = Number.isFinite(p.Imax) ? Math.min(Icont, p.Imax) : Icont; return Kt * Ic9 * satOfI(Ic9); })(), mCu, tauW, tauM, TcuDuty, duty: duty9 };
   }
 
 
@@ -2244,7 +2259,7 @@ function computeDesign(p) {
   return {
     err, warn: w, Ns, poles, airgap,
  hs, w1, w2, slotArea, usableArea,
-    dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve,
+    dBare, dIns, aBare, condPerSlot, fillGross, fillCu, fillInsSlot, fillCuSlot, q, span, kw, rcFil, ksat, kIT, satCurve, Imax: p.Imax,
     skewDeg, ksk, skewSlant, skewArc,
     Nser, MLT, Rphase: RphOut, Rll: RllOut, Iph, Iline: IlineOut, Istall, Vph, Arms,
     Trated, nSync, nShaft, Pout: PoutN, Pcu, eta, Eph, Ke, Kt, VphAvail,
@@ -2272,7 +2287,7 @@ const SWEEP_METRICS = [
   { k: "noLoad", lab: "No-load speed",        unit: "rpm",   get: (r) => r.noLoad },
   { k: "peakT",  lab: "Peak torque",          unit: "N·m",   get: (r) => r.peakT },
   { k: "eta",    lab: "Efficiency at rated",  unit: "%",     get: (r) => r.eta * 100 },
-  { k: "Rll",    lab: "Resistance L-L",       unit: "Ω",     get: (r) => r.Rll },
+  { k: "Rll",    lab: "Resistance (terminal, 20 °C)", unit: "Ω", get: (r) => r.Rll },
   { k: "Tcu",    lab: "Winding temp",         unit: "°C",    get: (r) => (r.therm ? r.therm.Tcu : NaN) },
   { k: "Icont",  lab: "Continuous current",   unit: "A",     get: (r) => (r.therm ? r.therm.Icont : NaN) },
   { k: "fill",   lab: "Slot fill",            unit: "%",     get: (r) => r.fillGross * 100 },
@@ -2734,6 +2749,9 @@ function satInvertI(p, r, Tem) {
   if (!(r.Kt > 0)) return 0;
   if (!r.satCurve || !r.satCurve.length || !(p.Imax > 0)) return Tem / r.Kt;
   let lo = 0, hi = Math.max((Tem / r.Kt) * 3, 1e-6);
+  // v60.6 (Codex): if even the bracket ceiling cannot produce the demanded torque, say so —
+  // returning hi silently underreported current and copper loss for out-of-envelope demands
+  if (r.Kt * hi * satInterp(r.satCurve, hi / p.Imax) < Tem) return Infinity;
   for (let i9 = 0; i9 < 48; i9++) {
     const mid = (lo + hi) / 2;
     if (r.Kt * mid * satInterp(r.satCurve, mid / p.Imax) < Tem) lo = mid; else hi = mid;
@@ -2824,7 +2842,9 @@ function efficiencyMap(p, r, opts) {
   const op = r.op ? lossesAt(p, r, r.op.n, r.op.T) : null;
   // continuous-thermal envelope: torque the winding can hold indefinitely (from the
   // thermal model's Icont), drawn as a second line on the map
-  const Tcont = r.therm && Number.isFinite(r.therm.Icont) ? r.Kt * r.therm.Icont : null;
+  const Tcont = r.therm && Number.isFinite(r.therm.Icont)
+    ? r.Kt * r.therm.Icont * (r.satCurve && r.satCurve.length && p.Imax > 0 ? satInterp(r.satCurve, r.therm.Icont / p.Imax) : 1)
+    : null; // v60.6: continuous torque obeys the same saturation law as every other torque
   return { NC, NR, nMax, tMax, grid, inEnv, best, ridge, op, Tcont, tAt,
     envelope: Array.from({ length: NC + 1 }, (_, i9) => ({ n: (nMax * i9) / NC, T: tAt((nMax * i9) / NC) })) };
 }
@@ -2849,6 +2869,10 @@ function driveCycle(p, r, samples) {
     if (!(dt > 0)) continue;
     const nMid = (a9.n + b9.n) / 2, tMid = (a9.T + b9.T) / 2;   // midpoint rule
     const L9 = lossesAt(p, r, nMid, tMid);                      // signed: braking heats but does no useful work
+    // v60.6 (Grok): satInvertI returns Infinity when the demanded torque exceeds the
+    // saturation plateau — count that interval as over-envelope instead of poisoning
+    // every energy integral with Infinity
+    if (!Number.isFinite(L9.I)) { over += dt; tTot += dt; T2t += tMid * tMid * dt; tPk = Math.max(tPk, Math.abs(tMid)); continue; }
     Eout += L9.Pout * dt; Ein += L9.Pin * dt;
     Ecu += L9.Pcu * dt; Efe += L9.Pfe * dt; Ew += L9.Pwind * dt;
     I2t += L9.I * L9.I * dt; T2t += tMid * tMid * dt; tTot += dt;
@@ -2923,16 +2947,17 @@ function buildLamDxf(p, r) {
     // slot excursion (CCW: -x side up, across the top, +x side down)
     P(a, -so, r0); P(a, -so, r1); P(a, -hw1, r1);
     if (rc > 0.05) {
-      const sl = (hw2 - hw1) / (r2 - r1);
-      P(a, -(hw2 - sl * rc), r2 - rc);
-      // v60.5: a stray "+ rc" translated this arc one radius toward the slot centerline —
-      // the punched left corner bulged while the right was true. Center (-(hw2-rc), r2-rc),
-      // x = cx - rc·cos t, y = cy + rc·sin t is the correct quarter circle.
-      for (let k = 0; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 - rc + rc * Math.sin(t)); }
-      P(a, -(hw2 - rc), r2); P(a, hw2 - rc, r2);
-      // mirror the left fillet's sample positions so the faceted corners are symmetric
-      for (let k = 0; k <= 5; k++) { const u = (Math.PI / 2) * (1 - k / 5); P(a, (hw2 - rc) + rc * Math.cos(u), r2 - rc + rc * Math.sin(u)); }
-      P(a, hw2 - sl * rc, r2 - rc);
+      // v60.6 (Grok): TANGENT fillet for the sloped wall. The v60.5 center (hw2-rc, r2-rc)
+      // assumed a vertical side, leaving a sl·rc jog (0.13 mm on a NEMA 23 trapezoid) where
+      // the wall met the arc. The center now sits rc from the slot bottom and rc
+      // perpendicular from the wall line, the sweep extends by atan(sl) so the arc starts
+      // exactly on the wall (no extra wall vertex), and both sides sample mirrored angles.
+      // Reduces bit-exactly to the v60.5 points when sl = 0.
+      const sl = (hw2 - hw1) / Math.max(r2 - r1, 1e-6), q9 = Math.sqrt(1 + sl * sl), fW = Math.atan(sl);
+      const rcT = Math.min(rc, Math.max(hw2, 0) / (sl + q9));
+      const cxF = hw2 - sl * rcT - rcT * q9, cyF = r2 - rcT, sw = Math.PI / 2 + fW;
+      for (let k = 0; k <= 5; k++) { const f9 = Math.PI + fW - (sw * k) / 5; P(a, -cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
+      for (let k = 0; k <= 5; k++) { const f9 = Math.PI / 2 - (sw * k) / 5; P(a, cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
     } else {
       P(a, -hw2, r2); P(a, hw2, r2);
     }
@@ -2970,14 +2995,14 @@ function buildArmDxf(p, r) {
     // slot excursion inward (-x side down, across the bottom with fillets, +x side up)
     P(a, -so, y0c); P(a, -so, r1); P(a, -hw1, r1);
     if (rc > 0.05) {
-      const sl = (hw1 - hw2) / Math.max(r1 - r2, 1e-6);   // wall half-width shrink per radial mm
-      P(a, -(hw2 + sl * rc), r2 + rc);
-      for (let k = 0; k <= 5; k++) { const t = (Math.PI / 2) * (k / 5); P(a, -(hw2 - rc) - rc * Math.cos(t), r2 + rc - rc * Math.sin(t)); }
-      P(a, -(hw2 - rc), r2); P(a, hw2 - rc, r2);
-      // mirror the left fillet's sample positions (u = π/2·(1−k/5)) so the two faceted
-      // corners are exactly symmetric — same arc, symmetric polyline
-      for (let k = 0; k <= 5; k++) { const u = (Math.PI / 2) * (1 - k / 5); P(a, (hw2 - rc) + rc * Math.cos(u), r2 + rc - rc * Math.sin(u)); }
-      P(a, hw2 + sl * rc, r2 + rc);
+      // v60.6 (Grok): tangent fillet for the sloped wall — same construction as the stator
+      // builder but flipped radially (slots open outward, bottom at r2 < r1). Reduces
+      // bit-exactly to the v60.5 points when sl = 0.
+      const sl = (hw1 - hw2) / Math.max(r1 - r2, 1e-6), q9 = Math.sqrt(1 + sl * sl), fW = Math.atan(sl);
+      const rcT = Math.min(rc, Math.max(hw2, 0) / Math.max(q9 - sl, 0.1));
+      const cxF = hw2 + sl * rcT - rcT * q9, cyF = r2 + rcT, sw = Math.PI / 2 - fW;
+      for (let k = 0; k <= 5; k++) { const f9 = fW - Math.PI + (sw * k) / 5; P(a, -cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
+      for (let k = 0; k <= 5; k++) { const f9 = -Math.PI / 2 + (sw * k) / 5; P(a, cxF + rcT * Math.cos(f9), cyF + rcT * Math.sin(f9)); }
     } else {
       P(a, -hw2, r2); P(a, hw2, r2);
     }
@@ -3063,7 +3088,10 @@ function buildFemmLua(p, r) {
   const rM9 = (r1 + r2) / 2;
   const twoLayer = r.layers === 2 && Array.isArray(r.botLayer) && r.botLayer.length === Ns;
   const PH_NAME = ["A", "B", "C"];
-  const condLayer = Math.max(Math.round((r.condPerSlot || 1) / (twoLayer ? 2 : 1)), 1);
+  // v60.6 (Codex): FEMM's turns argument is SERIES turns — strands are parallel copper,
+  // not ampere-turns. condPerSlot includes strands (it is a fill quantity), so using it
+  // overstated winding MMF by the strand count in loaded solves.
+  const condLayer = Math.max(Math.round(p.turns), 1);
   const label9 = (rr, a0, matPH, sgnN) => {
     const [lx, ly] = P9(rr, a0);
     L.push(`mi_addblocklabel(${lx},${ly})`); L.push(`mi_selectlabel(${lx},${ly})`);
@@ -4610,7 +4638,7 @@ function activeAssumptions(p) {
   }
   if (t9 === "actuator") {
     if (!(p.gbOD > 0) || !(p.gbLen > 0)) A.push({ t: "Gearhead envelope", r: "typical shell: OD ≈ 1.1·motor (1.0 harmonic); length from per-stage proportions (0.42·OD planetary, 0.34 spur, 0.55 harmonic + bearing block)" });
-    if (!(p.gbEff > 0)) A.push({ t: "Per-stage efficiency", r: "miniature-class catalog values: planetary 90%, spur 93%, harmonic 80% — compounded per stage; premium units differ, enter the datasheet value" });
+    if (!(p.gbEff > 0)) A.push({ t: "Gearhead efficiency", r: "synthesized from the designed train (per-mesh loss + churn, compounded across stages) — the gear card labels the source; catalog values (planetary 90%, spur 93%, harmonic 80% per stage) are the fallback only when no train can be synthesized. Premium units differ; enter the datasheet value to override" });
     A.push({ t: "Brake pack length", r: "backiron + armature/disc + 4 mm hardware when the brake is composed in" });
   }
   return A;
@@ -5907,6 +5935,9 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
     return sc[sc.length - 1].k;
   };
   const iAt = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (r.Kt * m2 * satAt(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
+  // v60.6 (Grok): the traces are POLYLINES through the saturation inversion, not chords —
+  // a chord between the correct endpoints still put the rated marker off the line
+  const pl = (t0, t1, iF) => Array.from({ length: 25 }, (_, k2) => { const t9 = t0 + ((t1 - t0) * k2) / 24; return `${X(t9)},${Y(iF(t9))}`; }).join(" ");
   const iTicks = [0, 0.5, 1].map((f) => f * iMax);
   const tTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * tAxNm);
   return (
@@ -5934,12 +5965,26 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
         <line x1={X(tLimit.T)} y1={mT} x2={X(tLimit.T)} y2={H - mB} stroke="#DC2626" strokeWidth="1.3" strokeDasharray="5 4" opacity="0.85" />
         <text x={X(tLimit.T) - 4} y={mT + 10} textAnchor="end" className="tick" style={{ fill: "#DC2626" }}>{tLimit.label}</text>
       </g>}
-      {/* analytical ghost: same solver on the uncompensated constants */}
+      {/* analytical ghost: same solver on the uncompensated constants — v60.6 (Codex):
+          uses the ghost's OWN satCurve through the same interpolation as the main trace
+          (the deleted ad-hoc quadratic had survived here) */}
       {gR && (() => {
-        const bendG = (I) => I * (1 - (1 - (gR.kIT || 1)) * Math.pow(Math.min(I / Math.max(p.Imax, 1e-6), 1.5), 2));
-        const iAtG = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (gR.Kt * bendG(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
+        const satG = (I) => {
+          const sc = gR.satCurve;
+          if (!sc || !sc.length || !(p.Imax > 0)) return 1;
+          const f = I / p.Imax;
+          if (f <= sc[0].f) return sc[0].k;
+          for (let i2 = 1; i2 < sc.length; i2++) {
+            if (sc[i2].f >= f) {
+              const a2 = sc[i2 - 1], b2 = sc[i2];
+              return a2.k + ((f - a2.f) / Math.max(b2.f - a2.f, 1e-12)) * (b2.k - a2.k);
+            }
+          }
+          return sc[sc.length - 1].k;
+        };
+        const iAtG = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (gR.Kt * m2 * satG(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
         return <g>
-          <line x1={X(0)} y1={Y(0)} x2={X(gR.peakT)} y2={Y(iAtG(gR.peakT))} stroke={STEEL_DK} strokeWidth="1.6" strokeDasharray="6 4" opacity="0.8" />
+          <polyline points={pl(0, gR.peakT, iAtG)} fill="none" stroke={STEEL_DK} strokeWidth="1.6" strokeDasharray="6 4" opacity="0.8" />
           <line x1={W - mR - 96} y1={mT + 6} x2={W - mR - 78} y2={mT + 6} stroke={COPPER} strokeWidth="2.5" />
           <text x={W - mR - 74} y={mT + 9} className="tick">compensated</text>
           <line x1={W - mR - 96} y1={mT + 18} x2={W - mR - 78} y2={mT + 18} stroke={STEEL_DK} strokeWidth="1.6" strokeDasharray="6 4" />
@@ -5947,9 +5992,9 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
         </g>;
       })()}
       {/* I = T / Kt: solid to the drive-limited stall, faint beyond */}
-      <line x1={X(0)} y1={Y(0)} x2={X(r.peakT)} y2={Y(iAt(r.peakT))} stroke={COPPER} strokeWidth="2.5" />
-      <line x1={X(r.peakT)} y1={Y(iAt(r.peakT))} x2={X(Math.min(tAxNm, r.TstallW || tAxNm))}
-        y2={Y(iAt(Math.min(tAxNm, r.TstallW || tAxNm)))} stroke={STEEL_DK} strokeWidth="1.5" strokeDasharray="5 4" opacity="0.45" />
+      <polyline points={pl(0, r.peakT, iAt)} fill="none" stroke={COPPER} strokeWidth="2.5" />
+      <polyline points={pl(r.peakT, Math.min(tAxNm, r.TstallW || tAxNm), iAt)} fill="none"
+        stroke={STEEL_DK} strokeWidth="1.5" strokeDasharray="5 4" opacity="0.45" />
       {r.op && (
         <g>
           <circle cx={X(r.op.T)} cy={Y(iAt(r.op.T))} r="4.5" fill={DKINK} />
@@ -6334,7 +6379,7 @@ function AxialCutaway({ p, r, us, anim }) {
   const L = (mm, d = 3) => (us === "in" ? (mm / INCH).toFixed(d) : mm.toFixed(1));
   const un = us === "in" ? "in" : "mm";
   let hEnd;
-  if (p.motorType === "latm") hEnd = Math.max(p.latmWind, 0.5);      // toroid wrap thickness past each end
+  if (p.motorType === "latm") hEnd = Math.max(p.latmWind, r && r.latm && Number.isFinite(r.latm.buildX) ? r.latm.buildX : 0, 0.5); // toroid wrap: as-built thickness, same basis as the cross-section
   else if (p.endMode === "head") hEnd = p.headH;
   else if (p.endMode === "bobbin") hEnd = p.bobWall + r.tb;
   else hEnd = 0.5 * Math.sqrt(Math.max((r.endSide - 5) ** 2 - r.coilArc ** 2, 0)) + 4;
@@ -6591,7 +6636,7 @@ function AxialCutaway({ p, r, us, anim }) {
         <g>
           {/* slotless ring core with the toroidal winding wrapped over ID, OD and both ends */}
           {(() => {
-            const twm = Math.max(p.latmWind, 0.5);
+            const twm = Math.max(p.latmWind, r && r.latm && Number.isFinite(r.latm.buildX) ? r.latm.buildX : 0, 0.5);
             const wrap = (r1, r2, x0, x1, key) => (
               <g key={key}>
                 <rect x={x0} y={Y(r2)} width={x1 - x0} height={(r2 - r1) * k} fill="#D9A05B" stroke="#92400E" strokeWidth="0.8" />
@@ -7417,13 +7462,16 @@ function BobbinView({ p, s, us, switchType, exportDesign, importDesign, ioMsg, i
 /* ---- Actuator module: composes the motor & brake designs open in their tabs through a gearhead ---- */
 function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, exportActuator, importActuator, ioMsg, impPanel }) {
   const motorT = p.actMotor === "brushed" ? "brushed" : p.actMotor === "stepper" ? "stepper" : "pm";
+  // v60.6 (Grok): the "tab not opened yet" fallback merged the starting preset over the
+  // CURRENT design — the same contamination class the preset fix closed (a dirty PM's
+  // TcuMax/Rext leaked into the composed brake). Defaults + preset, like everywhere else.
   const motorP = typeMem.current[motorT]
     ? { ...typeMem.current[motorT], motorType: motorT }
-    : { ...p, ...(typeDefaults[motorT] ? PRESETS[typeDefaults[motorT]] : {}), motorType: motorT };
+    : { ...DEFAULT_P, ...(typeDefaults[motorT] ? PRESETS[typeDefaults[motorT]] : {}), motorType: motorT };
   const mr = React.useMemo(() => computeDesign(motorP), [JSON.stringify(motorP)]);
   const brakeP = typeMem.current.brake
     ? { ...typeMem.current.brake, motorType: "brake" }
-    : { ...p, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
+    : { ...DEFAULT_P, ...(PRESETS[typeDefaults.brake] || {}), motorType: "brake" };
   const withBrk = p.actBrake === "yes";
   const br = React.useMemo(() => (withBrk ? computeDesign(brakeP) : null), [JSON.stringify(brakeP), withBrk]);
   // v60.5: ONE efficiency for one gearhead. Composition runs twice: a first pass fixes
@@ -7443,7 +7491,9 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
     : act0;
   const gtLim = gtAll && Number.isFinite(gtAll.TmaxOut) ? { T: gtAll.TmaxOut, label: "tooth yield" } : null;
   const rTS = act.fail ? null : { curve: act.curve, noLoad: act.noLoad, op: act.op, TstallW: 0 };
-  const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT };
+  // v60.6 (Grok): the composed I-T chart needs the MOTOR saturation curve — without it the
+  // peak marker sat at Ipk*kIT instead of the drive limit
+  const rIT = act.fail ? null : { Kt: mr.Kt * act.N * act.eta, peakT: act.peakT, op: act.op, Iph: mr.Iph, kIT: mr.kIT, satCurve: mr.satCurve };
   const pIT = { motorType: motorT === "stepper" ? "pm" : motorT, Imax: motorP.Imax }; // chart math is generic
   const srcTag = (t9) => (typeMem.current[t9] ? "from its tab (live)" : "tab not opened yet — using its default preset");
   return (
@@ -7484,7 +7534,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
             const g9 = GEAR_PRESETS[v9]; if (!g9) return;
             ["gbType", "gbRatio", "gbStages", "gbOD", "nPlanets"].forEach((k9) => s(k9)(g9[k9]));
           }} opts={["(pick)", ...Object.keys(GEAR_PRESETS)]} />
-          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11"]} />
+          <Sel label="AGMA quality" v={p.agmaQ} set={s("agmaQ")} opts={["Q7", "Q9", "Q11", "Q13"]} />
           <Sel label="Gear material / hardness" v={GEAR_MATS[p.gbMat] ? p.gbMat : GEAR_MAT_DEF} set={s("gbMat")} opts={Object.keys(GEAR_MATS)} />
           {(() => { const g8 = GEAR_MATS[p.gbMat] || GEAR_MATS[GEAR_MAT_DEF]; return (
             <>
@@ -7583,12 +7633,15 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
                 <b>{(gt.effF * 100).toFixed(1)}% / {gt.selfLock ? "self-locking" : (gt.effB * 100).toFixed(1) + "%"}</b></div>
               <div className="kv"><span>Back-drive breakaway at the output (est.)</span><b>{gt.Tbd.toFixed(3)} N·m</b></div>
               <div className="kv"><span>Friction torque through the train (fwd, at peak output)</span>
-                <b>{(act.peakT * (1 - gt.effF)).toFixed(2)} N·m of {act.peakT.toFixed(2)}</b></div>
+                {/* v60.6 (Codex): use the SAME eta the curve uses, and the output-equivalent
+                    loss form T_out·(1/η − 1) — the old line mixed the synthesized effF with a
+                    curve built on a different eta, and (1−η) understates referred loss */}
+                <b>{(act.peakT * (1 / Math.max(act.eta, 0.05) - 1)).toFixed(2)} N·m of {act.peakT.toFixed(2)}</b></div>
               {Number.isFinite(gt.TmaxOut) && <div className="kv"><span>{gt.stages[0] && gt.stages[0].harmonic ? "Momentary peak (ratcheting limit, size class)" : `Tooth-yield torque cap (Lewis, stage ${gt.limStage})`}</span>
                 <b style={{ color: act.peakT > gt.TmaxOut ? "#DC2626" : act.peakT > 0.6 * gt.TmaxOut ? "#D97706" : "#059669" }}>{gt.TmaxOut.toFixed(1)} N·m · margin ×{(gt.TmaxOut / Math.max(act.peakT, 1e-6)).toFixed(1)} vs peak</b></div>}
               {act.op && (() => {                                       /* A3: gear heat into the housing */
                 const Pout = (act.op.T * act.op.n * 2 * Math.PI) / 60;
-                const Pg = Pout * (1 / Math.max(gt.effF, 0.05) - 1);
+                const Pg = Pout * (1 / Math.max(act.eta, 0.05) - 1);   // v60.6: heat follows the eta the curve used
                 const A9 = Math.PI * (env9.gOD / 1000) * (env9.Lg / 1000) + (Math.PI / 2) * Math.pow(env9.gOD / 1000, 2);
                 const dT = Pg / (12 * Math.max(A9, 1e-4));               /* natural convection h ~ 12 */
                 return <>
@@ -7713,7 +7766,7 @@ const DEFAULT_P = {
     loadMode: "J", Irate: 5, bdRpm: 1800, Tcu: 100, Rext: 20,
     Tamb: 25, cooling: "Open air", TcuMax: 130, Tmin: -40, dutyPct: 100, cycleT: 10, brkEco: 100,
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
-    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0,
+    calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
     agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
@@ -7801,7 +7854,7 @@ export default function MotorDesigner() {
         Td = Math.max(Tp - Tm, 0);
       }
     }
-    setP((o) => ({ ...o, calOn: "yes", calKR: +kR.toFixed(4), calKL: +kL.toFixed(4),
+    setP((o) => ({ ...o, calOn: "yes", calV: 2, calKR: +kR.toFixed(4), calKL: +kL.toFixed(4),
       calKKe: +kKe.toFixed(4), calKKt: +kKt.toFixed(4), calTd: +Td.toFixed(5) }));
     setIoMsg("Calibration captured — the model now tracks the bench, and design tweaks predict the real motor's response.");
   };
@@ -8054,9 +8107,19 @@ export default function MotorDesigner() {
     setLibName("");
     setLibMsg(`Saved “${nm}”.`);
   };
+  // v60.6 (Grok): calibration schema v2. Pre-v60.5 captures folded magnetic saturation
+  // into calKKt; the engine now applies sat(I) itself, so replaying an old capture knocks
+  // torque down twice. Any stored design with calOn but no calV >= 2 gets its calibration
+  // cleared with a recapture notice instead of silently double-applying.
+  const CAL_CLEAR = { calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2 };
+  const legacyCal = (src) => !!src && src.calOn === "yes" && !(src.calV >= 2);
   const libLoad = (e9) => {
-    const merged = { ...p };
+    // v60.6 (Codex): load onto DEFAULTS, not the current design — a library entry saved
+    // before a field existed would otherwise inherit the current design's value for it
+    // (the same contamination class the preset fix closed)
+    const merged = { ...DEFAULT_P };
     for (const k9 of Object.keys(merged)) if (k9 in e9.design && typeof e9.design[k9] === typeof merged[k9]) merged[k9] = e9.design[k9];
+    if (legacyCal(e9.design)) { Object.assign(merged, CAL_CLEAR); setLibMsg(`Loaded with calibration cleared (captured before the saturation model changed) - recapture from the bench numbers.`); setP(merged); return; }
     setP(merged);
     setLibMsg(`Loaded “${e9.name}”.`);
   };
@@ -8064,7 +8127,7 @@ export default function MotorDesigner() {
   const libRows = useMemo(() => libSel.map((nm) => {
     const e9 = lib.find((x9) => x9.name === nm);
     if (!e9) return null;
-    const rr = computeDesign({ ...p, ...e9.design });
+    const rr = computeDesign({ ...DEFAULT_P, ...e9.design, ...(legacyCal(e9.design) ? CAL_CLEAR : {}) }); // v60.6: compare on defaults, not the dirty current state; legacy cal cleared
     return { name: nm, r: rr };
   }).filter(Boolean), [libSel, lib, p]);
   const undoRef = React.useRef([]);
@@ -8104,24 +8167,32 @@ export default function MotorDesigner() {
   const doRestore = () => {
     if (!restore) return;
     skipPushRef.current = true;
+    const legacy9 = legacyCal(restore.design);
     setP((o) => {
       const n = { ...o };
       Object.keys(o).forEach((k) => { if (k in restore.design && typeof restore.design[k] === typeof o[k]) n[k] = restore.design[k]; });
+      if (legacy9) Object.assign(n, CAL_CLEAR);
       return n;
     });
     if (restore.us === "in" || restore.us === "mm") setUs(restore.us);
     setRestore(null);
-    setIoMsg("Autosaved session restored.");
+    setIoMsg("Autosaved session restored." + (legacy9 ? " Calibration was cleared (captured before the saturation model changed) — recapture from the bench numbers." : ""));
   };
   const applyImport = (src, fname, fileUnits) => {
     if (fileUnits === "in" || fileUnits === "mm") setUs(fileUnits);
     setPendImp(null);
     setP((o) => {
-          const n = { ...o };
+          // v60.6 (Grok): a file that switches machine type starts from DEFAULTS — merging a
+          // stepper file over a dirty PM design leaked every key the file didn't carry.
+          // Same-type imports stay a partial merge so legacy files remain loadable.
+          const base9 = typeof src.motorType === "string" && src.motorType !== o.motorType ? DEFAULT_P : o;
+          const n = { ...base9 };
           let hits = 0;
-          Object.keys(o).forEach((k) => {
-            if (k in src && typeof src[k] === typeof o[k]) { n[k] = src[k]; hits++; }
+          Object.keys(n).forEach((k) => {
+            if (k in src && typeof src[k] === typeof n[k]) { n[k] = src[k]; hits++; }
           });
+          const legacy9 = legacyCal(src);
+          if (legacy9) Object.assign(n, CAL_CLEAR);
           ["finGb", "finMot", "finBrk"].forEach((k) => { n[k] = finMigrate(n[k]); });
           // legacy brake files: bobbin OD used to be the winding START (bore/barrel pair, ~1.6 mm apart).
           // Migrate to winding-window semantics: start = old OD, max finish = pocket − 1 mm.
@@ -8137,7 +8208,7 @@ export default function MotorDesigner() {
             n.brkBobOD = +(n.brkPktID - 1).toFixed(1);
             migrated = true;
           }
-          setIoMsg(hits ? `Imported ${fname} (${hits} parameters).${migrated ? " Bobbin fields migrated to winding-window semantics (start unchanged, max = pocket − 1 mm)." : ""}` : "No recognizable parameters in that file.");
+          setIoMsg(hits ? `Imported ${fname} (${hits} parameters).${migrated ? " Bobbin fields migrated to winding-window semantics (start unchanged, max = pocket − 1 mm)." : ""}${legacy9 ? " Calibration was cleared (captured before the saturation model changed) — recapture from the bench numbers." : ""}` : "No recognizable parameters in that file.");
           return n;
         });
   };
@@ -9094,7 +9165,7 @@ export default function MotorDesigner() {
                 ? (p.conn === "wye" && p.vref === "ln"
                   ? "Center-tap (L-N) excitation: each phase limited to ±Vdc/2 about the tap and torque-per-amp halved — half the winding pair works at a time. Flat region = drive current limit."
                   : "Flat region = drive current limit; droop includes both IR and synchronous-reactance (ωLI) drop; the tail above the no-load marker is the FOC field-weakening region (absent for six-step). Dashed = winding V/R capability with no drive clamp.")
-                : "Single-cage equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Deep-bar effects (higher apparent R at start) not modeled."}
+                : "Single-cage Thevenin equivalent circuit: rotor resistance computed from bar count, bar & end-ring areas, and material; slip and breakdown fall out rather than being entered. Rotor leakage reactance is a placeholder X2 = 0.8·X1 (not computed from bar geometry), and deep-bar effects (higher apparent R at start) are not modeled — starting torque and breakdown slip carry that approximation."}
               {" "}Marker = thermally-rated operating point from J.
             </div>
           </div>}
@@ -9155,7 +9226,7 @@ export default function MotorDesigner() {
                     ["No-load", (x9) => fmt(x9.noLoad, 0), "rpm"],
                     ["Peak torque", (x9) => tqS(x9.peakT), ""],
                     ["Efficiency", (x9) => fmt(x9.eta * 100, 1), "%"],
-                    ["R L-L", (x9) => fmt(x9.Rll, 4), "Ω"],
+                    ["R terminal 20 °C", (x9) => fmt(x9.Rll, 4), "Ω"],
                     ["Winding temp", (x9) => (x9.therm ? Math.round(x9.therm.Tcu) : "—"), "°C"],
                     ["Slot fill", (x9) => fmt(x9.fillGross * 100, 0), "%"]].map(([lab, f9, u9]) => (
                     <div className="kv" key={lab} style={{ alignItems: "baseline" }}>
