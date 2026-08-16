@@ -3019,13 +3019,20 @@ function SlotDetail({ p, r, us }) {
     let y = r1 + p.liner + rw / 2, row = 0;
     while (y < r2 - p.liner - rw / 2 - (rc > 0 ? rc * 0.3 : 0) && pos.length < r.condPerSlot) {
       const half = (hwA(y) * y) - p.liner - rw / 2;
-      const nfit = Math.max(0, Math.floor((2 * half) / rw));
-      const off = row % 2 ? rw / 2 : 0;
+      // v61.3b (Grok): the PM slot detail is the drawing a user compares against Cut
+      // Inspection, and it kept the old equal-count offset — overlapped copper, and the
+      // two views disagreed about how many conductors fit (28 cond/slot: 0 overflow here
+      // vs 1 there). Same hex lay as Cut Inspection: odd rows take one fewer conductor
+      // and stay centered, so alternate rows land exactly a half pitch apart and the
+      // 0.866 row spacing is tangent; a single-file column steps a full diameter.
+      const nEven = Math.max(0, Math.floor((2 * half) / rw));
+      const single = nEven <= 1;
+      const nfit = single ? nEven : row % 2 ? nEven - 1 : nEven;
       for (let c = 0; c < nfit && pos.length < r.condPerSlot; c++) {
-        const x = -half + rw / 2 + c * rw + off;
-        if (x <= half) pos.push([x, y]);
+        const x = (c - (nfit - 1) / 2) * rw;
+        if (Math.abs(x) <= half) pos.push([x, y]);
       }
-      y += rw * 0.87; row++;
+      y += rw * (single ? 1 : 0.866); row++;
     }
     drawn = pos.length;
     [-pitch, 0, pitch].forEach((sA, si) => {

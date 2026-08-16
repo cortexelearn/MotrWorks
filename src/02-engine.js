@@ -1703,7 +1703,10 @@ function computeDesign(p) {
       bom = { mMag: (p.poleArc / 100) * Math.PI * (Math.pow(p.statorID / 2000, 2) - Math.pow(p.statorID / 2000 - p.magT / 1000, 2)) * Ls9 * (RHO_MAG[mag.fam] || 4900),
         mLam, mCuSlot, mShaftIn, mSteel: mLam + mShaftIn, Jr: Jr9, note: "armature lamination counted once; end turns & commutator not in Jr" };
     } else if (stpE && step && Number.isFinite(step.J)) {
-      bom = { mMag: 0, Jr: step.J, note: "hybrid rotor Jr from the stepper model; PM disc mass not itemized" };
+      // v61.3b (Codex): the stepper needs a canonical mSteel too — the mass card sums
+      // mMag + mSteel + mCu, so leaving it undefined dropped the stator lamination out
+      // of the total (and out of the steel cost) while still displaying it on its own row
+      bom = { mMag: 0, mSteel: coreMass, Jr: step.J, note: "stator lamination only; hybrid rotor stack and PM disc not itemized" };
     }
   }
   // two-term iron loss: hysteresis (∝ f·B^1.8) + eddy (∝ f²·B²), split by the material's

@@ -2393,7 +2393,10 @@ export default function MotorDesigner() {
               <>
                 <div className="kv"><span>Base speed (at {p.Imax} A)</span><b>{fmt(r.baseN, 0)} rpm</b></div>
                 <div className="kv"><span>Peak torque ({brM ? "current-limited" : "drive-limited"})</span><b>{tqS(r.peakT)}</b></div>
-                <div className="kv"><span>Kt / Ke</span><b>{ktS(r.Kt)} · {keS(brM ? r.Kt : r.Ke)}</b></div>
+                {/* v61.3b (Codex): brushed Ke is brush.Ke — r.Kt became the calibrated
+                    TORQUE constant, so reusing it here reported a 20% low BEMF constant
+                    beside an unchanged no-load speed whenever kKt ≠ kKe */}
+                <div className="kv"><span>Kt / Ke</span><b>{ktS(r.Kt)} · {keS(brM && r.brush ? r.brush.Ke : r.Ke)}</b></div>
                 {brM
                   ? <div className="kv"><span>V at armature (V − brush drop)</span><b>{fmt(r.VphAvail, 1)} V</b></div>
                   : <div className="kv"><span>Inverter Vphase avail.</span><b>{fmt(r.VphAvail, 0)} V rms</b></div>}
@@ -2506,12 +2509,23 @@ export default function MotorDesigner() {
               <h2>Mass, inertia & material bill</h2>
               {Number.isFinite(r.bom.mMag) && r.bom.mMag > 0 && <div className="kv"><span>Magnet mass</span><b>{fmt(r.bom.mMag * 1000, 1)} g{p.costMag > 0 ? ` · $${fmt(r.bom.mMag * p.costMag, 2)}` : ""}</b></div>}
               <div className="kv"><span>{brM ? "Armature lamination mass" : "Core (lamination) mass"}</span><b>{fmt((brM && Number.isFinite(r.bom.mLam) ? r.bom.mLam : r.coreMass) * 1000, 0)} g</b></div>
-              {Number.isFinite(r.bom.mSteel) && <div className="kv"><span>Steel total (lamination{brM ? "" : " + hub"} + shaft in stack)</span>
-                <b>{fmt(r.bom.mSteel * 1000, 0)} g{p.costFe > 0 ? ` · $${fmt(r.bom.mSteel * p.costFe, 2)}` : ""}</b></div>}
-              {r.therm && Number.isFinite(r.therm.mCu) && <div className="kv"><span>Winding copper mass</span><b>{fmt(r.therm.mCu * 1000, 0)} g{p.costCu > 0 ? ` · $${fmt(r.therm.mCu * p.costCu, 2)}` : ""}</b></div>}
-              <div className="kv"><span>Active mass total</span>
-                <b>{fmt(((r.bom.mMag || 0) + (r.bom.mSteel || 0) + (r.therm && Number.isFinite(r.therm.mCu) ? r.therm.mCu : 0)) * 1000, 0)} g
-                {(p.costCu > 0 || p.costFe > 0 || p.costMag > 0) ? ` · $${fmt((r.bom.mMag || 0) * Math.max(p.costMag, 0) + (r.bom.mSteel || 0) * Math.max(p.costFe, 0) + (r.therm && Number.isFinite(r.therm.mCu) ? r.therm.mCu : 0) * Math.max(p.costCu, 0), 2)} material` : ""}</b></div>
+              {(() => {
+                // v61.3b (Codex): fall back to coreMass if a machine type ever lacks the
+                // canonical field — the total must never silently drop the steel
+                const mSt = Number.isFinite(r.bom.mSteel) ? r.bom.mSteel : r.coreMass;
+                const mCu9 = r.therm && Number.isFinite(r.therm.mCu) ? r.therm.mCu : 0;
+                const mMg9 = r.bom.mMag || 0;
+                return (
+                  <>
+                    <div className="kv"><span>Steel total (lamination{brM ? "" : pm ? " + hub" : ""} + shaft in stack)</span>
+                      <b>{fmt(mSt * 1000, 0)} g{p.costFe > 0 ? ` · $${fmt(mSt * p.costFe, 2)}` : ""}</b></div>
+                    {mCu9 > 0 && <div className="kv"><span>Winding copper mass</span><b>{fmt(mCu9 * 1000, 0)} g{p.costCu > 0 ? ` · $${fmt(mCu9 * p.costCu, 2)}` : ""}</b></div>}
+                    <div className="kv"><span>Active mass total</span>
+                      <b>{fmt((mMg9 + mSt + mCu9) * 1000, 0)} g
+                      {(p.costCu > 0 || p.costFe > 0 || p.costMag > 0) ? ` · $${fmt(mMg9 * Math.max(p.costMag, 0) + mSt * Math.max(p.costFe, 0) + mCu9 * Math.max(p.costCu, 0), 2)} material` : ""}</b></div>
+                  </>
+                );
+              })()}
               {Number.isFinite(r.bom.Jr) && <div className="kv"><span>Rotor inertia Jr</span><b>{(r.bom.Jr * 1e7).toFixed(2)} g·cm² ({r.bom.Jr.toExponential(2)} kg·m²)</b></div>}
               <div className="iobar" style={{ marginTop: 6 }}>
                 <Num label="Cu $/kg (0 = hide)" v={p.costCu} set={s("costCu")} step={1} min={0} />
