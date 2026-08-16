@@ -24040,12 +24040,20 @@ function CutInspection({ p, r, us }) {
             let placed = 0, row = 0;
             let rr = rInB + liner + dIns / 2;
             while (placed < perSide && rr <= rOutB - dIns / 2 + 1e-9) {
-                const wRow = wAt(rr) - 2 * liner;
-                const nRow = Math.max(Math.floor((wRow - dIns) / dIns) + 1, 0);
-                const off0 = row % 2 === 1 ? dIns / 2 : 0;
+                // hex lay: the 0.866·Ø row pitch is only tangent when alternate rows sit at a
+                // HALF-PITCH offset. Odd rows take one fewer conductor and stay centered — a
+                // centered n and a centered n−1 array at the same pitch are automatically half a
+                // pitch apart, so every circle is exactly tangent (the first cut re-centered
+                // equal-count rows and drew 13%-overlapped copper). Slots too narrow for two
+                // abreast degenerate to a single-file column at FULL-diameter pitch — staggering
+                // a one-wide column just deletes every other row.
+                const wRow0 = wAt(rr) - 2 * liner;
+                const nEven = Math.max(Math.floor((wRow0 - dIns) / dIns) + 1, 0);
+                const single = nEven <= 1;
+                const nRow = single ? nEven : row % 2 === 1 ? nEven - 1 : nEven;
                 for (let c9 = 0; c9 < nRow && placed < perSide; c9++) {
-                    const xoff = (c9 - (nRow - 1) / 2) * dIns + (row % 2 === 1 && c9 < nRow - 1 ? off0 : 0);
-                    if (Math.abs(xoff) > wRow / 2 - dIns / 2 + 1e-9)
+                    const xoff = (c9 - (nRow - 1) / 2) * dIns;
+                    if (Math.abs(xoff) > wRow0 / 2 - dIns / 2 + 1e-9)
                         continue;
                     const ang = a0 + Math.atan2(xoff, rr);
                     const rp = mm(rr);
@@ -24056,7 +24064,7 @@ function CutInspection({ p, r, us }) {
                     placed++;
                 }
                 row++;
-                rr += dIns * 0.866;
+                rr += dIns * (single ? 1 : 0.866); // single-file column: full-Ø pitch
             }
             if (placed < perSide) {
                 overflowTot += perSide - placed;
