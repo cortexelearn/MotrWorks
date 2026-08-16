@@ -764,6 +764,11 @@ function computeDesign(p) {
   const HcJcold = Math.max(mag.HcJ * (1 + (mag.aHcJ / 100) * (Tmin9 - 20)), 1);
   const HcJmin = Math.min(HcJT, HcJcold);
   const demagT = HcJcold < HcJT ? Tmin9 : p.Top;
+  // v61.3: remanence AT the worst-case demag temperature. The loaded field study judges
+  // opposing H against HcJmin (which may be the COLD corner for ferrite, aHcJ > 0) —
+  // magnetization and coercivity must be evaluated at the same temperature, so the demag
+  // pass re-solves with this Br rather than the operating-temperature one (Codex MEDIUM).
+  const BrTdemag = mag.Br * (Number.isFinite(p.brScale) && p.brScale > 0 ? p.brScale : 1) * (1 + (mag.aBr / 100) * (demagT - 20));
   const stM = STEELS[p.statorMat] || STEELS["M19 (29 ga)"];
   const rtM = STEELS[p.rotorMat] || STEELS["1018 steel (solid)"];
   const tauS = (Math.PI * (brushedM ? p.rotorOD : p.statorID)) / Ns;   // slot pitch at the airgap surface
@@ -851,8 +856,12 @@ function computeDesign(p) {
       const hyr2 = Math.max(p.rotorOD / 2 - p.magT - p.shaftD / 2, 0.5);
       const lyr = (Math.PI * p.rotorOD) / poles / 2 / 1000;
       satAux = (Fext) => {
+        // v61.3 (Grok): converge to tolerance, matching the brushed loop. A fixed 14
+        // damped steps truncates unequally between the Fext = 0 and loaded evaluations,
+        // which can drive satOfI ratios above 1 — clamped to 1, that becomes a SILENT
+        // under-saturation instead of a visible error.
         let Bg2 = Bg0;
-        for (let it2 = 0; it2 < 14; it2++) {
+        for (let it2 = 0; it2 < 200; it2++) {
           const Bt2 = (Bg2 * tauS) / (p.toothW * stM.kst);
           const By2 = (Bg2 * tauP) / (2 * p.yoke * stM.kst);
           const Byr2 = ((Bg2 * (Math.PI * p.rotorOD)) / poles) / (2 * hyr2 * rtM.kst);
@@ -861,8 +870,11 @@ function computeDesign(p) {
           // v60.7: uses the SAME leakage factor as the linear solution — the hardcoded
           // 0.9 here would have silently ignored an adopted field-informed kl
           const BgN = (kLeak9 * BrT * p.magT) / (p.magT + mag.mur * (kcGap * airgap + geMM));
-          Bg2 = 0.6 * Bg2 + 0.4 * BgN;
+          const Bg3 = 0.5 * Bg2 + 0.5 * BgN;
+          const done = Math.abs(Bg3 - Bg2) < 1e-6;
+          Bg2 = Bg3;
           if (Fext === 0) geSat = geMM;
+          if (done && it2 > 4) break;
         }
         return Bg2;
       };
@@ -1357,7 +1369,13 @@ function computeDesign(p) {
     const erOp = op ? erAt(op.n, Math.min(Iph, p.Imax)) : 0;
     if (erMax > 3) w.push(`Commutation reactance voltage peaks at ${erMax.toFixed(1)} V (~${Math.round(nErMax)} rpm) — well past the ~3 V arcing threshold for machines without interpoles: expect brush fire, EMI, and rapid wear. Fewer turns per coil, more segments, or a lower bus.`);
     else if (erMax > 2.5) w.push(`Commutation reactance voltage reaches ${erMax.toFixed(1)} V (~${Math.round(nErMax)} rpm) — at the classical ~2.5–3 V no-interpole limit; expect visible sparking at load.`);
-    brush = { Ra, La, Vb: p.brushV, Z, A2, segs: Ns, Bg: BgAvg, er: erOp, erMax, nErMax }; // double-layer lap/wave: commutator bars = coils = slots
+    brush = { Ra, La, Vb: p.brushV, Z, A2, segs: Ns, Bg: BgAvg, er: erOp, erMax, nErMax, Ke: Kt }; // double-layer lap/wave: commutator bars = coils = slots
+    // v61.3 (Grok HIGH): publish the TORQUE constant as r.Kt, matching the PM branch.
+    // r.Kt feeds every generic consumer — therm.Tcont, satInvertI, the efficiency map,
+    // the drive cycle and the mission card — and those must not run on the BEMF constant
+    // when calibration splits them (kKt ≠ kKe). The speed math above deliberately used
+    // the BEMF constant; brush.Ke keeps it for the datasheet/controller rows.
+    Kt = KtT9;
     if (poles > Ns) w.push("Armature slots fewer than poles — commutation will be poor; add slots.");
     if (p.pattern === "wave") {
       const hp = Math.max(Math.round(poles / 2), 1), plx = Math.max(Math.round(p.paths), 1);
@@ -1664,7 +1682,9 @@ function computeDesign(p) {
       const mHub = Math.PI * Math.max(rIm * rIm - rSh * rSh, 0) * Ls9 * rtM.rho * (rtM.kst || 1);
       const mShaftIn = Math.PI * rSh * rSh * Ls9 * 7850;    // shaft inside the stack only
       const Jr9 = 0.5 * mMag * (rOm * rOm + rIm * rIm) + 0.5 * mHub * (rIm * rIm + rSh * rSh) + 0.5 * mShaftIn * rSh * rSh;
-      bom = { mMag, mHub, mShaftIn, Jr: Jr9, note: "shaft counted inside the stack only" };
+      // mSteel is the CANONICAL steel total the card sums — stator lamination (coreMass)
+      // + rotor hub + shaft-in-stack, each counted once (v61.3, Codex HIGH)
+      bom = { mMag, mHub, mShaftIn, mSteel: coreMass + mHub + mShaftIn, Jr: Jr9, note: "shaft counted inside the stack only" };
     } else if (brushedM) {
       // armature: lamination annulus minus punched slots, slot copper at mean slot
       // radius, shaft inside the stack. End turns and commutator are NOT in Jr (they
@@ -1676,8 +1696,12 @@ function computeDesign(p) {
       const rSlotMean = Math.max(p.rotorOD / 2 - p.tipH - hs / 2, 1) / 1000;
       const mShaftIn = Math.PI * rSh * rSh * Ls9 * 7850;
       const Jr9 = 0.5 * mLam * (rOa * rOa + rSh * rSh) + mCuSlot * rSlotMean * rSlotMean + 0.5 * mShaftIn * rSh * rSh;
+      // mLam IS coreMass for a brushed machine — both are the punched armature annulus
+      // (mYoke + mTeeth reduces to exactly this), so the mass bill must count it ONCE:
+      // mSteel = the lamination + the shaft inside the stack (v61.3, Codex HIGH — the
+      // card was adding coreMass AND mLam, roughly doubling brushed steel mass and cost).
       bom = { mMag: (p.poleArc / 100) * Math.PI * (Math.pow(p.statorID / 2000, 2) - Math.pow(p.statorID / 2000 - p.magT / 1000, 2)) * Ls9 * (RHO_MAG[mag.fam] || 4900),
-        mLam, mCuSlot, mShaftIn, Jr: Jr9, note: "end turns & commutator not in Jr" };
+        mLam, mCuSlot, mShaftIn, mSteel: mLam + mShaftIn, Jr: Jr9, note: "armature lamination counted once; end turns & commutator not in Jr" };
     } else if (stpE && step && Number.isFinite(step.J)) {
       bom = { mMag: 0, Jr: step.J, note: "hybrid rotor Jr from the stepper model; PM disc mass not itemized" };
     }
@@ -2001,7 +2025,7 @@ function computeDesign(p) {
     Nser, MLT, Rphase: RphOut, Rll: RllOut, Iph, Iline: IlineOut, Istall, Vph, Arms,
     Trated, nSync, nShaft, Pout: PoutN, Pcu, eta, Eph, Ke, Kt, VphAvail,
     rotation, topLayer, botLayer, layers, curve, op, noLoad, peakT, baseN,
-    mag, BrT, HcJT, HcJmin, demagT, kcGap, kl: klOut, BgAvg, B1, BgEff, Hdemag, demagMargin,
+    mag, BrT, BrTdemag, HcJT, HcJmin, demagT, kcGap, kl: klOut, BgAvg, B1, BgEff, Hdemag, demagMargin,
     cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
     MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
     stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog, bom,
@@ -2575,7 +2599,7 @@ function fieldStudyLoaded(p, r, opts) {
   const M0 = magPattern(p, msh, 0, r.BrT);
   const nl0 = o.nl || (o.quick ? 10 : 26), sw0 = o.sweeps || (o.quick ? 60 : 130);
   const pp = msh.poles / 2;
-  const nAng = Math.max(Math.round(o.nAng || 7), 3);
+  const nAng = Math.max(Math.round(o.nAng || 9), 3);
   const TdqOf = (A9, iabc9) => {
     // amplitude-invariant Clarke on λ and i, then T = (3/2)·p·(λα·iβ − λβ·iα)
     const lm = phaseFlux(p, r, msh, A9);
@@ -2583,42 +2607,70 @@ function fieldStudyLoaded(p, r, opts) {
     const alL = (2 / 3) * (lm[0] - lm[1] / 2 - lm[2] / 2), beL = (lm[1] - lm[2]) / Math.sqrt(3);
     return 1.5 * pp * (alL * beI - beL * alI);
   };
-  let best = null, warm = null;
-  for (let a9 = 0; a9 < nAng; a9++) {
-    const thE = (Math.PI * a9) / nAng;                 // electrical angle sweep over half a cycle
+  // v61.3 (Grok): every angle warms from the SAME no-load solution rather than from the
+  // previous angle — chaining let one angle's residual bias the next, and the verify pass
+  // (a cold solve at the chosen angle) could not see it.
+  const s00 = solveField(p, msh, M0, { nl: nl0, sweeps: sw0 });
+  const warm0 = s00.A;
+  // demag margin for one solved state; tracked at EVERY angle because the worst
+  // demagnetizing angle is not generally the peak-torque angle (Grok MEDIUM)
+  const magM0 = MAGNETS[p.mag] || MAGNETS["N42"];
+  const demagOf = (A9, M9, HcJ9) => {
+    let worst = Infinity, nCells = 0, nBad = 0;
+    const st = new Float64Array(nth); st.fill(Infinity);
+    for (let i = 0; i < msh.nr; i++) {
+      if (!msh.isMag[i]) continue;
+      for (let j = 0; j < nth; j++) {
+        const k = i * nth + j, Mc = M9[k];
+        if (Mc === 0) continue;
+        nCells++;
+        const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
+        const BrC = (A9[i * nth + jp] - A9[i * nth + jm]) / (2 * msh.rC[i] * msh.dth);
+        const Hr = (BrC - MU0 * Mc) / (MU0 * (magM0.mur || 1.05));
+        const margin = 1 - Math.max(-Hr * Math.sign(Mc), 0) / HcJ9;
+        if (margin < worst) worst = margin;
+        if (margin < 0) nBad++;
+        if (margin < st[j]) st[j] = margin;
+      }
+    }
+    return { worstMargin: worst, frac: nCells ? nBad / nCells : NaN, nDemag: nBad, nMagCells: nCells, strip: Array.from(st) };
+  };
+  const HcJ0 = Math.max(r.HcJmin, 1) * 1000;           // A/m at the worst-case magnet temp
+  const solveAt = (thE) => {
     const iabc = [Ipk * Math.cos(thE), Ipk * Math.cos(thE - (2 * Math.PI) / 3), Ipk * Math.cos(thE + (2 * Math.PI) / 3)];
-    const srcJ = windingSrc(p, r, msh, iabc);
-    const s9 = solveField(p, msh, M0, { nl: nl0, sweeps: sw0, srcJ, warm });
-    warm = s9.A;
-    const g9 = gapQuantities(p, msh, s9.A);
-    const Tdq9 = TdqOf(s9.A, iabc);
-    if (!best || Math.abs(Tdq9) > Math.abs(best.T)) best = { T: Tdq9, Tstress: g9.T, thE, A: s9.A, B: s9.B, g: g9, conv: s9.conv, iabc };
+    const s9 = solveField(p, msh, M0, { nl: nl0, sweeps: sw0, srcJ: windingSrc(p, r, msh, iabc), warm: warm0 });
+    return { T: TdqOf(s9.A, iabc), thE, A: s9.A, B: s9.B, g: gapQuantities(p, msh, s9.A), conv: s9.conv, iabc };
+  };
+  let best = null, worstD = null;
+  const consider = (st) => {
+    if (!best || Math.abs(st.T) > Math.abs(best.T)) best = st;
+    const d9 = demagOf(st.A, M0, HcJ0);
+    if (!worstD || d9.worstMargin < worstD.d.worstMargin) worstD = { d: d9, st };
+  };
+  for (let a9 = 0; a9 < nAng; a9++) consider(solveAt((Math.PI * a9) / nAng));
+  // local refine around the coarse peak — a fixed π/nAng grid can sit ~1.5% off the true
+  // maximum (cos 10° = 0.985), and this number is published as electromagnetic torque
+  {
+    const h9 = Math.PI / nAng / 2;
+    consider(solveAt(best.thE - h9));
+    consider(solveAt(best.thE + h9));
   }
   const B1L = gapHarmonic(best.g.Br, pp);
-  // ---- demagnetization map at the best-torque angle, magnet cells only:
-  // H along the magnetization = (B_r − μ0·M)/(μ0·μr); demag when it opposes M.
-  // Compared against HcJ at the design's WORST-CASE magnet temperature (r.HcJmin, kA/m).
-  const magM = MAGNETS[p.mag] || MAGNETS["N42"];
-  const HcJ = Math.max(r.HcJmin, 1) * 1000;            // A/m
-  let worstMargin = Infinity, nMagCells = 0, nDemag = 0;
-  const stripN = nth, strip = new Float64Array(stripN); strip.fill(Infinity);
-  for (let i = 0; i < msh.nr; i++) {
-    if (!msh.isMag[i]) continue;
-    for (let j = 0; j < nth; j++) {
-      const k = i * nth + j;
-      const Mc = M0[k];
-      if (Mc === 0) continue;                          // inter-pole gap
-      nMagCells++;
-      const jp = (j + 1) % nth, jm = (j - 1 + nth) % nth;
-      const BrC = (best.A[i * nth + jp] - best.A[i * nth + jm]) / (2 * msh.rC[i] * msh.dth);
-      const Hr = (BrC - MU0 * Mc) / (MU0 * (magM.mur || 1.05));
-      const Hop = -Hr * Math.sign(Mc);                 // positive = opposing the magnetization
-      const margin = 1 - Math.max(Hop, 0) / HcJ;
-      if (margin < worstMargin) worstMargin = margin;
-      if (margin < 0) nDemag++;
-      if (margin < strip[j]) strip[j] = margin;
-    }
+  // ---- demagnetization: reported at the WORST swept angle (tracked above), not the
+  // peak-torque one, and at the design's worst-case magnet temperature. H along the
+  // magnetization is (B_r − μ0·M)/(μ0·μr); demag is the part opposing M.
+  // v61.3 (Codex MEDIUM): the map judges opposing H against HcJ at r.demagT, so the
+  // MAGNETIZATION must come from that same temperature. When the worst-case corner is
+  // not the operating point (ferrite's cold corner), re-solve the worst-demag angle with
+  // the demag-temperature remanence; otherwise reuse the solve we already have.
+  const tempSplit = Number.isFinite(r.BrTdemag) && Math.abs(r.demagT - p.Top) > 0.5 && r.BrTdemag > 0;
+  let dRes = worstD.d, dAng = worstD.st.thE;
+  if (tempSplit) {
+    const Md = magPattern(p, msh, 0, r.BrTdemag);
+    const Ad = solveField(p, msh, Md, { nl: nl0, sweeps: sw0, srcJ: windingSrc(p, r, msh, worstD.st.iabc), warm: worstD.st.A }).A;
+    dRes = demagOf(Ad, Md, HcJ0);
   }
+  const { worstMargin, frac: dFrac, nDemag, nMagCells, strip } = dRes;
   // ---- mesh self-check on the LOADED quantities (torque and loaded B1) — the same
   // discipline that keeps cogging unpublished. Torque is only quotable if it holds.
   let mesh = null;
@@ -2650,7 +2702,7 @@ function fieldStudyLoaded(p, r, opts) {
     Tem: mesh && !mesh.ok ? null : Math.abs(best.T),
     TemRaw: Math.abs(best.T),
     Tcir, dTcir: Tcir > 0 ? Math.abs(best.T) / Tcir - 1 : NaN,
-    demag: { worstMargin, frac: nMagCells ? nDemag / nMagCells : NaN, nDemag, nMagCells, strip: Array.from(strip) },
+    demag: { worstMargin, frac: dFrac, nDemag, nMagCells, strip, atT: r.demagT, reSolved: tempSplit, thE: dAng, atPeakT: Math.abs(dAng - best.thE) < 1e-9 },
     nr: msh.nr, nth,
   };
 }
@@ -2828,20 +2880,33 @@ function driveCycle(p, r, samples) {
   const tEff = Math.max(tTot - unreach, 1e-9);
   const Irms = Math.sqrt(I2t / tEff), Trms = Math.sqrt(T2t / tTot);
   const PcuMean = Ecu / tEff, PfeMean = Efe / tEff;
-  // steady winding temperature this cycle implies, through the design's own Rth
+  // steady winding temperature this cycle implies, through the design's own network.
+  // v61.3 (Grok): iron leaves through RthOut — the placeholder 0.5·Rth under-charged it
+  // ~44% relative to the thermal card, so the mission/cycle temperature disagreed with
+  // the card it is meant to reproduce.
   const Rth9 = r.therm && Number.isFinite(r.therm.Rth) ? r.therm.Rth : null;
-  const Tcu = Rth9 !== null ? p.Tamb + PcuMean * Rth9 + PfeMean * Math.max(Rth9 * 0.5, 0) : null;
+  const RthO9 = r.therm && Number.isFinite(r.therm.RthOut) ? r.therm.RthOut : (Rth9 !== null ? Rth9 * 0.5 : null);
+  const Tcu = Rth9 !== null ? p.Tamb + PcuMean * Rth9 + PfeMean * Math.max(RthO9, 0) : null;
   return { dur: tTot, Eout, Ein, Ecu, Efe, Ew, etaCycle: Ein > 0 ? Eout / Ein : 0,
     Irms, Trms, PcuMean, PfeMean, Tcu, nPk, tPk, overT: over, trace,
     overFrac: over / tTot, unreachT: unreach, unreachFrac: unreach / tTot };
 }
 
-/* v60.9 one-shot overload: winding temperature vs time at a constant pulse current,
-   from the design's own two-node ladder (copper node through RthCu at tauW over the
-   machine node through RthOut at tauM). Copper heating only — iron loss during a
-   stall/low-speed pulse is second-order and NOT added (disclosed in-card). Resistance
-   is taken hot (at the Tcu rating), which is conservative early in the pulse. Pure. */
-function pulseTemp(p, r, Ipulse) {
+/* v61.3 one-shot overload: winding temperature vs time at a constant pulse current from
+   the design's own two-node ladder — copper node (C1) through RthCu into the machine
+   node (C2) through RthOut to ambient. Copper heating only; iron loss during a stall or
+   low-speed pulse is second-order and NOT added (disclosed in-card). Resistance is taken
+   hot (at the Tcu rating), conservative early in the pulse.
+
+   The EXACT coupled step response, not two superposed first-order curves: v60.9 summed
+   RthCu(1−e^−t/tauW) + RthOut(1−e^−t/tauM), which gives the right steady state but lets
+   the outer resistance contribute from t=0, so the initial slope came out
+   P(1/C1 + 1/(C1+C2)) instead of the physical P/C1 (Codex HIGH — ~12% too fast on a
+   NEMA-class PM, and time-to-limit correspondingly pessimistic). Solving
+     C1·T1' = P − (T1−T2)/R1,   C2·T2' = (T1−T2)/R1 − T2/R2
+   analytically gives a two-pole response; C1 and C2 are recovered exactly from the
+   published time constants (tauW = R1·C1, tauM = (C1+C2)·R2). Pure. */
+function pulseTemp(p, r, Ipulse, opts) {
   if (!r || !r.therm || !(Ipulse > 0)) return { err: "Needs a computed design and a pulse current." };
   const th = r.therm;
   if (!(th.RthCu >= 0) || !(th.RthOut > 0) || !(th.tauW > 0)) return { err: "This machine type has no two-node pulse model." };
@@ -2849,18 +2914,38 @@ function pulseTemp(p, r, Ipulse) {
     : p.motorType === "latm" && r.latm ? Ipulse * Ipulse * r.latm.Ra
     : p.motorType === "stepper" && r.step ? (r.step.on2 ? 2 : 1) * Ipulse * Ipulse * r.step.Rs
     : 3 * Ipulse * Ipulse * r.Rhot;
-  const Tof = (t9) => p.Tamb + Pc * (th.RthCu * (1 - Math.exp(-t9 / Math.max(th.tauW, 1e-6)))
-    + th.RthOut * (1 - Math.exp(-t9 / Math.max(th.tauM, 1e-6))));
-  const Tend = p.Tamb + Pc * (th.RthCu + th.RthOut);
+  const R1 = Math.max(th.RthCu, 1e-9), R2 = th.RthOut;
+  const C1 = th.tauW / R1;                                   // = mCu·cp exactly
+  const C2 = Math.max(th.tauM / R2 - C1, C1 * 1e-6);         // machine node less the copper
+  const Tss1 = Pc * (R1 + R2), Tss2 = Pc * R2;               // steady rise above ambient
+  const a11 = -1 / (R1 * C1), a12 = 1 / (R1 * C1);
+  const a21 = 1 / (R1 * C2), a22 = -(1 / R1 + 1 / R2) / C2;
+  const tr9 = a11 + a22, det9 = a11 * a22 - a12 * a21;
+  const disc = Math.max(tr9 * tr9 - 4 * det9, 0);            // real for any physical RC ladder
+  const sq = Math.sqrt(disc);
+  let l1 = (tr9 + sq) / 2, l2 = (tr9 - sq) / 2;
+  if (Math.abs(l1 - l2) < 1e-12 * Math.abs(l1 || 1)) l2 = l1 * (1 + 1e-9); // repeated-root guard
+  const dl = l1 - l2;
+  // T1(t) = Tss1 − [e^{At}·Tss]_1, with e^{At} from the 2×2 spectral form
+  const Tof = (t9) => {
+    const e1 = Math.exp(l1 * t9), e2 = Math.exp(l2 * t9);
+    const m11 = (e1 * (a11 - l2) - e2 * (a11 - l1)) / dl;
+    const m12 = (a12 * (e1 - e2)) / dl;
+    return p.Tamb + Tss1 - (m11 * Tss1 + m12 * Tss2);
+  };
+  const Tend = p.Tamb + Tss1;
   let tLimit = Infinity;
   if (Tend > p.TcuMax && Tof(0) < p.TcuMax) {
     let lo = 0, hi = Math.max(th.tauM * 8, 1);
     for (let i9 = 0; i9 < 60; i9++) { const m9 = (lo + hi) / 2; if (Tof(m9) < p.TcuMax) lo = m9; else hi = m9; }
     tLimit = (lo + hi) / 2;
   }
-  const tMax = Number.isFinite(tLimit) ? Math.min(Math.max(tLimit * 1.5, th.tauW * 3), th.tauM * 4) : th.tauM * 4;
+  // opts.tMax overrides the display window (the gate uses it to resolve the response
+  // near t = 0, where the coupled ladder differs from the old superposed form)
+  const tMax = opts && opts.tMax > 0 ? opts.tMax
+    : Number.isFinite(tLimit) ? Math.min(Math.max(tLimit * 1.5, th.tauW * 3), th.tauM * 4) : th.tauM * 4;
   const curve = Array.from({ length: 61 }, (_, i9) => { const t9 = (tMax * i9) / 60; return { t: t9, T: Tof(t9) }; });
-  return { Pc, curve, tLimit, Tend, tMax };
+  return { Pc, curve, tLimit, Tend, tMax, C1, C2 };
 }
 
 /* ================= presentation: CortexEdge theme ================= */

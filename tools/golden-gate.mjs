@@ -181,6 +181,16 @@ console.log('MEC / FEMM');
   const magHand = (p.poleArc / 100) * Math.PI * (Math.pow(p.rotorOD / 2000, 2) - Math.pow((p.rotorOD / 2 - p.magT) / 1000, 2)) * (p.stackL / 1000) * 7500;
   const magOK = r1x.bom && Math.abs(r1x.bom.mMag - magHand) / magHand < 1e-9;
   console.log(`  ${magOK ? '✓' : '✗'} magnet mass matches hand volume × 7500 kg/m³ (${r1x.bom ? (r1x.bom.mMag * 1000).toFixed(1) : '—'} g)`);
+  // v61.3 (Codex HIGH): a brushed machine's coreMass and bom.mLam are the SAME punched
+  // armature annulus. The canonical mSteel must count it once — the card summed both.
+  const pB = { ...base, ...M2.PRESETS['Brushed 12 V · 2-pole ferrite · ~7 krpm'] };
+  const rB = M2.computeDesign(pB);
+  const aliasOK = rB.bom && Math.abs(rB.bom.mLam - rB.coreMass) / rB.coreMass < 1e-9;
+  const steelOK = rB.bom && Math.abs(rB.bom.mSteel - (rB.bom.mLam + rB.bom.mShaftIn)) < 1e-12
+    && rB.bom.mSteel < rB.coreMass + rB.bom.mLam;      // i.e. NOT the double-counted sum
+  console.log(`  ${aliasOK ? '✓' : '✗'} brushed coreMass and bom.mLam are the same lamination (${(rB.coreMass * 1000).toFixed(1)} g)`);
+  console.log(`  ${steelOK ? '✓' : '✗'} brushed mSteel counts that lamination once (${rB.bom ? (rB.bom.mSteel * 1000).toFixed(1) : '—'} g)`);
+  if (!aliasOK || !steelOK) fail = true;
   const rBs = M2.computeDesign({ ...p, brScale: 0.95 });
   const dKtBs = rBs.Kt / r1x.Kt - 1;
   const bsOK = dKtBs < -0.02 && dKtBs > -0.08;
@@ -193,6 +203,20 @@ console.log('MEC / FEMM');
   const monoOK = !pt9.err && pt9.curve.every((c9, i9) => i9 === 0 || c9.T >= pt9.curve[i9 - 1].T - 1e-12);
   console.log(`  ${endOK ? '✓' : '✗'} pulse T(t→∞) equals the steady two-node answer (${pt9.err ? pt9.err : pt9.Tend.toFixed(1) + ' °C'})`);
   console.log(`  ${monoOK ? '✓' : '✗'} pulse curve is monotone non-decreasing`);
+  // v61.3 (Codex HIGH): the COUPLED ladder's initial slope must be P/C1 — all the pulse
+  // power enters the copper node first. The superposed two-first-order form this
+  // replaced started at P(1/C1 + 1/(C1+C2)), ~12% fast here, and read pessimistic.
+  const ptN = M2.pulseTemp(p, r1x, 2 * p.Imax, { tMax: r1x.therm.tauW / 500 });
+  const dTdt0 = (ptN.curve[1].T - ptN.curve[0].T) / (ptN.curve[1].t - ptN.curve[0].t);
+  const want0 = ptN.Pc / ptN.C1;
+  const slopeOK = Math.abs(dTdt0 / want0 - 1) < 0.02;
+  console.log(`  ${slopeOK ? '✓' : '✗'} pulse initial slope is P/C1, copper node first (${dTdt0.toFixed(3)} vs ${want0.toFixed(3)} K/s)`);
+  // and the second node must lag: at t = tauW the machine node has barely moved, so the
+  // winding rise must still be far below the steady two-node answer
+  const ptW = M2.pulseTemp(p, r1x, 2 * p.Imax, { tMax: r1x.therm.tauW });
+  const lagOK = ptW.curve[60].T - p.Tamb < 0.95 * ptW.Pc * (r1x.therm.RthCu + r1x.therm.RthOut);
+  console.log(`  ${lagOK ? '✓' : '✗'} machine node lags the winding node (t=tauW rise below steady)`);
+  if (!slopeOK || !lagOK) fail = true;
   const kSyn = +(((50 / 10) / r1x.therm.Rth).toFixed(4));  // synthetic bench: 50 °C rise at 10 W
   const rKr = M2.computeDesign({ ...p, calOn: 'yes', calKRth: kSyn });
   const capOK = Math.abs(rKr.therm.Rth * 10 - 50) < 0.05;  // captured network reproduces the measured ΔT

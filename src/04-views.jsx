@@ -2732,13 +2732,18 @@ function BrushedSlotDetail({ p, r, us }) {
     let y = r2 + p.liner + rw / 2 + (rc > 0 ? rc * 0.3 : 0), row = 0;
     while (y < r1 - p.liner - rw / 2 && pos.length < r.condPerSlot) {
       const half = (hwA(y) * y) - p.liner - rw / 2;
-      const nfit = Math.max(0, Math.floor((2 * half) / rw));
-      const off = row % 2 ? rw / 2 : 0;
+      // v61.3 (Grok): same hex lay as the Cut Inspection view — odd rows take one fewer
+      // conductor and stay centered, which puts them exactly half a pitch off and makes
+      // the 0.866 row spacing tangent. Offsetting equal-count rows (the old form) drew
+      // overlapped copper, so the two drawings disagreed about whether a slot packs.
+      const nEven = Math.max(0, Math.floor((2 * half) / rw));
+      const single = nEven <= 1;
+      const nfit = single ? nEven : row % 2 ? nEven - 1 : nEven;
       for (let c = 0; c < nfit && pos.length < r.condPerSlot; c++) {
-        const x = -half + rw / 2 + c * rw + off;
-        if (x <= half) pos.push([x, y]);
+        const x = (c - (nfit - 1) / 2) * rw;
+        if (Math.abs(x) <= half) pos.push([x, y]);
       }
-      y += rw * 0.87; row++;
+      y += rw * (single ? 1 : 0.866); row++;
     }
     drawn = pos.length;
     slotsShown.forEach((sA, si) => {
@@ -2832,7 +2837,9 @@ function CutInspection({ p, r, us }) {
   const steelC = btBad ? "#DEA3A3" : btWarm ? "#CBB597" : "#AAB4C0";
   // ---- slot punch polygons + conductor packing ----
   const dIns = r.dIns, dBare = r.dBare, liner = Math.max(p.liner, 0);
-  const perSide = Math.max(Math.round(p.turns), 1) * Math.max(Math.round(p.strands), 1);
+  // conductors per coil side straight from the engine's own count (v61.3, Grok):
+  // re-deriving turns × strands diverges the moment either is non-integer
+  const perSide = Math.max(Math.round(r.condPerSlot / (two ? 2 : 1)), 1);
   const slotEls = [], wireEls = [];
   let overflowTot = 0;
   const wAt = (rr) => r.w1 + ((r.w2 - r.w1) * (rr - p.statorID / 2 - p.tipH)) / Math.max(r.hs, 1e-6); // mm, at radius rr (mm)
@@ -2931,9 +2938,14 @@ function CutInspection({ p, r, us }) {
               {v9 < 0 ? "All" : "Phase " + PHASE[v9].name}</button>
           ))}
         </div>
-        <div className="kv"><span>Fill (insulated / gross slot)</span><b>{(r.fillGross * 100).toFixed(1)}%</b></div>
-        <div className="kv"><span>Fill (bare Cu / gross slot)</span><b>{(r.fillCu * 100).toFixed(1)}%</b></div>
-        <div className="kv"><span>Conductors per slot{two ? " (2 coil sides)" : ""}</span><b>{perSide * (two ? 2 : 1)}</b></div>
+        {/* v61.3 (Grok HIGH): bind the caption to the field the results column uses for
+            that caption. fillGross/fillCu are ratios of the USABLE area (strict basis);
+            fillInsSlot/fillCuSlot are the gross-slot ones. The first cut printed the
+            gross-slot captions on the usable-area numbers. */}
+        <div className="kv"><span>Fill (insulated / usable, strict)</span><b>{(r.fillGross * 100).toFixed(1)}%</b></div>
+        <div className="kv"><span>Fill (insulated / gross slot)</span><b>{(r.fillInsSlot * 100).toFixed(1)}%</b></div>
+        <div className="kv"><span>Fill (bare Cu / gross slot)</span><b>{(r.fillCuSlot * 100).toFixed(1)}%</b></div>
+        <div className="kv"><span>Conductors per slot{two ? " (2 coil sides)" : ""}</span><b>{r.condPerSlot}</b></div>
         <div className="kv"><span>Wire Ø bare / insulated</span><b>{r.dBare.toFixed(3)} / {r.dIns.toFixed(3)} mm</b></div>
         {overflowTot > 0
           ? <div className="warn">{overflowTot} conductors do not pack at true scale (red dots) — the fill number admits what the drawing shows.</div>
