@@ -1198,7 +1198,10 @@ function computeDesign(p) {
   // ---- rotor magnet circuit (BLDC/PMSM) ----
   const mag = MAGNETS[p.mag] || MAGNETS["N42"];
   const dT = p.Top - 20;
-  const BrT = mag.Br * (1 + (mag.aBr / 100) * dT);
+  // v60.8: brScale is the tolerance-corner hook — a unitless Br multiplier (production
+  // magnet lots run ±3-5%) that flows through the ENTIRE circuit (leakage, saturation,
+  // Kt, demag) instead of a bolt-on percentage at the end. Default 1.
+  const BrT = mag.Br * (Number.isFinite(p.brScale) && p.brScale > 0 ? p.brScale : 1) * (1 + (mag.aBr / 100) * dT);
   const HcJT = Math.max(mag.HcJ * (1 + (mag.aHcJ / 100) * dT), 1); // kA/m at Top
   // cold-start extreme: NdFeB HcJ falls hot, ferrite falls COLD (aHcJ > 0) — evaluate both
   const Tmin9 = Number.isFinite(p.Tmin) ? p.Tmin : -40;
@@ -2089,6 +2092,40 @@ function computeDesign(p) {
     : Math.PI * (rODm * rODm - rTopM * rTopM) * Lm2 * stM.kst * stM.rho;
   const mTeeth = latmE ? 0 : Math.max(Math.PI * Math.abs(rBoreM * rBoreM - rTopM * rTopM) * Lm2 - (Ns * slotArea * p.stackL) / 1e9, 0) * stM.kst * stM.rho;
   const coreMass = mYoke + mTeeth;
+
+  /* ---- v60.8 mass / rotor inertia / material bill (ACTIVE electromagnetic parts only:
+     no housing, bearings, commutator, encoder, leads, or gearhead — the card says so).
+     Magnet density by family; rotor inertia is the annulus sum ½m(ro²+ri²) per part.
+     Stepper reuses its own hollow-aware Jr (step.J). Copper mass comes from therm.mCu
+     (per-branch, already strand-correct) and is joined in the view. */
+  let bom = null;
+  {
+    const RHO_MAG = { NdFeB: 7500, SmCo: 8300, Ferrite: 4900 };
+    const Ls9 = p.stackL / 1000;
+    if (p.motorType === "pm") {
+      const rOm = p.rotorOD / 2000, rIm = Math.max(p.rotorOD / 2 - p.magT, 0) / 1000, rSh = p.shaftD / 2000;
+      const mMag = (p.poleArc / 100) * Math.PI * (rOm * rOm - rIm * rIm) * Ls9 * (RHO_MAG[mag.fam] || 7500);
+      const mHub = Math.PI * Math.max(rIm * rIm - rSh * rSh, 0) * Ls9 * rtM.rho * (rtM.kst || 1);
+      const mShaftIn = Math.PI * rSh * rSh * Ls9 * 7850;    // shaft inside the stack only
+      const Jr9 = 0.5 * mMag * (rOm * rOm + rIm * rIm) + 0.5 * mHub * (rIm * rIm + rSh * rSh) + 0.5 * mShaftIn * rSh * rSh;
+      bom = { mMag, mHub, mShaftIn, Jr: Jr9, note: "shaft counted inside the stack only" };
+    } else if (brushedM) {
+      // armature: lamination annulus minus punched slots, slot copper at mean slot
+      // radius, shaft inside the stack. End turns and commutator are NOT in Jr (they
+      // add mass but sit at small/moderate radius — disclosed first-order).
+      const rOa = p.rotorOD / 2000, rSh = p.shaftD / 2000;
+      const slotV = (Ns * slotArea * p.stackL) / 1e9;       // m³ punched out
+      const mLam = Math.max(Math.PI * (rOa * rOa - rSh * rSh) * Ls9 - slotV, 0) * stM.kst * stM.rho;
+      const mCuSlot = 8960 * condPerSlot * Ns * aBare * 1e-6 * Ls9; // in-slot copper only
+      const rSlotMean = Math.max(p.rotorOD / 2 - p.tipH - hs / 2, 1) / 1000;
+      const mShaftIn = Math.PI * rSh * rSh * Ls9 * 7850;
+      const Jr9 = 0.5 * mLam * (rOa * rOa + rSh * rSh) + mCuSlot * rSlotMean * rSlotMean + 0.5 * mShaftIn * rSh * rSh;
+      bom = { mMag: (p.poleArc / 100) * Math.PI * (Math.pow(p.statorID / 2000, 2) - Math.pow(p.statorID / 2000 - p.magT / 1000, 2)) * Ls9 * (RHO_MAG[mag.fam] || 4900),
+        mLam, mCuSlot, mShaftIn, Jr: Jr9, note: "end turns & commutator not in Jr" };
+    } else if (stpE && step && Number.isFinite(step.J)) {
+      bom = { mMag: 0, Jr: step.J, note: "hybrid rotor Jr from the stepper model; PM disc mass not itemized" };
+    }
+  }
   // two-term iron loss: hysteresis (∝ f·B^1.8) + eddy (∝ f²·B²), split by the material's
   // eddy fraction at the 1.5 T / 60 Hz calibration point (thin CoFe low, solid steel high).
   // Reduces exactly to mass·w at 60 Hz / 1.5 T, diverges correctly at 400 Hz+ electrical.
@@ -2406,7 +2443,7 @@ function computeDesign(p) {
     mag, BrT, HcJT, HcJmin, demagT, kcGap, kl: klOut, BgAvg, B1, BgEff, Hdemag, demagMargin,
     cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
     MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
-    stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog,
+    stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog, bom,
     Lph, LphNR, Lll, LllNR, acim, therm, acFr, Pwind, Pfe, feOp, brush, latm, brake, step,
   };
 }
@@ -7918,6 +7955,7 @@ const DEFAULT_P = {
     Tamb: 25, cooling: "Open air", TcuMax: 130, Tmin: -40, dutyPct: 100, cycleT: 10, brkEco: 100,
     mR: 0, mL: 0, mKe: 0, mNl: 0, mBpp: 0, mBrms: 0, mBf: 0, mBn: 0, calTn: 0, calTt: 0, calTs: 0,
     calOn: "no", calKR: 1, calKL: 1, calKKe: 1, calKKt: 1, calTd: 0, calV: 2, klOv: 0,
+    costCu: 0, costFe: 0, costMag: 0, brScale: 1, tolGap: 0.05, tolMag: 0.1, tolBr: 3,
     gbType: "Planetary", gbRatio: 10, gbStages: 1, gbEff: 0, gbOD: 0, gbLen: 0, actMotor: "pm", actBrake: "yes",
     agmaQ: "Q9", gbMat: "Carburized 8620/9310 (58\u201362 HRC)", presAng: 20, nPlanets: 3, gbBrg: "radial",
     oshType: "key", oshOD: 0, oshLen: 0, oshFeat: 0, oshPinD: 0,
@@ -9399,6 +9437,144 @@ export default function MotorDesigner() {
               </>
             )}
           </div>
+
+          {/* v60.8: mass / rotor inertia / material bill — active EM parts only */}
+          {!r.err.length && r.bom && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <h2>Mass, inertia & material bill</h2>
+              {Number.isFinite(r.bom.mMag) && r.bom.mMag > 0 && <div className="kv"><span>Magnet mass</span><b>{fmt(r.bom.mMag * 1000, 1)} g{p.costMag > 0 ? ` · $${fmt(r.bom.mMag * p.costMag, 2)}` : ""}</b></div>}
+              <div className="kv"><span>Core (lamination) mass</span><b>{fmt(r.coreMass * 1000, 0)} g{p.costFe > 0 ? ` · $${fmt(r.coreMass * p.costFe, 2)}` : ""}</b></div>
+              {r.therm && Number.isFinite(r.therm.mCu) && <div className="kv"><span>Winding copper mass</span><b>{fmt(r.therm.mCu * 1000, 0)} g{p.costCu > 0 ? ` · $${fmt(r.therm.mCu * p.costCu, 2)}` : ""}</b></div>}
+              <div className="kv"><span>Active mass total</span>
+                <b>{fmt(((r.bom.mMag || 0) + r.coreMass + (r.therm && Number.isFinite(r.therm.mCu) ? r.therm.mCu : 0) + (r.bom.mHub || 0) + (r.bom.mShaftIn || 0) + (r.bom.mLam || 0)) * 1000, 0)} g
+                {(p.costCu > 0 || p.costFe > 0 || p.costMag > 0) ? ` · $${fmt((r.bom.mMag || 0) * Math.max(p.costMag, 0) + (r.coreMass + (r.bom.mHub || 0) + (r.bom.mLam || 0) + (r.bom.mShaftIn || 0)) * Math.max(p.costFe, 0) + (r.therm && Number.isFinite(r.therm.mCu) ? r.therm.mCu : 0) * Math.max(p.costCu, 0), 2)} material` : ""}</b></div>
+              {Number.isFinite(r.bom.Jr) && <div className="kv"><span>Rotor inertia Jr</span><b>{(r.bom.Jr * 1e7).toFixed(2)} g·cm² ({r.bom.Jr.toExponential(2)} kg·m²)</b></div>}
+              <div className="iobar" style={{ marginTop: 6 }}>
+                <Num label="Cu $/kg (0 = hide)" v={p.costCu} set={s("costCu")} step={1} min={0} />
+                <Num label="Steel $/kg" v={p.costFe} set={s("costFe")} step={0.5} min={0} />
+                <Num label="Magnet $/kg" v={p.costMag} set={s("costMag")} step={5} min={0} />
+              </div>
+              <div className="note">Active electromagnetic parts only — no housing, bearings, commutator, encoder, leads, or gearhead. {r.bom.note ? `(${r.bom.note}.)` : ""} Costs are user-entered material $/kg, not a sourcing quote.</div>
+            </div>
+          )}
+
+          {/* v60.8: controller / application-note block — pass-through of quantities the
+              results column already certifies, in drive-vendor units, copyable. */}
+          {!r.err.length && (pm || brM) && (() => {
+            const gcd9 = (a9, b9) => (b9 ? gcd9(b9, a9 % b9) : a9);
+            const lcm9 = (a9, b9) => (a9 * b9) / Math.max(gcd9(a9, b9), 1);
+            const cogPer = r.Ns > 0 && r.poles > 0 ? 360 / lcm9(r.Ns, r.poles) : 0;
+            const RllHot = r.Rphase > 0 ? r.Rhot * (r.Rll / r.Rphase) : r.Rhot;
+            const rows = pm ? [
+              ["Kt (torque constant)", `${fmt(r.Kt, 4)} N·m/A`],
+              ["Ke L-L RMS", `${fmt(r.Ke * Math.sqrt(3) * ((1000 * 2 * Math.PI) / 60), 2)} V/krpm`],
+              [`R L-L 20 °C / at ${p.Tcu} °C`, `${fmt(r.Rll, 3)} / ${fmt(RllHot, 3)} Ω`],
+              ["L L-L (rotor in / rotor out)", `${fmt(r.Lll * 1000, 3)} / ${fmt(r.LphNR * 2 * 1000, 3)} mH`],
+              ["Pole count / pole pairs", `${r.poles} / ${r.poles / 2}`],
+              ["Electrical frequency @ rated", `${fmt((r.nShaft * r.poles) / 120, 1)} Hz`],
+              ["Drive / continuous current", `${fmt(p.Imax, 1)} / ${r.therm ? fmt(r.therm.Icont, 2) : "—"} A`],
+              ["Thermal time const (winding / machine)", r.therm ? `${fmt(r.therm.tauW, 0)} / ${fmt(r.therm.tauM, 0)} s` : "—"],
+              ["Rotor inertia Jr", r.bom && Number.isFinite(r.bom.Jr) ? `${(r.bom.Jr * 1e7).toFixed(2)} g·cm²` : "—"],
+              ["Cogging period", `${fmt(cogPer, 2)}° mech (${lcm9(r.Ns, r.poles)} cogs/rev)`],
+            ] : [
+              ["Kt = Ke", `${fmt(r.Kt, 4)} N·m/A · ${fmt(r.Kt * ((1000 * 2 * Math.PI) / 60), 2)} V/krpm`],
+              ["Ra terminal 20 °C / at " + p.Tcu + " °C", r.brush ? `${fmt((r.brush.Ra - Math.max(p.Rext, 0) / 1000) / (1 + 0.00393 * (p.Tcu - 20)), 3)} / ${fmt(r.brush.Ra, 3)} Ω` : "—"],
+              ["La armature", r.brush ? `${fmt(r.brush.La * 1000, 3)} mH` : "—"],
+              ["Commutator bars / brush drop", r.brush ? `${r.brush.segs} / ${p.brushV} V` : "—"],
+              ["Drive / continuous current", `${fmt(p.Imax, 1)} / ${r.therm ? fmt(r.therm.Icont, 2) : "—"} A`],
+              ["Thermal time const (winding / machine)", r.therm ? `${fmt(r.therm.tauW, 0)} / ${fmt(r.therm.tauM, 0)} s` : "—"],
+              ["Rotor inertia Jr", r.bom && Number.isFinite(r.bom.Jr) ? `${(r.bom.Jr * 1e7).toFixed(2)} g·cm²` : "—"],
+            ];
+            const copyTxt = () => {
+              const t9 = rows.map((q9) => `${q9[0]}\t${q9[1]}`).join("\n");
+              try { navigator.clipboard.writeText(t9); setIoMsg("Controller block copied to the clipboard."); }
+              catch (e9) { setIoMsg("Clipboard unavailable — select and copy the rows directly."); }
+            };
+            return (
+              <div className="card paper" style={{ marginTop: 14 }}>
+                <div className="cardhead">
+                  <h2>Controller block (application note)</h2>
+                  <button className="btn mini ghost" onClick={copyTxt}>Copy ⧉</button>
+                </div>
+                {rows.map((q9) => <div className="kv" key={q9[0]}><span>{q9[0]}</span><b>{q9[1]}</b></div>)}
+                <div className="note">Every number above is the results column's own value in drive-vendor units — nothing is re-derived. No Ld≠Lq saliency and no current-loop gains: this machine model is surface-PM {pm ? "(use rotor-out L for bare-stator LCR checks)" : ""} and loop tuning is drive-side work.</div>
+              </div>
+            );
+          })()}
+
+          {/* v60.8: shop traveler — the winding the engine actually computed, as the
+              bench holds it. Identity with the engine by construction (reads r only). */}
+          {!r.err.length && (pm || brM) && r.layers === 2 && r.topLayer && r.botLayer && (
+            <div className="card paper" style={{ marginTop: 14 }}>
+              <div className="cardhead">
+                <h2>Shop traveler — coil schedule</h2>
+                <button className="btn mini ghost" onClick={() => window.print()}>Print ⎙</button>
+              </div>
+              <div className="kv"><span>Wire</span><b>AWG {p.awg} × {p.strands} strand{p.strands > 1 ? "s" : ""} · {p.turns} turns/coil · {p.paths} path{p.paths > 1 ? "s" : ""}{pm ? ` · ${p.conn}` : ` · ${p.pattern}`}</b></div>
+              <div className="kv"><span>Inspect-to resistance (20 °C{pm ? ", L-L" : ", terminal"})</span><b>{fmt(pm ? r.Rll : (r.brush ? (r.brush.Ra - Math.max(p.Rext, 0) / 1000) / (1 + 0.00393 * (p.Tcu - 20)) : 0), 3)} Ω ± winding tolerance</b></div>
+              <div className="kv"><span>Slot fill (gross)</span><b>{fmt(r.fillGross * 100, 1)}%</b></div>
+              <div className="tbl" style={{ overflowX: "auto", marginTop: 6 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr>
+                    {["Coil", "Phase", "In slot (top)", "Out slot (bottom)", "Turns", "Sense"].map((h9) => <th key={h9} style={{ textAlign: "left", padding: "3px 8px", borderBottom: "1px solid #CBD5E1" }}>{h9}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {(() => { const phCount = [0, 0, 0]; return r.topLayer.map((t9, i9) => {
+                      const outS = ((i9 + r.span) % r.Ns) + 1;
+                      const phN = ["A", "B", "C"][t9.phase];
+                      phCount[t9.phase] += 1;
+                      return (
+                        <tr key={i9}>
+                          <td style={{ padding: "2px 8px" }}>{phN}{phCount[t9.phase]}</td>
+                          <td style={{ padding: "2px 8px" }}>{phN}{t9.sign > 0 ? "+" : "−"}</td>
+                          <td style={{ padding: "2px 8px" }}>{i9 + 1}</td>
+                          <td style={{ padding: "2px 8px" }}>{outS}</td>
+                          <td style={{ padding: "2px 8px" }}>{p.turns}</td>
+                          <td style={{ padding: "2px 8px" }}>{t9.sign > 0 ? "CW" : "CCW"}</td>
+                        </tr>
+                      );
+                    }); })()}
+                  </tbody>
+                </table>
+              </div>
+              {pm && (
+                <div className="kv" style={{ marginTop: 6 }}><span>Magnet purchase line</span>
+                  <b>{r.poles} pcs · {p.mag} · {fmt(p.magT, 1)} mm thick · {p.poleArc}% arc · stack {p.stackL} mm{r.bom && r.bom.mMag > 0 ? ` · ${fmt(r.bom.mMag * 1000, 1)} g total` : ""}</b></div>
+              )}
+              <div className="note">Coil schedule from the engine's own star-of-slots layers (same source as the FEMM export — gate-verified). Same-phase coils connect in series per path; sense alternates with the printed sign. This is an instruction from the model, not a measured first article.</div>
+            </div>
+          )}
+
+          {/* v60.8: tolerance corners — simultaneous worst-case material/geometry, the
+              production question a one-at-a-time tornado cannot answer. */}
+          {!r.err.length && (pm || brM) && (() => {
+            const adv = computeDesign({ ...p, rotorOD: p.rotorOD - 2 * Math.max(p.tolGap, 0), magT: Math.max(p.magT - Math.max(p.tolMag, 0), 0.2), brScale: 1 - Math.max(p.tolBr, 0) / 100 });
+            const fav = computeDesign({ ...p, rotorOD: p.rotorOD + 2 * Math.max(p.tolGap, 0), magT: p.magT + Math.max(p.tolMag, 0), brScale: 1 + Math.max(p.tolBr, 0) / 100 });
+            const row9 = (lab, f9, d9) => (
+              <div className="kv" key={lab}><span>{lab}</span>
+                <b style={{ display: "flex", gap: 12, justifyContent: "flex-end", fontVariantNumeric: "tabular-nums" }}>
+                  <span style={{ color: "#B45309" }}>{adv.err.length ? "err" : f9(adv)}</span>
+                  <span>{f9(r)}</span>
+                  <span style={{ color: "#059669" }}>{fav.err.length ? "err" : f9(fav)}</span>
+                </b></div>
+            );
+            return (
+              <div className="card paper" style={{ marginTop: 14 }}>
+                <h2>Tolerance corners (adverse · nominal · favorable)</h2>
+                <div className="iobar">
+                  <Num label="Airgap tol ±" unit="mm" v={p.tolGap} set={s("tolGap")} step={0.01} min={0} />
+                  <Num label="Magnet thickness tol ±" unit="mm" v={p.tolMag} set={s("tolMag")} step={0.05} min={0} />
+                  <Num label="Br lot tol ±" unit="%" v={p.tolBr} set={s("tolBr")} step={0.5} min={0} />
+                </div>
+                {row9("Kt (N·m/A)", (x9) => fmt(x9.Kt, 4))}
+                {row9("No-load (rpm)", (x9) => fmt(x9.noLoad, 0))}
+                {row9("Peak torque", (x9) => tqS(x9.peakT))}
+                {row9("Continuous (S1) torque", (x9) => (x9.therm && Number.isFinite(x9.therm.Tcont) ? tqS(x9.therm.Tcont) : "—"))}
+                {row9("Demag margin (%)", (x9) => fmt(x9.demagMargin * 100, 0))}
+                <div className="note">Adverse = airgap +tol, magnet −tol, Br −tol% simultaneously (favorable is the mirror), each solved through the full engine — leakage, saturation, and demag move together. Enter YOUR process tolerances; the defaults are not a capability claim. Wire-Ø/turn-count tolerance not yet included (resistance corners come with the winding-truth work).</div>
+              </div>
+            );
+          })()}
 
           {!r.err.length && !brkM && (
             <div className="card paper" style={{ marginTop: 14 }}>

@@ -167,6 +167,25 @@ console.log('MEC / FEMM');
   console.log(`  ${walkOK ? '✓' : '✗'} FEMM full-slot walk matches engine top+bottom layers (${rHot.Ns} slots x ${perSlot})`);
   console.log(`  ${turnsOK ? '✓' : '✗'} FEMM conductor count is series turns (${wantTurns}), strands excluded`);
   if (!walkOK || !turnsOK) fail = true;
+
+  // v60.8 mass/inertia identities: doubling the stack doubles every active mass and Jr
+  // (annulus J scales with m at fixed radii); magnet mass matches an independent
+  // volume × density hand-form; brScale (tolerance-corner hook) moves Kt the right way.
+  const r1x = M2.computeDesign(p);
+  const r2x = M2.computeDesign({ ...p, stackL: p.stackL * 2 });
+  const linOK = r1x.bom && r2x.bom &&
+    Math.abs(r2x.bom.mMag / r1x.bom.mMag - 2) < 1e-9 &&
+    Math.abs(r2x.coreMass / r1x.coreMass - 2) < 1e-9 &&
+    Math.abs(r2x.bom.Jr / r1x.bom.Jr - 2) < 1e-6;
+  console.log(`  ${linOK ? '✓' : '✗'} BOM masses and Jr scale linearly with stack (${r1x.bom ? (r1x.bom.Jr * 1e7).toFixed(2) : '—'} g·cm²)`);
+  const magHand = (p.poleArc / 100) * Math.PI * (Math.pow(p.rotorOD / 2000, 2) - Math.pow((p.rotorOD / 2 - p.magT) / 1000, 2)) * (p.stackL / 1000) * 7500;
+  const magOK = r1x.bom && Math.abs(r1x.bom.mMag - magHand) / magHand < 1e-9;
+  console.log(`  ${magOK ? '✓' : '✗'} magnet mass matches hand volume × 7500 kg/m³ (${r1x.bom ? (r1x.bom.mMag * 1000).toFixed(1) : '—'} g)`);
+  const rBs = M2.computeDesign({ ...p, brScale: 0.95 });
+  const dKtBs = rBs.Kt / r1x.Kt - 1;
+  const bsOK = dKtBs < -0.02 && dKtBs > -0.08;
+  console.log(`  ${bsOK ? '✓' : '✗'} brScale 0.95 lowers Kt ~5% through the full circuit (${(dKtBs * 100).toFixed(1)}%)`);
+  if (!linOK || !magOK || !bsOK) fail = true;
 }
 console.log(fail ? 'GOLDEN GATE: FAIL' : 'GOLDEN GATE: PASS');
 if (fail) process.exitCode = 1;

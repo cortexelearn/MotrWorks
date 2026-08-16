@@ -754,7 +754,10 @@ function computeDesign(p) {
   // ---- rotor magnet circuit (BLDC/PMSM) ----
   const mag = MAGNETS[p.mag] || MAGNETS["N42"];
   const dT = p.Top - 20;
-  const BrT = mag.Br * (1 + (mag.aBr / 100) * dT);
+  // v60.8: brScale is the tolerance-corner hook — a unitless Br multiplier (production
+  // magnet lots run ±3-5%) that flows through the ENTIRE circuit (leakage, saturation,
+  // Kt, demag) instead of a bolt-on percentage at the end. Default 1.
+  const BrT = mag.Br * (Number.isFinite(p.brScale) && p.brScale > 0 ? p.brScale : 1) * (1 + (mag.aBr / 100) * dT);
   const HcJT = Math.max(mag.HcJ * (1 + (mag.aHcJ / 100) * dT), 1); // kA/m at Top
   // cold-start extreme: NdFeB HcJ falls hot, ferrite falls COLD (aHcJ > 0) — evaluate both
   const Tmin9 = Number.isFinite(p.Tmin) ? p.Tmin : -40;
@@ -1645,6 +1648,40 @@ function computeDesign(p) {
     : Math.PI * (rODm * rODm - rTopM * rTopM) * Lm2 * stM.kst * stM.rho;
   const mTeeth = latmE ? 0 : Math.max(Math.PI * Math.abs(rBoreM * rBoreM - rTopM * rTopM) * Lm2 - (Ns * slotArea * p.stackL) / 1e9, 0) * stM.kst * stM.rho;
   const coreMass = mYoke + mTeeth;
+
+  /* ---- v60.8 mass / rotor inertia / material bill (ACTIVE electromagnetic parts only:
+     no housing, bearings, commutator, encoder, leads, or gearhead — the card says so).
+     Magnet density by family; rotor inertia is the annulus sum ½m(ro²+ri²) per part.
+     Stepper reuses its own hollow-aware Jr (step.J). Copper mass comes from therm.mCu
+     (per-branch, already strand-correct) and is joined in the view. */
+  let bom = null;
+  {
+    const RHO_MAG = { NdFeB: 7500, SmCo: 8300, Ferrite: 4900 };
+    const Ls9 = p.stackL / 1000;
+    if (p.motorType === "pm") {
+      const rOm = p.rotorOD / 2000, rIm = Math.max(p.rotorOD / 2 - p.magT, 0) / 1000, rSh = p.shaftD / 2000;
+      const mMag = (p.poleArc / 100) * Math.PI * (rOm * rOm - rIm * rIm) * Ls9 * (RHO_MAG[mag.fam] || 7500);
+      const mHub = Math.PI * Math.max(rIm * rIm - rSh * rSh, 0) * Ls9 * rtM.rho * (rtM.kst || 1);
+      const mShaftIn = Math.PI * rSh * rSh * Ls9 * 7850;    // shaft inside the stack only
+      const Jr9 = 0.5 * mMag * (rOm * rOm + rIm * rIm) + 0.5 * mHub * (rIm * rIm + rSh * rSh) + 0.5 * mShaftIn * rSh * rSh;
+      bom = { mMag, mHub, mShaftIn, Jr: Jr9, note: "shaft counted inside the stack only" };
+    } else if (brushedM) {
+      // armature: lamination annulus minus punched slots, slot copper at mean slot
+      // radius, shaft inside the stack. End turns and commutator are NOT in Jr (they
+      // add mass but sit at small/moderate radius — disclosed first-order).
+      const rOa = p.rotorOD / 2000, rSh = p.shaftD / 2000;
+      const slotV = (Ns * slotArea * p.stackL) / 1e9;       // m³ punched out
+      const mLam = Math.max(Math.PI * (rOa * rOa - rSh * rSh) * Ls9 - slotV, 0) * stM.kst * stM.rho;
+      const mCuSlot = 8960 * condPerSlot * Ns * aBare * 1e-6 * Ls9; // in-slot copper only
+      const rSlotMean = Math.max(p.rotorOD / 2 - p.tipH - hs / 2, 1) / 1000;
+      const mShaftIn = Math.PI * rSh * rSh * Ls9 * 7850;
+      const Jr9 = 0.5 * mLam * (rOa * rOa + rSh * rSh) + mCuSlot * rSlotMean * rSlotMean + 0.5 * mShaftIn * rSh * rSh;
+      bom = { mMag: (p.poleArc / 100) * Math.PI * (Math.pow(p.statorID / 2000, 2) - Math.pow(p.statorID / 2000 - p.magT / 1000, 2)) * Ls9 * (RHO_MAG[mag.fam] || 4900),
+        mLam, mCuSlot, mShaftIn, Jr: Jr9, note: "end turns & commutator not in Jr" };
+    } else if (stpE && step && Number.isFinite(step.J)) {
+      bom = { mMag: 0, Jr: step.J, note: "hybrid rotor Jr from the stepper model; PM disc mass not itemized" };
+    }
+  }
   // two-term iron loss: hysteresis (∝ f·B^1.8) + eddy (∝ f²·B²), split by the material's
   // eddy fraction at the 1.5 T / 60 Hz calibration point (thin CoFe low, solid steel high).
   // Reduces exactly to mass·w at 60 Hz / 1.5 T, diverges correctly at 400 Hz+ electrical.
@@ -1962,7 +1999,7 @@ function computeDesign(p) {
     mag, BrT, HcJT, HcJmin, demagT, kcGap, kl: klOut, BgAvg, B1, BgEff, Hdemag, demagMargin,
     cal: calAct ? { kR: cKR, kL: cKL, kKe: cKe, kKt: cKt, Td: cTd } : null,
     MLTmm, endSide, tb, coilOD, coilDia, bobSuggest, coilArc,
-    stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog,
+    stM, rtM, Bt, By, Byr, hyr, coreMass, mYoke, mTeeth, efFe, Bavg, TstallW, Jimp, bemf, Rhot, cog, bom,
     Lph, LphNR, Lll, LllNR, acim, therm, acFr, Pwind, Pfe, feOp, brush, latm, brake, step,
   };
 }
