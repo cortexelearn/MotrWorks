@@ -852,7 +852,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
                   {dT > 40 && <div className="warn">Gearhead runs ≈ {dT.toFixed(0)} °C over ambient at this point — sealed-housing heat is NOT in the motor thermal model; derate continuous torque or add conduction to the mount.</div>}
                 </>;
               })()}
-              {gt.KvMax > 1.15 && <div className="note">Dynamic factor Kv up to {gt.KvMax.toFixed(2)} applied at input-stage pitch-line speed — higher AGMA quality reduces it.</div>}
+              {gt.KvMax > 1.15 && <div className="note">Dynamic factor Kv up to {gt.KvMax.toFixed(2)} applied at input-stage pitch-line speed — higher AGMA quality reduces it up to Q11 (this Kv form is capped there; Q13 tightens backlash only).</div>}
               {gt.w.map((w9, i9) => <div className="warn" key={i9}>{w9}</div>)}
             </div>
             <div className="note">
@@ -2428,7 +2428,7 @@ export default function MotorDesigner() {
                     ["No-load", (x9) => fmt(x9.noLoad, 0), "rpm"],
                     ["Peak torque", (x9) => tqS(x9.peakT), ""],
                     ["Efficiency", (x9) => fmt(x9.eta * 100, 1), "%"],
-                    ["R terminal 20 °C", (x9) => fmt(x9.Rll, 4), "Ω"],
+                    ["R winding 20 °C", (x9) => fmt(x9.Rll, 4), "Ω"],
                     ["Winding temp", (x9) => (x9.therm ? Math.round(x9.therm.Tcu) : "—"), "°C"],
                     ["Slot fill", (x9) => fmt(x9.fillGross * 100, 0), "%"]].map(([lab, f9, u9]) => (
                     <div className="kv" key={lab} style={{ alignItems: "baseline" }}>
@@ -2607,7 +2607,9 @@ export default function MotorDesigner() {
                   </div>
                   {dcyc.overFrac > 0.001 && <div className="warn">
                     {(dcyc.overFrac * 100).toFixed(1)}% of the cycle sits ABOVE the drive envelope — those points
-                    are not achievable with this motor and bus; the numbers above assume the demanded torque anyway.
+                    are not achievable with this motor and bus{dcyc.unreachFrac > 0.001
+                      ? `; ${(dcyc.unreachFrac * 100).toFixed(1)}% demands torque beyond the saturation plateau and is EXCLUDED from the energy, copper-loss, and I·rms figures (the model cannot price it) — the remainder is integrated at the demanded torque`
+                      : "; the numbers above assume the demanded torque anyway"}.
                   </div>}
                   <div className="note">
                     Midpoint integration over the samples, per-sample losses from the same chain as the map.
@@ -3003,7 +3005,7 @@ export default function MotorDesigner() {
                   ? (r.latm.stiff * 141.612 * Math.PI / 180).toFixed(2) + " oz·in/deg"
                   : (r.latm.stiff).toFixed(3) + " N·m/rad"}</b></div>
                 <div className="kv"><span>Continuous-hold current (thermal)</span><b>{r.therm ? fmt(r.therm.Icont, 2) + " A" : "—"}</b></div>
-                <div className="kv"><span>Coil R at terminals (20 °C / {p.Tcu} °C)</span><b>{fmt(r.latm.Ra20, 2)} / {fmt(r.latm.Ra, 2)} Ω</b></div>
+                <div className="kv"><span>Coil R at terminals (20 °C / {p.Tcu} °C)</span><b>{fmt(r.latm.RaTerm20, 2)} / {fmt(r.latm.Ra, 2)} Ω</b></div>
                 <div className="kv"><span>Inductance / time const</span><b>{(r.latm.L * 1e3).toFixed(2)} mH · {fmt(r.latm.tau * 1000, 2)} ms</b></div>
                 <div className="kv"><span>Slotless gap flux B̂g</span><b>{fmt(r.latm.Bg, 2)} T</b></div>
               </div>

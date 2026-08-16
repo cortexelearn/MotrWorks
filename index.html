@@ -18421,12 +18421,8 @@ function computeDesign(p) {
     const pathsEff = brushedM ? (p.pattern === "lap" ? poles * a : 2 * a) : a;
     let Iph = p.loadMode === "I" ? Math.max(p.Irate, 0) : Math.max(p.J, 0) * aBare * p.strands * pathsEff; // rms (brushed: armature terminal current; J clamped ≥ 0 like Irate)
     const Iph9J = Iph; // the winding-J rating, kept for the ACIM dominance check (v60.6)
-    const Jimp = Iph / (aBare * p.strands * pathsEff); // implied copper current density, A/mm²
-    if (Jimp > 10)
-        w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — needs forced-air or liquid cooling (passive designs usually run 3–6).`);
-    else if (Jimp > 7)
-        w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — fine with good airflow, hot for a sealed housing.`);
-    const IlineOut = p.conn === "delta" ? Iph * Math.sqrt(3) : Iph;
+    let Jimp = Iph / (aBare * p.strands * pathsEff); // implied copper current density, A/mm² (ACIM re-derives at the circuit current below)
+    let IlineOut = p.conn === "delta" ? Iph * Math.sqrt(3) : Iph;
     const Vph = p.conn === "wye" ? p.Vll / Math.sqrt(3) : p.Vll;
     const Istall = Rphase > 0 ? Vph / Rphase : 0;
     // ---- rotor magnet circuit (BLDC/PMSM) ----
@@ -18540,7 +18536,7 @@ function computeDesign(p) {
         w.push(`Solid ${lamName} material selected — expect very large eddy-current losses; use laminations.`);
     // ---- performance (sizing estimate at rated point) ----
     const D = p.rotorOD / 1000, L = p.stackL / 1000;
-    const Arms = brushedM
+    let Arms = brushedM
         ? (condPerSlot * Ns * (Iph / pathsEff)) / (Math.PI * D) // armature: Z conductors at Ia/A2 each
         : (6 * Nser * Iph) / (Math.PI * (p.statorID / 1000)); // A/m
     const Trated = (Math.PI / (2 * Math.SQRT2)) * kw * Arms * BgEff * D * D * L; // N·m
@@ -19192,8 +19188,6 @@ function computeDesign(p) {
         // the source, jXm in parallel) and drive the rotor branch from Vth/Zth. All currents
         // below come from the SAME circuit. Deep-bar R2(s) and a real X2 remain future work
         // (X2 = 0.8·X1 is still a placeholder, disclosed).
-        if (!(Xm2 > 0))
-            w.push("Magnetizing inductance computes to zero — no airgap coupling; the torque model falls back to a series circuit and is not trustworthy for this input.");
         const Dth = R1 * R1 + Math.pow(X1 + Xm2, 2);
         const Vth = Xm2 > 0 ? (Vph * Xm2) / Math.sqrt(Dth) : Vph;
         const Rth = Xm2 > 0 ? (R1 * Xm2 * Xm2) / Dth : R1;
@@ -19253,7 +19247,32 @@ function computeDesign(p) {
             w.push("Rotor bars = stator slots — severe locking and noise; change the bar count.");
         else if (Math.abs(Ns - Nb) === poles || Math.abs(Ns - Nb) === 2 * poles)
             w.push(`Bar count ${Nb} vs ${Ns} slots differs by ${Math.abs(Ns - Nb)} (= p or 2p) — synchronous torque cusps likely; shift the bar count.`);
+        // v60.6b (Codex HIGH): a zero magnetizing branch means no modeled airgap power
+        // transfer. The old path only WARNED and still published series-circuit torque — a
+        // number beside a warning reads as a result. It is now an error and the induction
+        // outputs are withdrawn (the intermediate math above stays finite by construction).
+        if (!(Xm2 > 0)) {
+            err.push("Magnetizing inductance computes to zero — no airgap coupling (check winding factor, airgap, and frequency); induction analysis is unavailable for this input.");
+            curve = [];
+            op = null;
+            peakT = 0;
+            acim = null;
+            Iph = Iph9J;
+        }
+        // v60.6b (Grok HIGH): reassigning Iph to the circuit current moved Pcu/therm/eta,
+        // but Iline/Jimp/Arms were computed from the J-rating before this branch ran — the
+        // Electrical card printed 26 A phase beside 2.5 A line on a wye machine, and the
+        // J-density cooling warnings judged the wrong current. Re-derive at the final Iph.
+        IlineOut = p.conn === "delta" ? Iph * Math.sqrt(3) : Iph;
+        Jimp = Iph / (aBare * p.strands * pathsEff);
+        Arms = (6 * Nser * Iph) / (Math.PI * (p.statorID / 1000));
     }
+    // v60.6b (Grok): the J-density warnings judge the FINAL operating density — at their
+    // old site (declaration time) the ACIM circuit current did not exist yet
+    if (Jimp > 10)
+        w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — needs forced-air or liquid cooling (passive designs usually run 3–6).`);
+    else if (Jimp > 7)
+        w.push(`Copper current density ≈ ${Jimp.toFixed(1)} A/mm² — fine with good airflow, hot for a sealed housing.`);
     const nShaft = op ? op.n : 0;
     const wShaft = (2 * Math.PI * nShaft) / 60;
     const Pout = (op ? op.T : 0) * wShaft;
@@ -19647,7 +19666,7 @@ const SWEEP_METRICS = [
     { k: "noLoad", lab: "No-load speed", unit: "rpm", get: (r) => r.noLoad },
     { k: "peakT", lab: "Peak torque", unit: "N·m", get: (r) => r.peakT },
     { k: "eta", lab: "Efficiency at rated", unit: "%", get: (r) => r.eta * 100 },
-    { k: "Rll", lab: "Resistance (terminal, 20 °C)", unit: "Ω", get: (r) => r.Rll },
+    { k: "Rll", lab: "Resistance (winding, 20 °C)", unit: "Ω", get: (r) => r.Rll },
     { k: "Tcu", lab: "Winding temp", unit: "°C", get: (r) => (r.therm ? r.therm.Tcu : NaN) },
     { k: "Icont", lab: "Continuous current", unit: "A", get: (r) => (r.therm ? r.therm.Icont : NaN) },
     { k: "fill", lab: "Slot fill", unit: "%", get: (r) => r.fillGross * 100 },
@@ -20163,10 +20182,13 @@ function satInvertI(p, r, Tem) {
         return 0;
     if (!r.satCurve || !r.satCurve.length || !(p.Imax > 0))
         return Tem / r.Kt;
-    let lo = 0, hi = Math.max((Tem / r.Kt) * 3, 1e-6);
-    // v60.6 (Codex): if even the bracket ceiling cannot produce the demanded torque, say so —
-    // returning hi silently underreported current and copper loss for out-of-envelope demands
-    if (r.Kt * hi * satInterp(r.satCurve, hi / p.Imax) < Tem)
+    // v60.6b (Codex): bracket to the CURVE's sampled envelope (f = 0..1.5·Imax), not
+    // 3·Tem/Kt — the old ceiling scaled with the demand itself, so for any end retention
+    // ≥ 1/3 the Infinity guard could never fire and out-of-envelope demands returned huge
+    // currents extrapolated far past where the magnetics were solved.
+    const fEnd = r.satCurve[r.satCurve.length - 1].f;
+    let lo = 0, hi = Math.max(fEnd * p.Imax, 1e-6);
+    if (r.Kt * hi * satInterp(r.satCurve, fEnd) < Tem)
         return Infinity;
     for (let i9 = 0; i9 < 48; i9++) {
         const mid = (lo + hi) / 2;
@@ -20273,9 +20295,10 @@ function efficiencyMap(p, r, opts) {
     const op = r.op ? lossesAt(p, r, r.op.n, r.op.T) : null;
     // continuous-thermal envelope: torque the winding can hold indefinitely (from the
     // thermal model's Icont), drawn as a second line on the map
-    const Tcont = r.therm && Number.isFinite(r.therm.Icont)
-        ? r.Kt * r.therm.Icont * (r.satCurve && r.satCurve.length && p.Imax > 0 ? satInterp(r.satCurve, r.therm.Icont / p.Imax) : 1)
-        : null; // v60.6: continuous torque obeys the same saturation law as every other torque
+    // v60.6b (Grok HIGH): read the thermal model's own Tcont — recomputing it here from
+    // UNCLAMPED Icont put the map's S1 line 12.5× above the thermal card when the drive
+    // limit sat below the winding's thermal capability. One physics model, one number.
+    const Tcont = r.therm && Number.isFinite(r.therm.Tcont) ? r.therm.Tcont : null;
     return { NC, NR, nMax, tMax, grid, inEnv, best, ridge, op, Tcont, tAt,
         envelope: Array.from({ length: NC + 1 }, (_, i9) => ({ n: (nMax * i9) / NC, T: tAt((nMax * i9) / NC) })) };
 }
@@ -20295,7 +20318,7 @@ function driveCycle(p, r, samples) {
     if (pts.length < 2)
         return { err: "No usable samples (need finite t, n, T)." };
     const env = r.curve && r.curve.length ? efficiencyMap(p, r, { nc: 8, nr: 4 }) : null;
-    let Eout = 0, Ein = 0, Ecu = 0, Efe = 0, Ew = 0, I2t = 0, T2t = 0, tTot = 0, over = 0, nPk = 0, tPk = 0;
+    let Eout = 0, Ein = 0, Ecu = 0, Efe = 0, Ew = 0, I2t = 0, T2t = 0, tTot = 0, over = 0, unreach = 0, nPk = 0, tPk = 0;
     const trace = [];
     for (let i9 = 1; i9 < pts.length; i9++) {
         const a9 = pts[i9 - 1], b9 = pts[i9];
@@ -20307,8 +20330,12 @@ function driveCycle(p, r, samples) {
         // v60.6 (Grok): satInvertI returns Infinity when the demanded torque exceeds the
         // saturation plateau — count that interval as over-envelope instead of poisoning
         // every energy integral with Infinity
+        // v60.6b (Grok): unreachable intervals are tracked SEPARATELY from merely over-envelope
+        // ones — the former charge no energy/copper (the model cannot say what they cost), the
+        // latter integrate at the demanded torque; the UI banner discloses each on its own terms
         if (!Number.isFinite(L9.I)) {
             over += dt;
+            unreach += dt;
             tTot += dt;
             T2t += tMid * tMid * dt;
             tPk = Math.max(tPk, Math.abs(tMid));
@@ -20337,7 +20364,7 @@ function driveCycle(p, r, samples) {
     const Tcu = Rth9 !== null ? p.Tamb + PcuMean * Rth9 + PfeMean * Math.max(Rth9 * 0.5, 0) : null;
     return { dur: tTot, Eout, Ein, Ecu, Efe, Ew, etaCycle: Ein > 0 ? Eout / Ein : 0,
         Irms, Trms, PcuMean, PfeMean, Tcu, nPk, tPk, overT: over, trace,
-        overFrac: over / tTot };
+        overFrac: over / tTot, unreachT: unreach, unreachFrac: unreach / tTot };
 }
 /* ================= presentation: CortexEdge theme ================= */
 const PHASE = [
@@ -25086,7 +25113,7 @@ function ActuatorView({ p, s, us, switchType, typeMem, tqS, typeDefaults, export
                         gt.KvMax > 1.15 && React.createElement("div", { className: "note" },
                             "Dynamic factor Kv up to ",
                             gt.KvMax.toFixed(2),
-                            " applied at input-stage pitch-line speed \u2014 higher AGMA quality reduces it."),
+                            " applied at input-stage pitch-line speed \u2014 higher AGMA quality reduces it up to Q11 (this Kv form is capped there; Q13 tightens backlash only)."),
                         gt.w.map((w9, i9) => React.createElement("div", { className: "warn", key: i9 }, w9))),
                     React.createElement("div", { className: "note" },
                         "Synthesized from gearhead \u00D8, ",
@@ -26788,7 +26815,7 @@ function MotorDesigner() {
                                         ["No-load", (x9) => fmt(x9.noLoad, 0), "rpm"],
                                         ["Peak torque", (x9) => tqS(x9.peakT), ""],
                                         ["Efficiency", (x9) => fmt(x9.eta * 100, 1), "%"],
-                                        ["R terminal 20 °C", (x9) => fmt(x9.Rll, 4), "Ω"],
+                                        ["R winding 20 °C", (x9) => fmt(x9.Rll, 4), "Ω"],
                                         ["Winding temp", (x9) => (x9.therm ? Math.round(x9.therm.Tcu) : "—"), "°C"],
                                         ["Slot fill", (x9) => fmt(x9.fillGross * 100, 0), "%"]].map(([lab, f9, u9]) => (React.createElement("div", { className: "kv", key: lab, style: { alignItems: "baseline" } },
                                         React.createElement("span", null,
@@ -26981,7 +27008,11 @@ function MotorDesigner() {
                                             " \u00B0C class"))),
                                 dcyc.overFrac > 0.001 && React.createElement("div", { className: "warn" },
                                     (dcyc.overFrac * 100).toFixed(1),
-                                    "% of the cycle sits ABOVE the drive envelope \u2014 those points are not achievable with this motor and bus; the numbers above assume the demanded torque anyway."),
+                                    "% of the cycle sits ABOVE the drive envelope \u2014 those points are not achievable with this motor and bus",
+                                    dcyc.unreachFrac > 0.001
+                                        ? `; ${(dcyc.unreachFrac * 100).toFixed(1)}% demands torque beyond the saturation plateau and is EXCLUDED from the energy, copper-loss, and I·rms figures (the model cannot price it) — the remainder is integrated at the demanded torque`
+                                        : "; the numbers above assume the demanded torque anyway",
+                                    "."),
                                 React.createElement("div", { className: "note" },
                                     "Midpoint integration over the samples, per-sample losses from the same chain as the map. The implied winding temperature applies the design's own thermal resistance to the cycle-mean copper loss, with iron loss coupled at half weight (a first-order split \u2014 iron heats the stack, not the winding directly) \u2014 a steady-state estimate valid when the cycle is short against the machine's thermal time constant (",
                                     r.therm && Number.isFinite(r.therm.tauM) ? Math.round(r.therm.tauM / 60) : "—",
@@ -27752,7 +27783,7 @@ function MotorDesigner() {
                                         p.Tcu,
                                         " \u00B0C)"),
                                     React.createElement("b", null,
-                                        fmt(r.latm.Ra20, 2),
+                                        fmt(r.latm.RaTerm20, 2),
                                         " / ",
                                         fmt(r.latm.Ra, 2),
                                         " \u03A9")),
