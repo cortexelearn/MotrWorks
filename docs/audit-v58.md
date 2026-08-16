@@ -651,3 +651,55 @@ Also recorded: the brake carries TWO thermal networks that disagree — `brake.T
 (its own pot-core model, gate-anchored, and the one the brake card displays) versus
 `therm.Tcu` 71 °C from the generic chain. The displayed number is the anchored one, so no
 shipped value is wrong, but the second number should be reconciled or suppressed.
+
+---
+
+# v60.5 — the three-way audit: 20 verified defects, fixed and gated (2026-08-16)
+
+Full multi-agent correctness audit (Claude adjudicating; Codex and Grok as independent
+reviewers, no cross-contamination). 22 findings raised; 20 verified and fixed, 1 false
+positive (armature DXF fillet — misquoted source; the arc was true, though the audit led to
+a real corner-cutting asymmetry found by a different mechanism), 1 deferred (magnet
+leakage — needs the Qu-Lipo reference + bench sets). Every fix verified against its
+original trigger; six commits, each suite-green. Highlights, worst first:
+
+- **FEMM export described a different machine** (Codex+Grok convergent, CRITICAL): dead
+  fields meant every export was M19 at 20 °C; raw odd pole counts; a 60° belt winding
+  disagreeing with the engine's star-of-slots (12s14p slot 0: engine A+, export C−). Now
+  reads the design's own symbols and emits the engine's topLayer/botLayer per slot;
+  golden-gate parses the Lua and asserts materials, temperature, rounded poles, slot-0
+  circuit.
+- **Rll was a phantom** for LATM/stepper/brake (Grok CRITICAL): datasheet and golden
+  anchors certified a 3-phase winding those machines don't have (LATM 118 Ω vs 35 Ω
+  real). Now the branch's own terminal R at 20 °C; the new LATM anchor matches Grok's
+  independent hand calculation to 0.03%.
+- **Brake inverse ignored armature saturation** (Codex CRITICAL): finite pull-in current
+  reported for a force the iron cannot carry — a brake specified releasable that cannot
+  release. Inverse now uses the forward model's dual cap.
+- **ACIM torque never used its own magnetizing branch** (Codex HIGH): series circuit;
+  Xm changed 40%, breakdown moved 0.05%. Thevenin equivalent now; breakdown re-anchored
+  4.2091 → 3.6579 (−13.1%). X2 = 0.8·X1 remains a disclosed placeholder.
+- **Saturation was displayed but not applied** (Grok HIGH): kIT on a card, torque linear
+  everywhere, and the I–T chart bending with its own ad-hoc quadratic. Electromagnetic
+  torque is now Kt·I·sat(I) in the curve, peak, rated point, efficiency map (bisection
+  inversion), and I–T chart (interpolating the same densified satCurve). PM peakT
+  re-anchored −2.7% = the knockdown the card already admitted.
+- **Presets/type-switches contaminated by prior state** (Claude+Grok convergent): active
+  bench calibration scaled a "loaded preset" ×1.25 silently; stale slotR carved fillets
+  into presets that have none. Presets now apply onto DEFAULT_P (the gates' own
+  semantic); e2e regression added.
+- **Two efficiencies for one gearhead** (Claude+Grok convergent): curve used the catalog
+  table, the card the synthesized value. One priority chain now (override > synthesized >
+  catalog-labeled-fallback), asserted in act-gate.
+- **Stator DXF left fillet translated by +rc** (Grok); all four fillet loops now emit
+  tangent endpoints with mirror-symmetric sampling (the k=1..5 loops cut one corner when
+  slotR clamps); dxf-gate gains a folded mirror-symmetry check (armature residual 0.0000).
+- Also: brake's two disagreeing thermal networks unified on its own pot-core model;
+  brushed duty-thermal copper mass ×2 bug; brush contact drop no longer scaled by the
+  skin-effect factor; positivity validation (turns=−9 gave negative resistance with zero
+  errors); Lewis cap charges only downstream losses and quotes the real material
+  allowable; Q13 removed (it mapped to Q11 and changed nothing); LATM cross-section
+  draws the true copper build instead of a 10 px cap.
+
+Calibration interplay: PM peakT and all ACIM predictions moved — re-derive any captured
+calibration factors against the current model before judging model error.

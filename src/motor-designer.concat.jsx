@@ -1331,12 +1331,21 @@ function computeDesign(p) {
   const Lll = p.conn === "wye" ? 2 * Lph : (2 / 3) * Lph;
   const LllNR = p.conn === "wye" ? 2 * LphNR : (2 / 3) * LphNR;
 
-  // armature-loaded saturation knockdown at the drive current limit
-  let kIT = 1, satCurve = null;
-  if (p.motorType === "pm" && satAux && BgAvg > 0) {
+  // armature-loaded saturation knockdown. v60.5 (Grok HIGH): kIT was computed, displayed
+  // ("Sat. knockdown @Imax"), and then NOT applied — peak torque, the T-n curve, the
+  // efficiency map, and the drive cycle all stayed linear in Kt while the I-T chart bent
+  // with its own ad-hoc quadratic. satOfI(I) is now the single source: electromagnetic
+  // torque is Kt·I·satOfI(I) everywhere, and the dense satCurve below is what views and
+  // lossesAt interpolate so every screen agrees on amps for a given N·m.
+  let kIT = 1, satCurve = null, satOfI = (I9) => 1;
+  if (p.motorType === "pm" && satAux && BgAvg > 0 && p.Imax > 0) {
     const FaOf = (I9) => (1.35 * kw * Nser * Math.SQRT2 * I9) / (poles / 2);
-    kIT = Math.min(satAux(FaOf(p.Imax)) / BgAvg, 1);
-    satCurve = [0, 0.5, 1, 1.5].map((f9) => ({ f: f9, k: Math.min(satAux(FaOf(f9 * p.Imax)) / BgAvg, 1) }));
+    satOfI = (I9) => Math.min(satAux(FaOf(Math.max(I9, 0))) / BgAvg, 1);
+    kIT = satOfI(p.Imax);
+    satCurve = Array.from({ length: 25 }, (_, i9) => {
+      const f9 = (1.5 * i9) / 24;
+      return { f: f9, k: satOfI(f9 * p.Imax) };
+    });
   }
 
   /* ============ drive / control model ============ */
@@ -1368,8 +1377,9 @@ function computeDesign(p) {
       };
       const wNL = wOf(0);
       noLoad = (wNL * 60) / (2 * Math.PI);
-      peakT = Kt * Math.min(p.Imax, VphAvail / Rhot);
-      TstallW = Kt * (VphAvail / Rhot); // winding V/R limit, no drive clamp
+      const Ipk9 = Math.min(p.Imax, VphAvail / Rhot);
+      peakT = Kt * Ipk9 * satOfI(Ipk9);                    // v60.5: saturation applies to torque, not just the card
+      TstallW = Kt * (VphAvail / Rhot) * satOfI(VphAvail / Rhot); // winding V/R limit, no drive clamp
       const wB = wOf(p.Imax);
       baseN = (wB * 60) / (2 * Math.PI);
       // full dq voltage limit incl. R: Vd = R·Id − ωL·Iq, Vq = R·Iq + ω(λ + L·Id); max Iq over Id ∈ [−Imax, 0]
@@ -1396,11 +1406,13 @@ function computeDesign(p) {
       if (wNL > 0) for (let wm = wNL; wm <= wNL * 1.6; wm += wNL / 40) { if (IqMax(wm) > Math.max(p.Imax, 0) * 0.01) wEnd = wm; else break; }
       for (let i = 0; i <= 90; i++) {
         const wm = (wEnd * i) / 90;
-        curve.push({ n: (wm * 60) / (2 * Math.PI), T: Kt * Math.min(IqMax(wm), p.Imax) });
+        const Ieff9 = Math.min(IqMax(wm), p.Imax);
+        curve.push({ n: (wm * 60) / (2 * Math.PI), T: Kt * Ieff9 * satOfI(Ieff9) });
       }
       // thermally-rated operating point at Iph (from J)
       const wOp = wOf(Iph);
-      op = { n: (wOp * 60) / (2 * Math.PI), T: Kt * Math.min(Iph, p.Imax) };
+      const Iop9 = Math.min(Iph, p.Imax);
+      op = { n: (wOp * 60) / (2 * Math.PI), T: Kt * Iop9 * satOfI(Iop9) };
       if (Iph > p.Imax) w.push("Winding thermal current exceeds drive current limit — drive-limited.");
     }
   } else if (p.motorType === "brake") {
@@ -1836,8 +1848,30 @@ function computeDesign(p) {
     const we2 = 2 * Math.PI * p.freq;
     const X1 = we2 * (Lslot + Lend), X2 = 0.8 * X1, Xt = X1 + X2, Xm2 = we2 * Lmag;
     const R1 = Rhot;
-    const Tof = (s2) => (3 * Vph * Vph * (R2p / s2)) / (wSync * (Math.pow(R1 + R2p / s2, 2) + Xt * Xt));
-    const sb2 = R2p / Math.sqrt(R1 * R1 + Xt * Xt);
+    // v60.5 (Codex HIGH): the torque expression was a SERIES circuit that never used the
+    // magnetizing branch it computed — Xm changed 40% while breakdown torque moved 0.05%.
+    // Standard single-cage treatment: Thevenin-reduce the stator (R1 + jX1 in series with
+    // the source, jXm in parallel) and drive the rotor branch from Vth/Zth. All currents
+    // below come from the SAME circuit. Deep-bar R2(s) and a real X2 remain future work
+    // (X2 = 0.8·X1 is still a placeholder, disclosed).
+    const Dth = R1 * R1 + Math.pow(X1 + Xm2, 2);
+    const Vth = Xm2 > 0 ? (Vph * Xm2) / Math.sqrt(Dth) : Vph;
+    const Rth = Xm2 > 0 ? (R1 * Xm2 * Xm2) / Dth : R1;
+    const Xth = Xm2 > 0 ? (Xm2 * (R1 * R1 + X1 * (X1 + Xm2))) / Dth : X1;
+    const Tof = (s2) => (3 * Vth * Vth * (R2p / s2)) / (wSync * (Math.pow(Rth + R2p / s2, 2) + Math.pow(Xth + X2, 2)));
+    const sb2 = R2p / Math.sqrt(Rth * Rth + Math.pow(Xth + X2, 2));
+    // full-circuit stator current at slip s: Z = R1+jX1 + jXm || (R2p/s + jX2)
+    const IstatAt = (s2) => {
+      if (!(Xm2 > 0)) return Vph / Math.hypot(R1 + R2p / s2, Xt);
+      const a9 = R2p / s2, b9 = X2;                        // rotor branch
+      // jXm || (a+jb) = Xm(-b·a + j(...)) — do it with explicit complex arithmetic
+      const num = { re: -Xm2 * b9, im: Xm2 * a9 };         // jXm·(a+jb) = -Xm·b + j·Xm·a
+      const den = { re: a9, im: b9 + Xm2 };
+      const dmag = den.re * den.re + den.im * den.im;
+      const zr = (num.re * den.re + num.im * den.im) / dmag;
+      const zi = (num.im * den.re - num.re * den.im) / dmag;
+      return Vph / Math.hypot(R1 + zr, X1 + zi);
+    };
     peakT = Tof(sb2);
     let sr2 = Math.min(sb2 * 0.5, 0.03);
     if (Trated < peakT * 0.98) {
@@ -1853,12 +1887,13 @@ function computeDesign(p) {
       curve.push({ n: nSync * (1 - s2), T: Tof(s2) });
     }
     op = { n: nSync * (1 - sr2), T: Tof(sr2) };
-    const I2r = Vph / Math.hypot(R1 + R2p / sr2, Xt);
-    const Im2 = Xm2 > 0 ? Vph / Xm2 : 0;
+    // rotor and magnetizing currents from the Thevenin/full circuit (one circuit, v60.5)
+    const I2r = Vth / Math.hypot(Rth + R2p / sr2, Xth + X2);
+    const Im2 = Xm2 > 0 ? Vph / Math.hypot(R1, X1 + Xm2) : 0;   // magnetizing current with the rotor branch open (s->0)
     acim = {
       R2p, sr: sr2, sb: sb2, Tlr: Tof(1),
-      Ilr: Vph / Math.hypot(R1 + R2p, Xt),
-      Im: Im2, Irun: Math.hypot(I2r, Im2),
+      Ilr: IstatAt(1),                                   // locked-rotor stator current, full circuit
+      Im: Im2, Irun: IstatAt(sr2),                       // running stator current, full circuit
     };
     if (Nb === Ns) w.push("Rotor bars = stator slots — severe locking and noise; change the bar count.");
     else if (Math.abs(Ns - Nb) === poles || Math.abs(Ns - Nb) === 2 * poles)
@@ -2680,6 +2715,31 @@ function fieldStudy(p, r, opts) {
    eta = Pout / (Pout + Pcu·acFr + Pfe + Pwind) with each loss counted once —
    identical to the operating-point efficiency the results column reports. */
 
+/* saturation-aware current for a demanded electromagnetic torque (v60.5): solves
+   Kt·I·sat(I) = T by bisection over the design's own satCurve, so every screen agrees
+   on amps for a given N·m. satCurve is gridded in f = I/Imax. Machines without a
+   saturation curve fall through to the linear T/Kt. */
+function satInterp(sc, f9) {
+  if (f9 <= sc[0].f) return sc[0].k;
+  for (let i9 = 1; i9 < sc.length; i9++) {
+    if (sc[i9].f >= f9) {
+      const a9 = sc[i9 - 1], b9 = sc[i9];
+      const u9 = (f9 - a9.f) / Math.max(b9.f - a9.f, 1e-12);
+      return a9.k + u9 * (b9.k - a9.k);
+    }
+  }
+  return sc[sc.length - 1].k;
+}
+function satInvertI(p, r, Tem) {
+  if (!(r.Kt > 0)) return 0;
+  if (!r.satCurve || !r.satCurve.length || !(p.Imax > 0)) return Tem / r.Kt;
+  let lo = 0, hi = Math.max((Tem / r.Kt) * 3, 1e-6);
+  for (let i9 = 0; i9 < 48; i9++) {
+    const mid = (lo + hi) / 2;
+    if (r.Kt * mid * satInterp(r.satCurve, mid / p.Imax) < Tem) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
 /* losses at an arbitrary (speed, shaft torque) for a computed design; pure. */
 function lossesAt(p, r, n9, T9) {
   const w9 = (n9 * 2 * Math.PI) / 60;
@@ -2701,7 +2761,7 @@ function lossesAt(p, r, n9, T9) {
   // current follows the MAGNITUDE of electromagnetic torque; drag opposes motion, so it
   // adds when motoring and subtracts (the machine is already being slowed) when braking
   const Tem = T9 >= 0 ? T9 + Tdrag : Math.abs(T9) - Tdrag;
-  const I9 = r.Kt > 0 ? Math.max(Tem, 0) / r.Kt : 0;
+  const I9 = r.Kt > 0 ? satInvertI(p, r, Math.max(Tem, 0)) : 0;
   // AC copper factor at THIS speed's frequency (Dowell, same form as the engine)
   let acF = 1;
   if (fe9 > 0 && r.dBare > 0) {
@@ -5831,8 +5891,22 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
   const iMax = Math.max(p.Imax, r.Iph) * 1.18;
   const X = (tNm) => mL + ((W - mL - mR) * tNm) / tAxNm;
   const Y = (i) => H - mB - ((H - mB - mT) * i) / iMax;
-  const bend = (I) => I * (1 - (1 - (r.kIT || 1)) * Math.pow(Math.min(I / Math.max(p.Imax, 1e-6), 1.5), 2));
-  const iAt = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (r.Kt * bend(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
+  // v60.5: the bend is the ENGINE's own saturation curve (satCurve, gridded in I/Imax) —
+  // this chart previously used an ad-hoc quadratic that disagreed with every other screen
+  const satAt = (I) => {
+    const sc = r.satCurve;
+    if (!sc || !sc.length || !(p.Imax > 0)) return 1;
+    const f = I / p.Imax;
+    if (f <= sc[0].f) return sc[0].k;
+    for (let i2 = 1; i2 < sc.length; i2++) {
+      if (sc[i2].f >= f) {
+        const a2 = sc[i2 - 1], b2 = sc[i2];
+        return a2.k + ((f - a2.f) / Math.max(b2.f - a2.f, 1e-12)) * (b2.k - a2.k);
+      }
+    }
+    return sc[sc.length - 1].k;
+  };
+  const iAt = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (r.Kt * m2 * satAt(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
   const iTicks = [0, 0.5, 1].map((f) => f * iMax);
   const tTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * tAxNm);
   return (

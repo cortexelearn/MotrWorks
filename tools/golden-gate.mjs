@@ -31,7 +31,10 @@ const GOLD = [
   // v58 re-anchor — ACIM peakT: the end-winding leakage fix raised stator leakage X1, dropping
   // breakdown torque 4.7985 -> 4.2091 (-12.3%). ANALYTICAL ONLY, no ACIM bench data yet; replace
   // with a measured breakdown value when a cage is characterised.
-  { preset: 'NEMA 17 · 28 V · ~6 krpm',                 checks: { Kt: 0.050883, noLoad: 6435.9, Rll: 0.38536, peakT: 0.30530 } },
+  // v60.5 re-anchor — saturation now applies to TORQUE (Kt·I·sat(I)), not just the
+  // displayed knockdown card: peakT 0.30530 -> 0.29711 (-2.7%, = kIT at peak current).
+  // The old value admitted 97.3% saturation on one card and ignored it on every curve.
+  { preset: 'NEMA 17 · 28 V · ~6 krpm',                 checks: { Kt: 0.050883, noLoad: 6435.9, Rll: 0.38536, peakT: 0.29711 } },
   { preset: 'NEMA 23 · 28 V · ~3 krpm torquer',         checks: { Kt: 0.09901, noLoad: 3307.5, Rll: 0.23494 } },
   { preset: '4" direct-drive · 270 V · ~2.5 krpm',      checks: { Kt: 1.1303, noLoad: 2793.8, Rll: 2.1243 } },
   // v59.9 re-anchor — drag-corrected no-load: the model's own iron + windage torque is now
@@ -39,7 +42,11 @@ const GOLD = [
   // the pure V/Ke intercept. Ferrite 2-pole at 7 krpm: 7025.1 -> 6937.3 (-1.25%). The PM
   // rows moved less than the 91-point curve grid and keep their anchors.
   { preset: 'Brushed 12 V · 2-pole ferrite · ~7 krpm',  checks: { Kt: 0.014681, noLoad: 6937.3, Rll: 1.0409 } },
-  { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 4.2091 } },
+  // v60.5 re-anchor — ACIM torque uses the Thevenin equivalent (the series form never
+  // used the magnetizing branch it computed; Xm changed 40% while breakdown moved 0.05%).
+  // Vth < Vph drops breakdown 4.2091 -> 3.6579 (-13.1%). ANALYTICAL ONLY — the standing
+  // note applies: replace with a measured breakdown when a cage is characterised.
+  { preset: 'ACIM 115 V · 400 Hz · 4-pole aero',        checks: { noLoad: 12000, Rll: 0.83495, peakT: 3.6579 } },
   // v60.5 re-anchor — Rll for stepper/brake/LATM now reports the REAL coil at 20 C
   // (copper-only, same basis as pm) instead of the phantom 3-phase MLT formula those
   // machines never had. Stepper: per-phase Rs20 3.5496 (was certifying 3.075 of a
@@ -87,7 +94,8 @@ console.log('MEC / FEMM');
   const p = { ...base, slotR: 0, ...M2.PRESETS['NEMA 17 · 28 V · ~6 krpm'] };
   const r = M2.computeDesign(p);
   const mono = r.satCurve && r.satCurve.every((s, i, a) => !i || s.k <= a[i - 1].k + 1e-9);
-  const tie = r.satCurve && Math.abs(r.satCurve[2].k - r.kIT) < 1e-9;
+  const sc1 = r.satCurve && r.satCurve.find((s) => Math.abs(s.f - 1) < 1e-9); // v60.5: satCurve densified to 25 points
+  const tie = sc1 && Math.abs(sc1.k - r.kIT) < 1e-9;
   console.log(`  ${mono && tie ? '✓' : '✗'} satCurve monotone, endpoint = kIT (${(r.kIT * 100).toFixed(1)}%)`);
   if (!(mono && tie)) fail = true;
   const lua = M2.buildFemmLua(p, r);

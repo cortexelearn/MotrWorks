@@ -2524,8 +2524,22 @@ function CurrentTorqueChart({ r, p, us, ghost, tLimit }) {
   const iMax = Math.max(p.Imax, r.Iph) * 1.18;
   const X = (tNm) => mL + ((W - mL - mR) * tNm) / tAxNm;
   const Y = (i) => H - mB - ((H - mB - mT) * i) / iMax;
-  const bend = (I) => I * (1 - (1 - (r.kIT || 1)) * Math.pow(Math.min(I / Math.max(p.Imax, 1e-6), 1.5), 2));
-  const iAt = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (r.Kt * bend(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
+  // v60.5: the bend is the ENGINE's own saturation curve (satCurve, gridded in I/Imax) —
+  // this chart previously used an ad-hoc quadratic that disagreed with every other screen
+  const satAt = (I) => {
+    const sc = r.satCurve;
+    if (!sc || !sc.length || !(p.Imax > 0)) return 1;
+    const f = I / p.Imax;
+    if (f <= sc[0].f) return sc[0].k;
+    for (let i2 = 1; i2 < sc.length; i2++) {
+      if (sc[i2].f >= f) {
+        const a2 = sc[i2 - 1], b2 = sc[i2];
+        return a2.k + ((f - a2.f) / Math.max(b2.f - a2.f, 1e-12)) * (b2.k - a2.k);
+      }
+    }
+    return sc[sc.length - 1].k;
+  };
+  const iAt = (tNm) => { let lo = 0, hi = iMax * 1.6; for (let k2 = 0; k2 < 42; k2++) { const m2 = (lo + hi) / 2; if (r.Kt * m2 * satAt(m2) < tNm) lo = m2; else hi = m2; } return (lo + hi) / 2; };
   const iTicks = [0, 0.5, 1].map((f) => f * iMax);
   const tTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * tAxNm);
   return (
