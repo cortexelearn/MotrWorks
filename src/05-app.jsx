@@ -1193,10 +1193,14 @@ export default function MotorDesigner() {
       // Normal/Fine verify themselves against a ~1.4x finer mesh (roughly doubles the
       // time and is worth it): a gate can only prove convergence for the designs it
       // tested, and at least one preset needed more iteration than the tested ones.
-      const cfg = fieldRes === "fine" ? { nr: 76, nth: 432, verify: true }
-        : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288, verify: true };
+      // v61.4: the brake dispatches to its own axisymmetric r-z solve.
+      const cfg = p.motorType === "brake"
+        ? (fieldRes === "fine" ? { nr: 64, nz: 58, verify: true }
+          : fieldRes === "fast" ? { nr: 36, nz: 34, quick: true } : { nr: 48, nz: 44, verify: true })
+        : (fieldRes === "fine" ? { nr: 76, nth: 432, verify: true }
+          : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288, verify: true });
       const t0 = Date.now();
-      const F = fieldStudy(p, r, cfg);
+      const F = p.motorType === "brake" ? fieldStudyBrake(p, r, cfg) : fieldStudy(p, r, cfg);
       setField(F && !F.err ? { ...F, ms: Date.now() - t0 } : F);
       setFieldOf(JSON.stringify(p));
       setFieldBusy(false);
@@ -2809,12 +2813,25 @@ export default function MotorDesigner() {
             </div>
           )}
 
-          {pm && !r.err.length && (
+          {(pm || latmM || stpM || brkM) && !r.err.length && (
             <div className="card paper" style={{ marginTop: 14 }}>
               <div className="cardhead">
-                <h2>Field solution (2-D magnetostatic)</h2>
-                {field && !field.err && <button className="btn mini ghost" onClick={() => exportPng("svg-field", "field-plot.png")}>PNG ⤓</button>}
+                <h2>{brkM ? "Field solution (axisymmetric r-z)" : "Field solution (2-D magnetostatic)"}</h2>
+                {field && !field.err && <button className="btn mini ghost" onClick={() => exportPng(brkM ? "svg-brkfield" : "svg-field", "field-plot.png")}>PNG ⤓</button>}
               </div>
+              {/* v61.4: the hybrid stepper is refused up front, not on click — its flux path is
+                  3-D and no 2-D section represents it (fieldStudy documents why) */}
+              {stpM && p.stpKind !== "pm" ? (
+                <div className="note">
+                  No field solve for the hybrid stepper — its flux path is three-dimensional: an
+                  axially magnetized PM disc between two toothed cups offset by half a tooth pitch,
+                  with the bias flux entering every cross-section from outside the plane. Any 2-D
+                  solve (this one, or a FEMM planar model) describes a different machine, so the
+                  tool refuses rather than reporting a confident wrong number. PM-type steppers
+                  solve. Hybrid flux paths need 3-D FEA.
+                </div>
+              ) : (
+              <>
               <div className="iobar">
                 <button className="btn" onClick={runField} disabled={fieldBusy}>
                   {fieldBusy ? "Solving…" : field ? "Re-solve" : "Solve field"}</button>
@@ -2822,12 +2839,30 @@ export default function MotorDesigner() {
                   opts={[{ v: "fast", t: "Fast" }, { v: "normal", t: "Normal" }, { v: "fine", t: "Fine" }]} />
               </div>
               <div className="note" style={{ marginTop: 2 }}>
-                Nonlinear vector-potential solve on a graded polar mesh, magnets as equivalent
-                magnetization currents, the same Froelich BH curve the analytical core uses. Runs
-                on demand — it is a real solve, not a formula.
+                {brkM
+                  ? `Nonlinear stream-function (ψ = r·Aθ) solve of the pot core in the r-z half-plane —
+                     coil ampere-turns as the source, the same Froelich BH curves the circuit uses, solved
+                     at the working gap and at the seated residual gap. Flux surfaces and pole-face fluxes
+                     are exact bookkeeping on ψ. Runs on demand — it is a real solve, not a formula.`
+                  : brM
+                  ? `Nonlinear vector-potential solve on the INVERTED polar mesh a brushed machine needs —
+                     magnet ring on the housing ID, slots on the rotating armature opening outward, shaft
+                     carrying its share of the 2-pole return flux. Same solver, same Froelich BH curves.
+                     Runs on demand — it is a real solve, not a formula.`
+                  : latmM
+                  ? `Nonlinear vector-potential solve on the slotless mesh: arc magnets, then one air band
+                     of airgap + winding (copper is magnetically air, matching the circuit's own gap
+                     convention), then the un-slotted ring core. Runs on demand — a real solve, not a formula.`
+                  : stpM
+                  ? `Nonlinear vector-potential solve of the PM stepper's ring-magnet rotor in the
+                     salient-pole stator, poles taken from the pole-pair count. Same solver and BH curves
+                     as the BLDC card. Runs on demand — a real solve, not a formula.`
+                  : `Nonlinear vector-potential solve on a graded polar mesh, magnets as equivalent
+                     magnetization currents, the same Froelich BH curve the analytical core uses. Runs
+                     on demand — it is a real solve, not a formula.`}
               </div>
               {field && field.err && <div className="warn errb">{field.err}</div>}
-              {field && !field.err && (
+              {field && !field.err && !brkM && field.gap && field.gap.Br && (
                 <>
                   {fieldStale && <div className="warn">The design has changed since this solve — re-solve to match the numbers above.</div>}
                   <FieldPlot F={field} p={p} us={us} />
@@ -2836,14 +2871,24 @@ export default function MotorDesigner() {
                   <div className="tbl" style={{ marginTop: 8 }}>
                     <div className="kv"><span>Peak / fundamental gap flux density</span>
                       <b>{field.gap.Bpk.toFixed(3)} / {field.B1.toFixed(3)} T</b></div>
-                    <div className="kv"><span>vs the magnetic-circuit model (fundamental)</span>
-                      <b style={{ color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" }}>
-                        {r.B1.toFixed(3)} T analytic · {(field.cmp.dB1 * 100).toFixed(1)}% difference</b></div>
+                    {/* the cross-check row targets what THIS branch's circuit quotes: a fundamental
+                        for PM/brushed (r.B1, saturation folded in), a plateau for LATM (latm.Bg)
+                        and the PM stepper (step.BtBias) */}
+                    {pm ? (
+                      <div className="kv"><span>vs the magnetic-circuit model (fundamental)</span>
+                        <b style={{ color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" }}>
+                          {r.B1.toFixed(3)} T analytic · {(field.cmp.dB1 * 100).toFixed(1)}% difference</b></div>
+                    ) : (
+                      <div className="kv"><span>{latmM ? "vs the slotless circuit's plateau Bg (in-arc mean)" : "vs the circuit's aligned-pole bias (in-arc mean)"}</span>
+                        <b style={{ color: Math.abs(field.cmp.dBg) < 0.1 ? "#059669" : Math.abs(field.cmp.dBg) < 0.25 ? "#B45309" : "#DC2626" }}>
+                          {field.cmp.BgAnalytic.toFixed(3)} T analytic · field {field.BgBar.toFixed(3)} T · {(field.cmp.dBg * 100).toFixed(1)}% difference</b></div>
+                    )}
                     {/* v60.7: field-informed leakage — the kl that reconciles THIS design's circuit
                         to its own 2-D solve. Adoption is explicit and visible; preset loads clear it
                         (klOv lives in DEFAULT_P). A geometry closed form was tried and lost to the
-                        field referee across all PM presets — see the engine comment. */}
-                    {r.kl > 0 && field.B1 > 0 && r.B1 > 0 && (() => {
+                        field referee across all PM presets — see the engine comment. PM branch only:
+                        the brushed circuit keeps its fixed disclosed 0.9 (no klOv plumbing there). */}
+                    {p.motorType === "pm" && r.kl > 0 && field.B1 > 0 && r.B1 > 0 && (() => {
                       const klEst = Math.min(Math.max(r.kl * (field.B1 / r.B1), 0.5), 1.0);
                       const adopt = () => {
                         // iterate: the saturation loop is nonlinear in kl, so one-shot
@@ -2882,19 +2927,91 @@ export default function MotorDesigner() {
                     analytical model as the source for this geometry.
                   </div>}
                   <div className="note">
-                    The comparison row is the point of this card: where the field solve and the
-                    magnetic circuit agree, the fast model is trustworthy for sweeps; where they
-                    diverge, the circuit is missing something (thick magnets starving the back iron
-                    is the usual culprit — the circuit keeps predicting more flux, the field says
-                    the iron ran out). <b>Cogging torque is deliberately not reported here:</b> it
-                    failed its own mesh-convergence study on this structured mesh, so the analytical
-                    cogging model above remains the source. Magnetostatic and no-load: no eddy
-                    currents, no hysteresis, no stator current.
+                    {pm ? (
+                      <>
+                        The comparison row is the point of this card: where the field solve and the
+                        magnetic circuit agree, the fast model is trustworthy for sweeps; where they
+                        diverge, the circuit is missing something ({brM
+                          ? "the brushed circuit keeps its fixed 0.9 leakage factor and a lumped housing wall — the field typically reads it conservative"
+                          : "thick magnets starving the back iron is the usual culprit — the circuit keeps predicting more flux, the field says the iron ran out"}).{" "}
+                        <b>Cogging torque is deliberately not reported here:</b> it failed its own
+                        mesh-convergence study on this structured mesh, so the analytical cogging model
+                        above remains the source. Magnetostatic and no-load: no eddy currents, no
+                        hysteresis, no {brM ? "armature current (armature reaction is the circuit's satOfI job)" : "stator current"}.
+                      </>
+                    ) : latmM ? (
+                      <>
+                        The comparison row is the point of this card: the slotless circuit's Bg is a 1-D
+                        plateau with no fringing, while the solve shows the pole-edge fringing that the
+                        torque model handles separately (its tanh-smoothed edges) — expect the field's
+                        in-arc mean a little BELOW the circuit, more so on large-gap designs. Where they
+                        differ badly, the circuit's gap chain (airgap + winding + magnet/μr) is missing
+                        something real. Magnetostatic and unexcited: no coil current in this solve.
+                      </>
+                    ) : (
+                      <>
+                        The comparison row is the point of this card: the stepper circuit's aligned-pole
+                        bias is a 1-D estimate with Carter's coefficient at the pole pitch; the solve
+                        shows the real salient-pole field. Magnetostatic and unexcited — holding torque
+                        and detent stay with the analytical model above. The hybrid stepper does not
+                        solve here at all (3-D flux path); this card covers the PM type only.
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+              {/* v61.4: brake result — axisymmetric r-z. The shape guards (field.prof / field.gap
+                  above) keep a stale result from another machine type from rendering here. */}
+              {field && !field.err && brkM && field.prof && (
+                <>
+                  {fieldStale && <div className="warn">The design has changed since this solve — re-solve to match the numbers above.</div>}
+                  <BrakeFieldPlot F={field} p={p} us={us} />
+                  <h2 style={{ marginTop: 12 }}>Gap flux profile</h2>
+                  <BrakeGapProfile F={field} />
+                  <div className="tbl" style={{ marginTop: 8 }}>
+                    <div className="kv"><span>Pull at the working gap ({fmt(field.gapMM, 2)} mm)</span>
+                      <b style={{ color: Math.abs(field.cmp.dF) < 0.15 ? "#059669" : Math.abs(field.cmp.dF) < 0.35 ? "#B45309" : "#DC2626" }}>
+                        {fmt(field.F, 1)} N · circuit {fmt(field.cmp.Fcir, 1)} N · {(field.cmp.dF * 100).toFixed(1)}%</b></div>
+                    {r.brake && r.brake.Fcompr > 0 && <div className="kv"><span>Release margin vs springs compressed ({fmt(r.brake.Fcompr, 0)} N)</span>
+                      <b style={{ color: field.F / r.brake.Fcompr >= 1.3 ? "#059669" : field.F / r.brake.Fcompr >= 1 ? "#B45309" : "#DC2626" }}>
+                        ×{(field.F / r.brake.Fcompr).toFixed(2)} field · ×{r.brake.marginRel.toFixed(2)} circuit</b></div>}
+                    <div className="kv"><span>Pull seated (0.05 mm residual gap)</span>
+                      <b>{fmt(field.Fseat, 1)} N · circuit {fmt(field.cmp.FseatCir, 1)} N · {(field.cmp.dFseat * 100).toFixed(1)}%</b></div>
+                    <div className="kv"><span>Boss / rim face flux density (field vs circuit)</span>
+                      <b>{field.Bin.toFixed(2)} / {field.Bout.toFixed(2)} T vs {field.cmp.BinCir.toFixed(2)} / {field.cmp.BoutCir.toFixed(2)} T</b></div>
+                    <div className="kv"><span>Flux crossing the coil window past the gap (leakage the circuit ignores)</span>
+                      <b>{(field.leak * 100).toFixed(1)}%</b></div>
+                    <div className="kv"><span>Mesh · solve</span>
+                      <b>{field.nr}×{field.nz} cells × 3 states · {field.ms} ms · {field.conv ? "converged" : `residual ${field.resid.toExponential(1)}`}</b></div>
+                    {field.mesh && <div className="kv"><span>Mesh check (re-solved {field.mesh.nr2}×{field.mesh.nz2})</span>
+                      <b style={{ color: field.mesh.ok ? "#059669" : "#DC2626" }}>
+                        {field.mesh.ok ? "converged — " : "NOT converged — "}
+                        pull moves {(field.mesh.dF * 100).toFixed(1)}%, boss flux {(field.mesh.dBin * 100).toFixed(1)}%</b></div>}
+                  </div>
+                  {field.mesh && !field.mesh.ok && <div className="warn errb">
+                    This brake's field numbers are NOT mesh-independent — they moved when re-solved
+                    on a finer mesh, so do not quote them. Try Fine, or treat the reluctance circuit
+                    as the source for this geometry.
+                  </div>}
+                  <div className="note">
+                    The margin row is the point of this card. The reluctance circuit reaches the
+                    armature through three lumped reluctances and cannot see the flux that crosses
+                    the coil window without ever reaching the armature, nor the pole-edge fringing —
+                    across the shipped presets it reads pull 15–30% HIGHER than the field at the
+                    working gap, which is exactly the optimistic direction for a release-margin
+                    decision. Force is Maxwell stress on a closed box around the armature, averaged
+                    over every interior gap plane, and its integration is cross-checked against a
+                    virtual-work identity in the field gate. Static solve: no eddy-current delay
+                    (the L/R release transient on the electrical card), no lining wear, and the
+                    back-iron derate (μ-scale) is applied here exactly as in the circuit.
                   </div>
                 </>
               )}
 
-              {/* v61: LOADED solve — winding currents in, torque + demag map out. */}
+              {/* v61: LOADED solve — winding currents in, torque + demag map out. PM only:
+                  the loaded source model is the 3-phase star-of-slots winding. */}
+              {p.motorType === "pm" && (
+              <>
               <div className="cardhead" style={{ marginTop: 14 }}>
                 <h2>Loaded solve — torque & demag map</h2>
               </div>
@@ -2947,6 +3064,10 @@ export default function MotorDesigner() {
                     is a harder demag case than any angle of this rated-current sweep.
                   </div>
                 </>
+              )}
+              </>
+              )}
+              </>
               )}
             </div>
           )}
