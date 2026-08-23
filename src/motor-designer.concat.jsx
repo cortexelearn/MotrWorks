@@ -1228,8 +1228,9 @@ function computeDesign(p) {
   let BgEff = p.Bg, BgAvg = 0, B1 = 0, geSat = 0, ksat = 1, satAux = null, klOut = null;
   if (brushedM) {
     // housing-mounted magnet ring, same leakage/Carter first-order circuit as the PM
-    // branch. Leakage stays the fixed disclosed 0.9 — the 2-D solver refuses brushed
-    // (inside-out) topology, so there is no field referee to inform a better value.
+    // branch. Leakage stays the fixed disclosed 0.9: the 2-D solver now solves brushed
+    // on its own inverted mesh (v61.4) and the field card reports the disagreement, but
+    // field-informed kl adoption (klOv) remains a PM-branch feature for now.
     kcGap = carterK(tauS, airgap + p.magT / mag.mur, p.slotOpen);
     klOut = 0.9;
     BgAvg = airgap > 0 ? (0.9 * BrT * p.magT) / (p.magT + mag.mur * kcGap * airgap) : 0;
@@ -2860,30 +2861,191 @@ function gapHarmonic(Br9, n) {
   return (2 / N) * Math.hypot(re, im);
 }
 
+/* v61.4: inverted (brushed) region map — magnets bonded to the housing ID, slots on the
+   ROTATING ARMATURE opening outward. Radially: shaft + armature core (one steel — the
+   analytic circuit credits the shaft's section the same way) → armature slots/teeth →
+   tooth tips → AIRGAP → magnet ring → housing back iron. Region codes keep their
+   MATERIAL meaning (FR_STAT = statorMat = the armature lamination, FR_ROT = rotorMat =
+   the housing wall), so solveField runs unchanged. Slot/tooth angular convention matches
+   fieldMesh: slots centered on integer slot pitches, teeth on the half-pitch. */
+function fieldMeshBrushed(p, nrHint, nth) {
+  const Ns = Math.max(3, Math.round(p.slots));
+  const poles = Math.max(2, Math.round(p.poles / 2) * 2);
+  // monotone radial boundaries; computeDesign has already errored on impossible
+  // geometry, this only keeps the mesher total (never-throw) on marginal inputs
+  const step9 = (prev, v9) => Math.max(v9, prev + 0.05);
+  const rIn = Math.max(p.shaftD / 8, 0.3);           // tiny center hole: Neumann there ≈ no flux through r = 0 exactly
+  const rRot = p.rotorOD / 2;                        // armature OD
+  const hsA = Math.max((p.rotorOD - p.shaftD) / 2 - p.yoke - p.tipH, 0.2);
+  const rSlotBot = step9(rIn, rRot - p.tipH - hsA);  // armature core OD (slot bottoms)
+  const rTipIn = step9(rSlotBot, rRot - p.tipH);     // tooth-tip band inner face
+  const rRot2 = step9(rTipIn, rRot);
+  const rBore = step9(rRot2, p.statorID / 2);        // magnet ring ID (housing side)
+  const rOD = p.statorOD / 2;
+  const rMagOut = step9(rBore, Math.min(rBore + p.magT, rOD - 0.1));
+  const rODf = step9(rMagOut, rOD);
+  const sc = Math.max(nrHint / 56, 0.5);
+  const nOf = (n) => Math.max(Math.round(n * sc), 2);
+  const rf = gradeRadial([
+    { r0: rIn, r1: rSlotBot, n: nOf(10) },     // shaft + armature core
+    { r0: rSlotBot, r1: rTipIn, n: nOf(16) },  // armature slots / tooth bodies
+    { r0: rTipIn, r1: rRot2, n: nOf(4) },      // tooth tips
+    { r0: rRot2, r1: rBore, n: nOf(8) },       // AIRGAP — refined
+    { r0: rBore, r1: rMagOut, n: nOf(8) },     // magnet ring on the housing ID
+    { r0: rMagOut, r1: rODf, n: nOf(8) },      // housing back iron
+  ]);
+  const nr = rf.length - 1;
+  const rC = new Float64Array(nr), drC = new Float64Array(nr);
+  for (let i = 0; i < nr; i++) { rC[i] = (rf[i] + rf[i + 1]) / 2; drC[i] = rf[i + 1] - rf[i]; }
+  const dth = (2 * Math.PI) / nth;
+  const reg = new Uint8Array(nr * nth);
+  const isMag = new Uint8Array(nr);
+  const slotPitch = (2 * Math.PI) / Ns;
+  for (let i = 0; i < nr; i++) {
+    const r = rC[i];
+    if (r > rBore && r < rMagOut) isMag[i] = 1;
+    for (let j = 0; j < nth; j++) {
+      const th = (j + 0.5) * dth;
+      let m = FR_AIR;
+      if (r < rSlotBot) m = FR_STAT;                               // shaft + armature core, one steel
+      else if (r < rRot2) {
+        const off = ((th % slotPitch) + slotPitch) % slotPitch - slotPitch / 2;
+        if (r < rTipIn) {
+          m = Math.abs(off) < p.toothW / 2 / r ? FR_STAT : FR_AIR; // tooth bodies
+        } else {
+          const openHalf = p.slotOpen / 2 / r;
+          m = Math.abs(Math.abs(off) - slotPitch / 2) < openHalf ? FR_AIR : FR_STAT;
+        }
+      } else if (r < rMagOut) m = FR_AIR;                          // airgap + magnet ring (magnet ν via isMag)
+      else if (r < rODf) m = FR_ROT;                               // housing wall
+      reg[i * nth + j] = m;
+    }
+  }
+  const gapIdx = [];
+  for (let i = 0; i < nr; i++) if (rC[i] > rRot2 && rC[i] < rBore) gapIdx.push(i);
+  if (!gapIdx.length) for (let i = 0; i < nr; i++) if (rC[i] > rRot2 * 0.999 && rC[i] < rBore * 1.001) gapIdx.push(i);
+  // rMagIn carries the OUTER magnet boundary here — it is the ring FieldPlot should draw
+  return { nr, nth, rf, rC, drC, dth, reg, isMag, Ns, poles,
+    rSh: Math.max(p.shaftD / 2, rIn), rMagIn: rMagOut, rRot: rRot2, rBore, rTip: rTipIn, rSlotTop: rSlotBot, rOD: rODf, gapIdx,
+    rGap: (rRot2 + rBore) / 2 };
+}
+
+/* v61.4: slotless (LATM) region map — rotor hub, arc magnets, then ONE air band of
+   airgap + winding thickness (copper is magnetically air), then the un-slotted ring
+   core. The iron bore sits at statorID/2 + latmWind to match the engine's own magnetic
+   convention (latm.Bg uses gap = airgap + tw), so the cross-check compares like with
+   like rather than re-deciding where the winding lives. */
+function fieldMeshSlotless(p, nrHint, nth) {
+  const poles = Math.max(2, Math.round(p.poles / 2) * 2);
+  const step9 = (prev, v9) => Math.max(v9, prev + 0.05);
+  const rIn = Math.max(p.shaftD / 8, 0.3);
+  const rSh = Math.max(p.shaftD / 2, rIn);
+  const rRot = p.rotorOD / 2;
+  const rMagIn = step9(rIn, Math.max(rRot - p.magT, rSh * 0.5 + 0.2));
+  const rRot2 = step9(rMagIn, rRot);
+  const tw = Math.max(Number.isFinite(p.latmWind) ? p.latmWind : 0, 0);
+  const rOD = p.statorOD / 2;
+  const rIron = step9(rRot2, Math.min(p.statorID / 2 + tw, rOD - 0.2));
+  const rODf = step9(rIron, rOD);
+  const sc = Math.max(nrHint / 56, 0.5);
+  const nOf = (n) => Math.max(Math.round(n * sc), 2);
+  const rf = gradeRadial([
+    { r0: rIn, r1: rMagIn, n: nOf(10) },   // hub / rotor back iron
+    { r0: rMagIn, r1: rRot2, n: nOf(10) }, // arc magnets
+    { r0: rRot2, r1: rIron, n: nOf(14) },  // AIRGAP + winding band — refined
+    { r0: rIron, r1: rODf, n: nOf(12) },   // slotless ring core
+  ]);
+  const nr = rf.length - 1;
+  const rC = new Float64Array(nr), drC = new Float64Array(nr);
+  for (let i = 0; i < nr; i++) { rC[i] = (rf[i] + rf[i + 1]) / 2; drC[i] = rf[i + 1] - rf[i]; }
+  const dth = (2 * Math.PI) / nth;
+  const reg = new Uint8Array(nr * nth);
+  const isMag = new Uint8Array(nr);
+  for (let i = 0; i < nr; i++) {
+    const r = rC[i];
+    if (r > rMagIn && r < rRot2) isMag[i] = 1;
+    const m = r < rMagIn ? FR_ROT : r > rIron ? FR_STAT : FR_AIR;
+    for (let j = 0; j < nth; j++) reg[i * nth + j] = m;
+  }
+  const gapIdx = [];
+  for (let i = 0; i < nr; i++) if (rC[i] > rRot2 && rC[i] < rIron) gapIdx.push(i);
+  if (!gapIdx.length) for (let i = 0; i < nr; i++) if (rC[i] > rRot2 * 0.999 && rC[i] < rIron * 1.001) gapIdx.push(i);
+  return { nr, nth, rf, rC, drC, dth, reg, isMag, Ns: Math.max(Math.round(p.latmSect) || 1, 1), poles,
+    rSh, rMagIn, rRot: rRot2, rBore: rIron, rTip: rIron, rSlotTop: rIron, rOD: rODf, gapIdx,
+    rGap: (rRot2 + rIron) / 2 };
+}
+
 /* ---- app-facing entry: solve, summarize, CROSS-CHECK the analytic core. Pure.
    opts: { nr, nth, cog (rotor steps, 0 = skip), quick } ---- */
 function fieldStudy(p, r, opts) {
   const o = opts || {};
-  // PM (inner-rotor) topology ONLY. `fieldMesh` builds magnets on the rotor surface and
-  // slots opening inward from the stator bore; a brushed machine is inside-out — magnets
-  // bonded to the housing ID, slots on the ROTATING ARMATURE opening outward — so meshing
-  // it with this map solves a different machine. A cross-check over every preset exposed
-  // exactly that: 4-pole brushed designs happened to land within ~7% of the circuit while
-  // 2-pole ones were off by 33–40%, which is the signature of wrong geometry, not model
-  // error. Brushed support needs an inverted mesh; until it exists this returns an error
-  // rather than a confident wrong number.
-  if (p.motorType === "brushed")
-    return { err: "The field solver models inner-rotor PM topology; a brushed machine is inside-out (magnets on the housing, slots on the rotating armature). Brushed field solving needs an inverted mesh — not yet implemented." };
-  if (p.motorType !== "pm") return { err: "The field solver covers BLDC/PMSM designs." };
+  // v61.4: four radial topologies, one solver — each machine gets its OWN region map,
+  // because meshing the wrong geometry solves a different machine. (That is not a
+  // hypothetical: before the inverted mesh existed, solving brushed presets on the PM
+  // map landed 4-pole designs within ~7% of the circuit while 2-pole ones sat 33–40%
+  // off — the signature of wrong geometry, not model error — so brushed was refused
+  // until fieldMeshBrushed was written.)
+  //   pm       — inner-rotor PM: magnets on the rotor surface, slots opening inward
+  //   brushed  — inside-out: magnets on the housing ID, armature slots opening outward
+  //   latm     — slotless: arc magnets, air band = airgap + winding, un-slotted ring core
+  //   stepper (PM kind) — ring-magnet rotor on the salient-pole stator; poles from stpPP
+  // The HYBRID stepper is refused, honestly: its flux path is three-dimensional — an
+  // axially magnetized PM disc between two toothed cups offset by half a tooth pitch,
+  // with the bias flux entering every cross-section from OUTSIDE the plane. No 2-D
+  // section represents it; solving one anyway would be a confident wrong number.
+  // The brake is axisymmetric, not polar: fieldStudyBrake solves it in the r-z plane.
+  const mt9 = p.motorType;
+  if (mt9 === "stepper" && p.stpKind !== "pm")
+    return { err: "The hybrid stepper's flux path is 3-D (an axially magnetized PM disc between two toothed cups offset by half a tooth pitch — bias flux enters every cross-section from outside the plane), so no 2-D solve represents it. PM-type steppers solve; hybrids need 3-D FEA." };
+  if (mt9 === "brake")
+    return { err: "The brake is axisymmetric — its field solves in the r-z plane. Use the brake card's own solve." };
+  if (!(mt9 === "pm" || mt9 === "brushed" || mt9 === "latm" || mt9 === "stepper"))
+    return { err: "The field solver covers BLDC/PMSM, brushed, LATM and PM-stepper designs; the brake has its own axisymmetric r-z solve. ACIM has no permanent-magnet source to solve at no-load." };
   if (!r || r.err.length) return { err: "Fix the design's errors before solving the field." };
   if (!(p.magT > 0) || !(r.airgap > 0)) return { err: "Needs a positive magnet thickness and airgap." };
   const nrH = Math.max(Math.round(o.nr || 56), 20), nth = Math.max(Math.round(o.nth || 288), 96);
-  const msh = fieldMesh(p, nrH, nth);
+  // stepper: the electrical structure comes from stpPP (the shared poles input is hidden
+  // for steppers and carries a stale default) — shadow it for the mesh and magnet pattern
+  const pE = mt9 === "stepper" ? { ...p, poles: 2 * Math.max(Math.round(p.stpPP), 2) } : p;
+  const mkMesh = (nr9, nt9) => mt9 === "brushed" ? fieldMeshBrushed(pE, nr9, nt9)
+    : mt9 === "latm" ? fieldMeshSlotless(pE, nr9, nt9) : fieldMesh(pE, nr9, nt9);
+  const msh = mkMesh(nrH, nth);
   const BrT = r.BrT;
-  const M0 = magPattern(p, msh, 0, BrT);
+  const M0 = magPattern(pE, msh, 0, BrT);
   const nl0 = o.nl || (o.quick ? 10 : 26), sw0 = o.sweeps || (o.quick ? 60 : 130);
-  const s0 = solveField(p, msh, M0, { nl: nl0, sweeps: sw0 });
-  const g0 = gapQuantities(p, msh, s0.A);
+  // v61.4 coarse-in-θ cascade for low pole counts. Line relaxation kills short-wavelength
+  // error fast, but the pole-pair mode spans the whole circumference on a 2-pole machine
+  // and crawls — the sweep count needed grows ~(nth/poles)². Measured before this fix: a
+  // 2-pole brushed solve was still drifting after 9000 sweeps (B1 read 45% LOW at the
+  // default budget — dangerously plausible), while every ≥4-pole preset settled. The
+  // cascade solves the same radial grading on a coarse θ grid first (cheap sweeps, and
+  // the slow mode is 16× shorter in cells), lifts by periodic linear interpolation, and
+  // lets the fine solve fix only what it fixes fast. Radial faces depend on nrHint only,
+  // so the lift is a pure θ interpolation.
+  const liftTh = (m1, A1, m2) => {
+    const A2 = new Float64Array(m2.nr * m2.nth);
+    for (let i = 0; i < m2.nr; i++) {
+      for (let j = 0; j < m2.nth; j++) {
+        const x = ((j + 0.5) * m2.dth) / m1.dth - 0.5;
+        const j0 = Math.floor(x), f9 = x - j0;
+        const ja = ((j0 % m1.nth) + m1.nth) % m1.nth, jb = (ja + 1) % m1.nth;
+        A2[i * m2.nth + j] = A1[i * m1.nth + ja] + f9 * (A1[i * m1.nth + jb] - A1[i * m1.nth + ja]);
+      }
+    }
+    return A2;
+  };
+  let warm0 = null, swFine = sw0;
+  if (msh.poles <= 4) {
+    const ncs = Math.max(Math.round(nth / 4), Math.max(12 * msh.poles, 48));
+    if (ncs < nth * 0.8) {
+      const mC = mkMesh(nrH, ncs);
+      const sC = solveField(pE, mC, magPattern(pE, mC, 0, BrT), { nl: Math.max(Math.round(nl0 * 0.8), 6), sweeps: sw0 * 4 });
+      warm0 = liftTh(mC, sC.A, msh);
+      swFine = Math.round(sw0 * 1.5);
+    }
+  }
+  const s0 = solveField(pE, msh, M0, { nl: nl0, sweeps: swFine, warm: warm0 });
+  const g0 = gapQuantities(pE, msh, s0.A);
   const pp = msh.poles / 2;
   const B1 = gapHarmonic(g0.Br, pp);
   // dominant spatial order — a correct solve peaks at the pole-pair number
@@ -2895,6 +3057,14 @@ function fieldStudy(p, r, opts) {
   let posArea = 0;
   for (let j = 0; j < nth; j++) if (g0.Br[j] > 0) posArea += g0.Br[j] * g0.rGap * msh.dth;
   const fluxPole = ((posArea / pp) / 1000) * (p.stackL / 1000);         // Wb per pole
+  // equivalent PLATEAU gap field: mean |Br| spread back over the pole arc. This is the
+  // apples-to-apples number for the branches whose circuit quotes a plateau (LATM's
+  // latm.Bg, the PM stepper's BtBias) rather than a fundamental.
+  let meanAbs9 = 0;
+  for (let j = 0; j < nth; j++) meanAbs9 += Math.abs(g0.Br[j]);
+  meanAbs9 /= nth;
+  const arcF9 = Math.min(Math.max(pE.poleArc, 5), 100) / 100;
+  const BgBar = meanAbs9 / Math.max(arcF9, 0.05);
   // NO COGGING TORQUE FROM THIS SOLVER — deliberately, and this is the interesting part.
   // Maxwell-stress cogging was implemented, then removed when its own mesh-convergence
   // study (36x216 -> 96x576 cells) showed the gap field converging to within ±2% while
@@ -2912,23 +3082,46 @@ function fieldStudy(p, r, opts) {
   // few percent means this design's numbers are not converged and must not be quoted.
   let mesh = null;
   if (o.verify) {
-    const m2 = fieldMesh(p, Math.round(nrH * 1.4), Math.round(nth * 1.4));
-    const s2 = solveField(p, m2, magPattern(p, m2, 0, BrT), { nl: nl0, sweeps: sw0 });
-    const g2 = gapQuantities(p, m2, s2.A);
+    const nr2H = Math.round(nrH * 1.4), nt2 = Math.round(nth * 1.4);
+    const m2 = mkMesh(nr2H, nt2);
+    // the verify solve gets the same cascade — an under-converged fine solve would make
+    // the mesh check measure solver truncation, not discretization
+    let warm2 = null, sw2 = sw0;
+    if (m2.poles <= 4) {
+      const ncs2 = Math.max(Math.round(nt2 / 4), Math.max(12 * m2.poles, 48));
+      if (ncs2 < nt2 * 0.8) {
+        const mC2 = mkMesh(nr2H, ncs2);
+        const sC2 = solveField(pE, mC2, magPattern(pE, mC2, 0, BrT), { nl: Math.max(Math.round(nl0 * 0.8), 6), sweeps: sw0 * 4 });
+        warm2 = liftTh(mC2, sC2.A, m2);
+        sw2 = Math.round(sw0 * 1.5);
+      }
+    }
+    const s2 = solveField(pE, m2, magPattern(pE, m2, 0, BrT), { nl: nl0, sweeps: sw2, warm: warm2 });
+    const g2 = gapQuantities(pE, m2, s2.A);
     const B1b = gapHarmonic(g2.Br, pp);
     const dB1m = B1 > 0 ? Math.abs(B1b - B1) / B1 : NaN;
     const dBpk = g0.Bpk > 0 ? Math.abs(g2.Bpk - g0.Bpk) / g0.Bpk : NaN;
     mesh = { nr2: m2.nr, nth2: Math.round(nth * 1.4), B1b, Bpk2: g2.Bpk, dB1: dB1m, dBpk,
       ok: Number.isFinite(dB1m) && dB1m < 0.05 && Number.isFinite(dBpk) && dBpk < 0.05 };
   }
+  // cross-check vs the branch's OWN circuit number — the branches quote different
+  // quantities, so the comparison target differs:
+  //   pm / brushed — fundamental B1 (both publish r.B1 with steel saturation folded in)
+  //   latm         — plateau latm.Bg;   stepper (PM) — plateau step.BtBias
+  const cmp = mt9 === "latm" || mt9 === "stepper"
+    ? (() => {
+        const BgA9 = mt9 === "latm" ? r.latm.Bg : r.step.BtBias;
+        return { BgField: BgBar, BgAnalytic: BgA9, B1Field: B1, B1Analytic: NaN,
+          dB1: NaN, dBg: BgA9 > 0 ? (BgBar - BgA9) / BgA9 : NaN };
+      })()
+    : {
+        BgField: g0.Bpk, BgAnalytic: r.BgAvg,
+        B1Field: B1, B1Analytic: r.B1,
+        dB1: r.B1 > 0 ? (B1 - r.B1) / r.B1 : NaN, dBg: NaN,
+      };
   return {
     msh, A: s0.A, B: s0.B, conv: s0.conv, sweeps: s0.sweeps, resid: s0.resid, mesh,
-    gap: g0, B1, domN, fluxPole,
-    cmp: {
-      BgField: g0.Bpk, BgAnalytic: r.BgAvg,
-      B1Field: B1, B1Analytic: r.B1,
-      dB1: r.B1 > 0 ? (B1 - r.B1) / r.B1 : NaN,
-    },
+    gap: g0, B1, domN, fluxPole, BgBar, cmp,
     nr: msh.nr, nth,
   };
 }
@@ -3151,6 +3344,420 @@ function fieldStudyLoaded(p, r, opts) {
     Tcir, dTcir: Tcir > 0 ? Math.abs(best.T) / Tcir - 1 : NaN,
     demag: { worstMargin, frac: dFrac, nDemag, nMagCells, strip, atT: r.demagT, reSolved: tempSplit, thE: dAng, atPeakT: Math.abs(dAng - best.thE) < 1e-9 },
     nr: msh.nr, nth,
+  };
+}
+
+/* ================= axisymmetric brake field solve (r-z) =================
+   v61.4. The spring-applied brake is a body of revolution — a polar r-θ section says
+   nothing about it — so it gets its own solver in the r-z half-plane. Formulation:
+   ψ = r·A_θ (the Stokes stream function of the flux), governed by
+       ∂/∂r((ν/r)∂ψ/∂r) + ∂/∂z((ν/r)∂ψ/∂z) = −J_θ
+   with B_r = −(1/r)∂ψ/∂z and B_z = (1/r)∂ψ/∂r. Two properties make ψ the honest
+   choice here: iso-ψ contours ARE the flux surfaces (the plot's flux lines need no
+   integration), and the flux through any disc of radius r is exactly 2π·ψ — so the
+   boss-face and rim-face fluxes, and their conservation, are bookkeeping on the
+   solution rather than derived estimates.
+
+   SOLVER: same discipline as the polar machine solver — finite-volume on a graded
+   rectangular mesh, line Gauss–Seidel with exact tridiagonal solves along z (the
+   working gap is thin in z, which is where the anisotropy lives), nonlinear ν from the
+   same Froelich curves, damped. The coil enters as a uniform J over its wound section
+   with ΣJ·dA = NI exactly. The back-iron magnetic derate (brkFeScale) scales ν by 1/s,
+   the field-level statement of the engine's μ_eff = 1 + (μr−1)·s for μr ≫ 1.
+
+   BOUNDARY: ψ = 0 on the axis (regularity) and on the outer box (flux confined); the
+   box carries an air margin of ~30% of the OD so confinement error stays small.
+
+   FORCE: Maxwell stress on a CLOSED box around the armature (gap plane + plane above
+   the armature + outer cylinder), not a single-plane shortcut. SI units throughout. */
+const BRK_AIR = 0, BRK_BODY = 1, BRK_ARM = 2, BRK_COIL = 3;
+
+function brakeMesh(p, r, gapMM, nrHint, nzHint) {
+  const b9 = r.brake, mm = 1e-3;
+  const st9 = (prev, v9) => Math.max(v9, prev + 0.05 * mm);
+  // radii (m) — the same face definitions the reluctance circuit uses
+  const rAx = 0.15 * mm;                                  // ψ=0 shell standing in for the axis
+  const rThru = st9(rAx, (Math.max(p.brkBore, p.shaftD + 2) / 2) * mm);
+  const rBoss = st9(rThru, (Math.max(p.brkBossOD, 2) / 2) * mm);
+  const rBobIn = st9(rBoss, (p.brkBobID / 2) * mm);
+  const rPkt0 = (Math.max(p.brkPktID, 4) / 2) * mm;
+  const rCoil = st9(rBobIn, Math.min((b9.coilOD / 2) * mm, rPkt0 - 0.1 * mm));
+  const rPkt = st9(rCoil, rPkt0);
+  const rOD = st9(rPkt, (p.statorOD / 2) * mm);
+  const rOut = rOD + Math.max(0.3 * rOD, 4 * mm);         // air margin
+  // axial stations (m): z = 0 at the back face of the backiron
+  const L = p.stackL * mm;
+  const pktD = Math.max(p.brkPktD, 1) * mm;
+  const g = Math.max(gapMM, 0.02) * mm;
+  const tArm = Math.max(p.brkArm, 0.5) * mm;
+  const mrgZ = Math.max(0.25 * L, 3 * mm);
+  const zBot = -mrgZ;
+  const zPkt = Math.min(Math.max(L - pktD, 0.5 * mm), L - 0.3 * mm);
+  const zFace = L, zGap = L + g, zArm = zGap + tArm, zTop = zArm + mrgZ;
+  const bobL = Math.max(p.brkBobL, 1) * mm;
+  const zCoil0 = zPkt, zCoil1 = Math.min(zPkt + bobL, zFace);
+  const scR = Math.max(nrHint / 48, 0.5), scZ = Math.max(nzHint / 40, 0.5);
+  const nR = (n) => Math.max(Math.round(n * scR), 2), nZ = (n) => Math.max(Math.round(n * scZ), 2);
+  // corner-graded segments: every pole-edge radius and iron face gets a fine band. On a
+  // uniform-per-region mesh the re-entrant corner fields (which control both the gap
+  // flux and the force) converge painfully slowly — the linear convergence study showed
+  // F still drifting −8% per 1.4× refinement; grading INTO the corners is the standard
+  // cure and is what makes the per-design mesh self-check meaningful here.
+  const segs = [];
+  const edgy = (x0, x1, nMid, atL, atR) => {
+    const span = x1 - x0;
+    if (!(span > 0)) return;
+    const w9 = Math.min(0.8 * mm, 0.22 * span);
+    const nE = Math.max(Math.round(3 * Math.min(scR, 2)), 2);
+    let a9 = x0, b9 = x1;
+    const out = [];
+    if (atL && span > 3 * w9) { out.push({ r0: a9, r1: a9 + w9, n: nE }); a9 += w9; }
+    let right = null;
+    if (atR && span > 3 * w9) { right = { r0: b9 - w9, r1: b9, n: nE }; b9 -= w9; }
+    out.push({ r0: a9, r1: b9, n: nMid });
+    if (right) out.push(right);
+    for (const s9 of out) segs.push(s9);
+  };
+  edgy(rAx, rThru, nR(3), false, true);       // through-hole edge
+  edgy(rThru, rBoss, nR(6), true, true);      // boss pole face
+  edgy(rBoss, rBobIn, nR(2), true, false);
+  edgy(rBobIn, rCoil, nR(6), false, false);   // wound coil
+  edgy(rCoil, rPkt, nR(2), false, true);
+  edgy(rPkt, rOD, nR(6), true, true);         // rim pole face
+  edgy(rOD, rOut, nR(4), true, false);        // air margin
+  const rfB = gradeRadial(segs);
+  segs.length = 0;
+  edgy(zBot, 0, nZ(3), false, true);
+  edgy(0, zPkt, nZ(5), true, false);          // back web
+  edgy(zPkt, zFace, nZ(7), true, true);       // pocket / coil depth, fine at the face
+  segs.push({ r0: zFace, r1: zGap, n: nZ(6) }); // WORKING GAP — uniformly fine already
+  edgy(zGap, zArm, nZ(4), true, true);        // armature plate, fine at both faces
+  edgy(zArm, zTop, nZ(3), true, false);
+  const zfB = gradeRadial(segs);
+  const nr = rfB.length - 1, nz = zfB.length - 1;
+  const rCB = new Float64Array(nr), drB = new Float64Array(nr);
+  for (let i = 0; i < nr; i++) { rCB[i] = (rfB[i] + rfB[i + 1]) / 2; drB[i] = rfB[i + 1] - rfB[i]; }
+  const zCB = new Float64Array(nz), dzB = new Float64Array(nz);
+  for (let j = 0; j < nz; j++) { zCB[j] = (zfB[j] + zfB[j + 1]) / 2; dzB[j] = zfB[j + 1] - zfB[j]; }
+  const regB = new Uint8Array(nr * nz);
+  for (let i = 0; i < nr; i++) {
+    const rc = rCB[i];
+    for (let j = 0; j < nz; j++) {
+      const zc = zCB[j];
+      let m = BRK_AIR;
+      if (zc > 0 && zc < L && rc > rThru && rc < rOD) {
+        m = zc > zPkt && rc > rBoss && rc < rPkt ? BRK_AIR : BRK_BODY;   // pocket cut from the face
+        if (m === BRK_AIR && zc > zCoil0 && zc < zCoil1 && rc > rBobIn && rc < rCoil) m = BRK_COIL;
+      } else if (zc > zGap && zc < zArm && rc > rThru && rc < rOD) m = BRK_ARM;
+      regB[i * nz + j] = m;
+    }
+  }
+  return { nr, nz, rfB, zfB, rCB, zCB, drB, dzB, regB,
+    rAx, rThru, rBoss, rBobIn, rCoil, rPkt, rOD, rOut,
+    zBot, zPkt, zFace, zGap, zArm, zTop, L, g, tArm, zCoil0, zCoil1 };
+}
+
+/* One solve at fixed geometry. opts: { warm, nl, sweeps, tol, relax }. */
+function brakeSolve(p, msh, NI, opts) {
+  const o = opts || {};
+  const { nr, nz, rfB, rCB, zCB, drB, dzB, regB } = msh;
+  const N = nr * nz;                                       // k = i·nz + j (z contiguous — the Thomas lines)
+  const psi = o.warm && o.warm.length === N ? Float64Array.from(o.warm) : new Float64Array(N);
+  const nu = new Float64Array(N), Bmag = new Float64Array(N);
+  const Brf = new Float64Array(N), Bzf = new Float64Array(N);
+  const bodyM = STEELS[p.statorMat] || STEELS["1018 steel (solid)"];
+  const armM = STEELS[p.rotorMat] || bodyM;
+  const feS = Math.min(Math.max(Number.isFinite(p.brkFeScale) ? p.brkFeScale : 100, 0), 100) / 100;
+  const feF = Math.max(feS, 0.01);
+  const nuAir = 1 / MU0;
+  const matOf = (m) => (m === BRK_BODY ? bodyM : m === BRK_ARM ? armM : null);
+  for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++) {
+    const k = i * nz + j, mt = matOf(regB[k]);
+    nu[k] = mt ? 1 / (MU0 * (mt.muri || 800)) / (regB[k] === BRK_BODY ? feF : 1) : nuAir;
+  }
+  // coil source: NI spread over the wound section, ΣJ·dA = NI exactly
+  const src = new Float64Array(N);
+  {
+    let aCoil = 0;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++)
+      if (regB[i * nz + j] === BRK_COIL) aCoil += drB[i] * dzB[j];
+    if (aCoil > 0) {
+      const J = NI / aCoil;                                // A/m²
+      for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++)
+        if (regB[i * nz + j] === BRK_COIL) src[i * nz + j] = J * drB[i] * dzB[j];
+    }
+  }
+  const nrz = Math.max(nr, nz);
+  const a = new Float64Array(nrz), b = new Float64Array(nrz), c = new Float64Array(nrz);
+  const d = new Float64Array(nrz), x = new Float64Array(nrz);
+  const cp = new Float64Array(nrz), dp = new Float64Array(nrz);
+  const relax = o.relax || 1.25;
+  const nlMax = o.lin ? 1 : (o.nl || 18);
+  const swMax = o.sweeps || 120, tol = o.tol || 1e-3;
+  const hmean = (u, v) => (2 * u * v) / (u + v);
+  // the four face conductances of cell (i,j) — Dirichlet ψ=0 beyond every boundary
+  const faces = (i, j) => {
+    const k = i * nz + j, nuP = nu[k];
+    const fS = j === 0 ? (nuP / rCB[i]) * drB[i] / (zCB[0] - msh.zfB[0])
+      : hmean(nuP, nu[k - 1]) / rCB[i] * drB[i] / (zCB[j] - zCB[j - 1]);
+    const fN = j === nz - 1 ? (nuP / rCB[i]) * drB[i] / (msh.zfB[nz] - zCB[nz - 1])
+      : hmean(nuP, nu[k + 1]) / rCB[i] * drB[i] / (zCB[j + 1] - zCB[j]);
+    const fW = i === 0 ? (nuP / rfB[0]) * dzB[j] / (rCB[0] - rfB[0])
+      : hmean(nuP, nu[k - nz]) / rfB[i] * dzB[j] / (rCB[i] - rCB[i - 1]);
+    const fE = i === nr - 1 ? (nuP / rfB[nr]) * dzB[j] / (rfB[nr] - rCB[nr - 1])
+      : hmean(nuP, nu[k + nz]) / rfB[i + 1] * dzB[j] / (rCB[i + 1] - rCB[i]);
+    return { fS, fN, fW, fE };
+  };
+  let conv = false, sweeps = 0, resid = Infinity;
+  for (let nl = 0; nl < nlMax; nl++) {
+    for (let sw = 0; sw < swMax; sw++) {
+      let maxd = 0, scale = 1e-30;
+      // ADI: alternate exact z-lines and exact r-lines. A single line direction leaves
+      // error to creep one column per sweep across the other axis — the same slow-mode
+      // stall the polar solver's cascade fixes; here alternating directions carries the
+      // global flux loop in a handful of sweeps.
+      if (sw % 2 === 0) {
+        for (let i = 0; i < nr; i++) {
+          for (let j = 0; j < nz; j++) {
+            const k = i * nz + j;
+            const { fS, fN, fW, fE } = faces(i, j);
+            a[j] = j === 0 ? 0 : -fS;
+            c[j] = j === nz - 1 ? 0 : -fN;
+            b[j] = fS + fN + fW + fE;
+            d[j] = src[k]
+              + (i > 0 ? fW * psi[k - nz] : 0)
+              + (i < nr - 1 ? fE * psi[k + nz] : 0);
+            if (!(b[j] > 0)) { a[j] = 0; c[j] = 0; b[j] = 1; d[j] = psi[k]; }
+          }
+          triSolve(a, b, c, d, x, nz, cp, dp);
+          for (let j = 0; j < nz; j++) {
+            const k = i * nz + j;
+            const dd = x[j] - psi[k];
+            psi[k] += relax * dd;
+            const ad = Math.abs(dd); if (ad > maxd) maxd = ad;
+            const av = Math.abs(psi[k]); if (av > scale) scale = av;
+          }
+        }
+      } else {
+        for (let j = 0; j < nz; j++) {
+          for (let i = 0; i < nr; i++) {
+            const k = i * nz + j;
+            const { fS, fN, fW, fE } = faces(i, j);
+            a[i] = i === 0 ? 0 : -fW;
+            c[i] = i === nr - 1 ? 0 : -fE;
+            b[i] = fS + fN + fW + fE;
+            d[i] = src[k]
+              + (j > 0 ? fS * psi[k - 1] : 0)
+              + (j < nz - 1 ? fN * psi[k + 1] : 0);
+            if (!(b[i] > 0)) { a[i] = 0; c[i] = 0; b[i] = 1; d[i] = psi[k]; }
+          }
+          triSolve(a, b, c, d, x, nr, cp, dp);
+          for (let i = 0; i < nr; i++) {
+            const k = i * nz + j;
+            const dd = x[i] - psi[k];
+            psi[k] += relax * dd;
+            const ad = Math.abs(dd); if (ad > maxd) maxd = ad;
+            const av = Math.abs(psi[k]); if (av > scale) scale = av;
+          }
+        }
+      }
+      sweeps++;
+      resid = maxd / scale;
+      // exit on PER-SWEEP change: 0.02·tol, tighter than the polar solver's 0.05 — the
+      // convergence study showed fine brake grids exiting early on creeping slow modes
+      // (90×84 read the force 9% low on the 0.05 threshold, then recovered with budget)
+      if (sw > 3 && resid < tol * 0.02) break;
+    }
+    // B from ψ, then ν from Froelich (body derated by brkFeScale). opts.lin freezes ν
+    // at the initial permeability — the virtual-work force check in the gate needs a
+    // LINEAR solve so co-energy is ½LI² exactly.
+    let dmax = 0;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++) {
+      const k = i * nz + j;
+      const ju = Math.min(j + 1, nz - 1), jd = Math.max(j - 1, 0);
+      const iu = Math.min(i + 1, nr - 1), id = Math.max(i - 1, 0);
+      const Br9 = -(psi[i * nz + ju] - psi[i * nz + jd]) / ((zCB[ju] - zCB[jd]) || 1e-9) / rCB[i];
+      const Bz9 = (psi[iu * nz + j] - psi[id * nz + j]) / ((rCB[iu] - rCB[id]) || 1e-9) / rCB[i];
+      const B9 = Math.hypot(Br9, Bz9);
+      Brf[k] = Br9; Bzf[k] = Bz9; Bmag[k] = B9;
+      if (o.lin) continue;
+      const mt = matOf(regB[k]);
+      if (!mt) continue;
+      // stay BELOW Hof's capped branch (it jumps ~2× at 0.98·bsat): brake iron runs
+      // hard into saturation and cells that straddle that cliff flip ν by orders of
+      // magnitude every pass — the un-damped limit cycle showed dmax bouncing 20–50
+      // on the seated solve. Smooth curve + heavier damping converges instead.
+      const Bc = Math.min(B9, (mt.bsat || 2) * 0.975);
+      let nuNew = Bc > 1e-6 ? Hof(Bc, mt) / Bc : 1 / (MU0 * (mt.muri || 800));
+      if (regB[k] === BRK_BODY) nuNew /= feF;
+      const rel = Math.abs(nuNew - nu[k]) / Math.max(nu[k], 1e-9);
+      if (rel > dmax) dmax = rel;
+      nu[k] = nu[k] * 0.65 + nuNew * 0.35;
+    }
+    if (o.lin || dmax < tol) { conv = o.lin ? resid < tol : true; break; }
+  }
+  // linear co-energy ½∫A·J dV = π·Σ J·ψ·dr·dz (src already carries J·Δr·Δz) — the
+  // virtual-work referee for the gate's linear force identity
+  let Wco = 0;
+  for (let k = 0; k < N; k++) if (src[k] !== 0) Wco += src[k] * psi[k];
+  Wco *= Math.PI;
+  // NONLINEAR co-energy W' = ∫ w'(H) dV with the same Froelich curve the solve used:
+  // B(H) = a·H/(b+H)  ⇒  w'(H) = ∫₀ᴴ B dH' = a·(H − b·ln(1+H/b)); air is B²/2μ0.
+  // The body derate (ν/feS) means H_model = Hof(B)/feS, so w' picks up the same 1/feS.
+  // This is what the published pull force differentiates — volume-integrated, so it does
+  // NOT inherit the corner-singularity noise that makes the Maxwell-stress force drift
+  // under refinement on re-entrant pole corners.
+  let Wnl = 0;
+  for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++) {
+    const k = i * nz + j, mt = matOf(regB[k]);
+    const dV = 2 * Math.PI * rCB[i] * drB[i] * dzB[j];
+    if (!mt) { Wnl += (Bmag[k] * Bmag[k]) / (2 * MU0) * dV; continue; }
+    const a9 = mt.bsat || 2, b9 = a9 / ((mt.muri || 800) * MU0);
+    const H0 = Hof(Math.min(Bmag[k], a9 * 0.979), mt);
+    const w9 = a9 * (H0 - b9 * Math.log(1 + H0 / b9));
+    Wnl += (regB[k] === BRK_BODY ? w9 / feF : w9) * dV;
+  }
+  return { psi, B: Bmag, Br: Brf, Bz: Bzf, nu, conv, sweeps, resid, Wco, Wnl };
+}
+
+/* Pole-face fluxes (exact ψ bookkeeping), gap B profile, and Maxwell force on a
+   closed box around the armature. */
+function brakeGapQuantities(p, msh, s) {
+  const { nr, nz, rCB, zCB, drB, dzB } = msh;
+  const psi = s.psi, Brf = s.Br, Bzf = s.Bz;
+  // ψ interpolated at radius r along one axial row
+  const psiAt = (j, r9) => {
+    if (r9 <= rCB[0]) return psi[0 * nz + j] * (r9 * r9) / (rCB[0] * rCB[0]);
+    for (let i = 1; i < nr; i++) {
+      if (rCB[i] >= r9) {
+        const f9 = (r9 - rCB[i - 1]) / (rCB[i] - rCB[i - 1]);
+        return psi[(i - 1) * nz + j] + f9 * (psi[i * nz + j] - psi[(i - 1) * nz + j]);
+      }
+    }
+    return psi[(nr - 1) * nz + j];
+  };
+  // gap mid-plane row
+  let jGap = 0, best = Infinity;
+  const zMid = (msh.zFace + msh.zGap) / 2;
+  for (let j = 0; j < nz; j++) { const d9 = Math.abs(zCB[j] - zMid); if (d9 < best) { best = d9; jGap = j; } }
+  const PhiIn = 2 * Math.PI * (psiAt(jGap, msh.rBoss) - psiAt(jGap, msh.rThru));
+  const PhiOut = 2 * Math.PI * (psiAt(jGap, msh.rOD) - psiAt(jGap, msh.rPkt));
+  const Ain = Math.PI * (msh.rBoss * msh.rBoss - msh.rThru * msh.rThru);
+  const Aout = Math.PI * (msh.rOD * msh.rOD - msh.rPkt * msh.rPkt);
+  const Bin = Math.abs(PhiIn) / Ain, Bout = Math.abs(PhiOut) / Aout;
+  // conservation: boss flux returns through the rim; the residual is real leakage out
+  // of the pole system (mostly into the margin air), reported, not hidden
+  const leak = Math.abs(PhiIn + PhiOut) / Math.max(Math.abs(PhiIn), Math.abs(PhiOut), 1e-12);
+  // ring-exact B_z on an axial row: the mean B_z over the annulus [rf_i, rf_i+1] is
+  // ΔΦ/ΔA = 2π·Δψ_face / (π·Δr²) with ψ interpolated to the faces. This reads the flux
+  // bookkeeping directly instead of a finite-difference stencil, so the Maxwell-stress
+  // integral below doesn't inherit stencil noise at the pole edges (the lesson the polar
+  // solver's cogging study taught: stress integrals amplify discretization noise).
+  const { rfB } = msh;
+  const bzRing = (j) => {
+    const out = new Float64Array(nr);
+    let pPrev = 0;                                        // ψ = 0 at the axis shell
+    for (let i = 0; i < nr; i++) {
+      const pNext = i === nr - 1 ? 0
+        : psi[i * nz + j] + ((psi[(i + 1) * nz + j] - psi[i * nz + j]) * (rfB[i + 1] - rCB[i])) / (rCB[i + 1] - rCB[i]);
+      out[i] = (2 * (pNext - pPrev)) / (rfB[i + 1] * rfB[i + 1] - rfB[i] * rfB[i]);
+      pPrev = pNext;
+    }
+    return out;
+  };
+  // gap B_z(r) profile for the plot (ring-exact at the gap mid-plane)
+  const bzGap = bzRing(jGap);
+  const prof = [];
+  for (let i = 0; i < nr; i++) prof.push({ r: rCB[i] * 1000, Bz: bzGap[i] });
+  // Maxwell stress on a closed box around the armature: a gap plane (below), a plane
+  // above the armature, and the outer cylinder between them. T_zz = (Bz²−Br²)/2μ0,
+  // T_zr = BrBz/μ0. The bottom-plane integral is AVERAGED over every strictly-interior
+  // gap row (Arkkio-style) — the same reason gapQuantities averages several mid-gap
+  // circles: a single-plane stress integral near re-entrant pole corners is noisy.
+  let jHi = nz - 1, bestH = Infinity;
+  const zHi = (msh.zArm + msh.zTop) / 2;
+  for (let j = 0; j < nz; j++) { const d9 = Math.abs(zCB[j] - zHi); if (d9 < bestH) { bestH = d9; jHi = j; } }
+  let iSide = nr - 1, bestS = Infinity;
+  const rSide = (msh.rOD + msh.rOut) / 2;
+  for (let i = 0; i < nr; i++) { const d9 = Math.abs(rCB[i] - rSide); if (d9 < bestS) { bestS = d9; iSide = i; } }
+  const bzHi = bzRing(jHi);
+  let topSide = 0;
+  for (let i = 0; i <= iSide; i++) {
+    const kHi = i * nz + jHi;
+    topSide += ((bzHi[i] * bzHi[i] - Brf[kHi] * Brf[kHi]) / (2 * MU0)) * 2 * Math.PI * rCB[i] * drB[i];
+  }
+  const gapRows = [];
+  for (let j = 0; j < nz; j++) if (zCB[j] > msh.zFace + 0.15 * msh.g && zCB[j] < msh.zGap - 0.15 * msh.g) gapRows.push(j);
+  if (!gapRows.length) gapRows.push(jGap);
+  let Fsum = 0;
+  for (const jLo of gapRows) {
+    const bzLo = jLo === jGap ? bzGap : bzRing(jLo);
+    let bot = 0;
+    for (let i = 0; i <= iSide; i++) {
+      const kLo = i * nz + jLo;
+      bot += ((bzLo[i] * bzLo[i] - Brf[kLo] * Brf[kLo]) / (2 * MU0)) * 2 * Math.PI * rCB[i] * drB[i];
+    }
+    let side = 0;
+    for (let j = jLo + 1; j < jHi; j++) {
+      const k = iSide * nz + j;
+      side += (Brf[k] * Bzf[k] / MU0) * 2 * Math.PI * rCB[iSide] * dzB[j];
+    }
+    Fsum += topSide - bot + side;
+  }
+  const Fz = Fsum / gapRows.length;
+  // attraction pulls the armature toward the backiron (−z); publish the pull magnitude
+  return { F: Math.max(-Fz, 0), Fz, PhiIn, PhiOut, Bin, Bout, leak, prof, jGap,
+    Ain: Ain * 1e6, Aout: Aout * 1e6 };
+}
+
+/* App-facing brake study. Solves the WORKING gap (release-margin governing case) and
+   the seated residual gap (holding case), cross-checks both against the reluctance
+   circuit, and self-verifies the working-gap solve on a ~1.4× finer mesh.
+   opts: { nr, nz, quick, verify }. Pure. */
+function fieldStudyBrake(p, r, opts) {
+  const o = opts || {};
+  if (p.motorType !== "brake") return { err: "This solve is for the spring-applied brake." };
+  if (!r || r.err.length) return { err: "Fix the design's errors before solving the field." };
+  if (!r.brake || !(r.brake.NI > 0)) return { err: "Coil drives no ampere-turns — check bus voltage and coil turns." };
+  const nrH = Math.max(Math.round(o.nr || 48), 24), nzH = Math.max(Math.round(o.nz || 44), 24);
+  const nl0 = o.nl || (o.quick ? 14 : 26), sw0 = o.sweeps || (o.quick ? 120 : 220);
+  const g0 = Math.max(o.gapOv > 0 ? o.gapOv : p.brkStroke, 0.05);  // gapOv (mm): gate hook for the virtual-work force check
+  const NI = r.brake.NI;
+  const solveGap = (gapMM, nr9, nz9, sw9) => {
+    const msh = brakeMesh(p, r, gapMM, nr9, nz9);
+    // linear mode gets the whole budget in ONE sweep block (no nonlinear restarts to
+    // re-enter it) and unsaturated iron is a stiffer contrast — converges slower
+    const s = brakeSolve(p, msh, NI, { nl: nl0, sweeps: o.lin ? Math.max(sw9 * 16, 2500) : sw9, lin: !!o.lin });
+    return { msh, s, g: brakeGapQuantities(p, msh, s) };
+  };
+  const W = solveGap(g0, nrH, nzH, sw0);            // display state: flux map, Bin/Bout, leakage
+  // gate hook: the LINEAR identity check needs only this state's Maxwell force and ½LI²
+  // co-energy — skip the virtual-work pairs (they'd re-run 2500-sweep linear solves)
+  if (o.lin) return {
+    msh: W.msh, psi: W.s.psi, B: W.s.B, conv: W.s.conv, sweeps: W.s.sweeps, resid: W.s.resid,
+    Wco: W.s.Wco, F: W.g.F, Bin: W.g.Bin, Bout: W.g.Bout, leak: W.g.leak, prof: W.g.prof,
+    NI, nr: W.msh.nr, nz: W.msh.nz, gapMM: g0, lin: true, cmp: {}, mesh: null,
+  };
+  // seated state (residual gap 0.05 mm, the circuit's gRes) — the holding case
+  const S = solveGap(0.05, nrH, nzH, sw0);
+  let mesh = null;
+  if (o.verify) {
+    const V = solveGap(g0, Math.round(nrH * 1.4), Math.round(nzH * 1.4), Math.round(sw0 * 1.6));
+    const dF = W.g.F > 0 ? Math.abs(V.g.F - W.g.F) / W.g.F : NaN;
+    const dBin = W.g.Bin > 0 ? Math.abs(V.g.Bin - W.g.Bin) / W.g.Bin : NaN;
+    mesh = { nr2: V.msh.nr, nz2: V.msh.nz, F2: V.g.F, Bin2: V.g.Bin, dF, dBin,
+      ok: Number.isFinite(dF) && dF < 0.07 && Number.isFinite(dBin) && dBin < 0.05 };
+  }
+  return {
+    msh: W.msh, psi: W.s.psi, B: W.s.B, conv: W.s.conv, sweeps: W.s.sweeps, resid: W.s.resid,
+    F: W.g.F, Fseat: S.g.F, Bin: W.g.Bin, Bout: W.g.Bout, BinSeat: S.g.Bin,
+    leak: W.g.leak, prof: W.g.prof, mesh, NI,
+    cmp: {
+      Fcir: r.brake.Fpull, dF: r.brake.Fpull > 0 ? W.g.F / r.brake.Fpull - 1 : NaN,
+      FseatCir: r.brake.Fseat, dFseat: r.brake.Fseat > 0 ? S.g.F / r.brake.Fseat - 1 : NaN,
+      BinCir: r.brake.Bin, BoutCir: r.brake.Bout,
+    },
+    nr: W.msh.nr, nz: W.msh.nz, gapMM: g0,
   };
 }
 
@@ -6255,6 +6862,132 @@ function GapWaveform({ F, us }) {
   );
 }
 
+/* ---- v61.4 brake field plot: axisymmetric r-z half-section from fieldStudyBrake.
+   |B| shading over the solve grid; the flux lines are iso-ψ contours, which in an
+   axisymmetric solve ARE the flux surfaces (Φ through a disc of radius r = 2π·ψ), so
+   again no streamline integration. Geometry outlines come from the same mesh the
+   solver used — what you see is exactly what was solved. ---- */
+function BrakeFieldPlot({ F, p, us }) {
+  if (!F || F.err || !F.msh) return null;
+  const m = F.msh, { nr, nz, rfB, zfB, rCB, zCB } = m;
+  const W = 430, H = 320, mL = 30, mB = 12, mT = 16, mR = 10;
+  const k = Math.min((W - mL - mR) / m.rOut, (H - mT - mB) / (m.zTop - m.zBot));
+  const X = (r9) => mL + r9 * k;
+  const Y = (z9) => H - mB - (z9 - m.zBot) * k;
+  const bodyM = STEELS[p.statorMat] || STEELS["1018 steel (solid)"];
+  const bsat = bodyM.bsat || 2.05;
+  const els = [];
+  // |B| shading, downsampled to keep the SVG light
+  const si = Math.max(1, Math.ceil(nr / 60)), sj = Math.max(1, Math.ceil(nz / 60));
+  for (let i = 0; i < nr; i += si) {
+    const i2 = Math.min(i + si, nr);
+    for (let j = 0; j < nz; j += sj) {
+      const j2 = Math.min(j + sj, nz);
+      let acc = 0, n9 = 0;
+      for (let ii = i; ii < i2; ii++) for (let jj = j; jj < j2; jj++) { acc += F.B[ii * nz + jj]; n9++; }
+      const x0 = X(rfB[i]), x1 = X(rfB[i2]);
+      const y0 = Y(zfB[j2]), y1 = Y(zfB[j]);
+      els.push(<rect key={`b${i}-${j}`} x={x0.toFixed(1)} y={y0.toFixed(1)}
+        width={(x1 - x0).toFixed(1)} height={(y1 - y0).toFixed(1)}
+        fill={bCol(acc / Math.max(n9, 1), bsat)} stroke="none" shapeRendering="crispEdges" />);
+    }
+  }
+  // flux surfaces: iso-ψ by marching squares on the rectangular grid of cell centers
+  {
+    let pMin = Infinity, pMax = -Infinity;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++) {
+      const v = F.psi[i * nz + j];
+      if (v < pMin) pMin = v; if (v > pMax) pMax = v;
+    }
+    const NL = 18;
+    for (let L = 1; L < NL; L++) {
+      const lv = pMin + ((pMax - pMin) * L) / NL;
+      const segs = [];
+      for (let i = 0; i < nr - 1; i++) for (let j = 0; j < nz - 1; j++) {
+        const v = [F.psi[i * nz + j], F.psi[(i + 1) * nz + j], F.psi[(i + 1) * nz + j + 1], F.psi[i * nz + j + 1]];
+        const P = [[rCB[i], zCB[j]], [rCB[i + 1], zCB[j]], [rCB[i + 1], zCB[j + 1]], [rCB[i], zCB[j + 1]]];
+        const cr = [];
+        for (let e = 0; e < 4; e++) {
+          const a9 = v[e], b9 = v[(e + 1) % 4];
+          if ((a9 - lv) * (b9 - lv) < 0) {
+            const f9 = (lv - a9) / (b9 - a9);
+            const pa = P[e], pb = P[(e + 1) % 4];
+            cr.push([X(pa[0] + f9 * (pb[0] - pa[0])), Y(pa[1] + f9 * (pb[1] - pa[1]))]);
+          }
+        }
+        if (cr.length === 2)
+          segs.push(`M ${cr[0][0].toFixed(1)} ${cr[0][1].toFixed(1)} L ${cr[1][0].toFixed(1)} ${cr[1][1].toFixed(1)}`);
+      }
+      if (segs.length) els.push(<path key={`f${L}`} d={segs.join(" ")} fill="none" stroke="#0F172A" strokeWidth="0.7" opacity="0.6" />);
+    }
+  }
+  // geometry outlines from the solved mesh: backiron L-section with its pocket,
+  // armature plate, wound coil, axis
+  const pt = (r9, z9) => `${X(r9).toFixed(1)} ${Y(z9).toFixed(1)}`;
+  const body = `M ${pt(m.rThru, 0)} L ${pt(m.rOD, 0)} L ${pt(m.rOD, m.zFace)} L ${pt(m.rPkt, m.zFace)} L ${pt(m.rPkt, m.zPkt)} L ${pt(m.rBoss, m.zPkt)} L ${pt(m.rBoss, m.zFace)} L ${pt(m.rThru, m.zFace)} Z`;
+  els.push(<path key="body" d={body} fill="none" stroke="#334155" strokeWidth="1.1" />);
+  els.push(<rect key="arm" x={X(m.rThru).toFixed(1)} y={Y(m.zArm).toFixed(1)}
+    width={(X(m.rOD) - X(m.rThru)).toFixed(1)} height={(Y(m.zGap) - Y(m.zArm)).toFixed(1)}
+    fill="none" stroke="#334155" strokeWidth="1.1" />);
+  els.push(<rect key="coil" x={X(m.rBobIn).toFixed(1)} y={Y(m.zCoil1).toFixed(1)}
+    width={(X(m.rCoil) - X(m.rBobIn)).toFixed(1)} height={(Y(m.zCoil0) - Y(m.zCoil1)).toFixed(1)}
+    fill="none" stroke="#B87333" strokeWidth="1.2" strokeDasharray="4 2" />);
+  els.push(<line key="axis" x1={X(0)} y1={Y(m.zBot)} x2={X(0)} y2={Y(m.zTop)} stroke="#94A3B8" strokeWidth="0.8" strokeDasharray="6 3" />);
+  const dl = (mm9) => (us === "in" ? (mm9 / 25.4).toFixed(3) + "″" : mm9.toFixed(2) + " mm");
+  return (
+    <svg id="svg-brkfield" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      {els}
+      <text x={8} y={12} className="dim">{`|B| shading to ${bsat.toFixed(2)} T sat · ${F.nr}×${F.nz} cells · half-section, axis left`}</text>
+      <text x={W - 8} y={12} textAnchor="end" className="dim">{`working gap ${dl(F.gapMM)}`}</text>
+      <text x={W - 8} y={H - 4} textAnchor="end" className="dim">{F.conv ? "converged" : `residual ${F.resid.toExponential(1)}`}</text>
+      <text x={8} y={H - 4} className="dim">flux surfaces = iso-ψ contours (Φ = 2πψ)</text>
+      <text x={X((m.rBobIn + m.rCoil) / 2)} y={Y((m.zCoil0 + m.zCoil1) / 2) + 3} textAnchor="middle" className="dim" style={{ fill: "#B87333" }}>coil</text>
+      <text x={X((m.rThru + m.rOD) / 2)} y={Y(m.zArm) - 3} textAnchor="middle" className="dim">armature</text>
+      <text x={X((m.rThru + m.rOD) / 2)} y={Y(0) - 4} textAnchor="middle" className="dim">backiron</text>
+    </svg>
+  );
+}
+
+/* gap B_z(r) profile across the pole faces, with the reluctance circuit's uniform
+   Bin/Bout as dashed references — the visual of where the two models part ways */
+function BrakeGapProfile({ F }) {
+  if (!F || F.err || !F.prof || !F.prof.length) return null;
+  const m = F.msh;
+  const W = 430, H = 190, mL = 46, mB = 30, mT = 14, mR = 12;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const rMaxP = m.rOut * 1000;
+  const bMax = Math.max(...F.prof.map((q) => Math.abs(q.Bz)), F.cmp.BinCir || 0) * 1.12 || 1;
+  const X = (rmm) => mL + (PW * rmm) / rMaxP;
+  const Y = (b) => mT + PH / 2 - (PH / 2) * (b / bMax);
+  const path = F.prof.map((q, i) => `${i ? "L" : "M"} ${X(q.r).toFixed(1)} ${Y(q.Bz).toFixed(1)}`).join(" ");
+  // sign of the field under each face, so the circuit references land on the right side
+  const meanIn9 = (r0, r1) => {
+    let s9 = 0, n9 = 0;
+    for (const q of F.prof) if (q.r >= r0 * 1000 && q.r <= r1 * 1000) { s9 += q.Bz; n9++; }
+    return n9 ? Math.sign(s9 / n9) || 1 : 1;
+  };
+  const sIn = meanIn9(m.rThru, m.rBoss), sOut = meanIn9(m.rPkt, m.rOD);
+  return (
+    <svg id="svg-brkgap" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      <rect x={X(m.rThru * 1000)} y={mT} width={X(m.rBoss * 1000) - X(m.rThru * 1000)} height={PH} fill="#64748B" opacity="0.10" />
+      <rect x={X(m.rPkt * 1000)} y={mT} width={X(m.rOD * 1000) - X(m.rPkt * 1000)} height={PH} fill="#64748B" opacity="0.10" />
+      <line x1={mL} y1={mT + PH / 2} x2={W - mR} y2={mT + PH / 2} stroke={AXIS} strokeWidth="0.7" />
+      {F.cmp.BinCir > 0 && <line x1={X(m.rThru * 1000)} x2={X(m.rBoss * 1000)} y1={Y(sIn * F.cmp.BinCir)} y2={Y(sIn * F.cmp.BinCir)} stroke="#B45309" strokeWidth="1.1" strokeDasharray="5 3" />}
+      {F.cmp.BoutCir > 0 && <line x1={X(m.rPkt * 1000)} x2={X(m.rOD * 1000)} y1={Y(sOut * F.cmp.BoutCir)} y2={Y(sOut * F.cmp.BoutCir)} stroke="#B45309" strokeWidth="1.1" strokeDasharray="5 3" />}
+      <path d={path} fill="none" stroke="#2563EB" strokeWidth="1.4" />
+      <line x1={mL} y1={mT} x2={mL} y2={mT + PH} stroke={AXIS} />
+      <text x={mL - 5} y={mT + 6} textAnchor="end" className="tick">{bMax.toFixed(2)}</text>
+      <text x={mL - 5} y={mT + PH} textAnchor="end" className="tick">{(-bMax).toFixed(2)}</text>
+      <text x={mL + PW / 2} y={H - 4} textAnchor="middle" className="axis">radius (boss face and rim face shaded)</text>
+      <text x={13} y={mT + PH / 2} textAnchor="middle" transform={`rotate(-90 13 ${mT + PH / 2})`} className="axis">B axial (T)</text>
+      <text x={mL + 4} y={H - 18} className="dim" style={{ fill: "#2563EB" }}>solved, gap mid-plane</text>
+      <text x={mL + 140} y={H - 18} className="dim" style={{ fill: "#B45309" }}>dashed = circuit Bin / Bout (uniform)</text>
+    </svg>
+  );
+}
+
 /* ---- efficiency map: contoured, from the ENGINE's efficiencyMap() — the same loss
    chain the results column reports. Pre-v60 this view carried its own duplicate
    loss model (with a (n/n0)^1.5 iron-loss guess); it no longer computes physics. ---- */
@@ -8683,10 +9416,14 @@ export default function MotorDesigner() {
       // Normal/Fine verify themselves against a ~1.4x finer mesh (roughly doubles the
       // time and is worth it): a gate can only prove convergence for the designs it
       // tested, and at least one preset needed more iteration than the tested ones.
-      const cfg = fieldRes === "fine" ? { nr: 76, nth: 432, verify: true }
-        : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288, verify: true };
+      // v61.4: the brake dispatches to its own axisymmetric r-z solve.
+      const cfg = p.motorType === "brake"
+        ? (fieldRes === "fine" ? { nr: 64, nz: 58, verify: true }
+          : fieldRes === "fast" ? { nr: 36, nz: 34, quick: true } : { nr: 48, nz: 44, verify: true })
+        : (fieldRes === "fine" ? { nr: 76, nth: 432, verify: true }
+          : fieldRes === "fast" ? { nr: 36, nth: 216, quick: true } : { nr: 56, nth: 288, verify: true });
       const t0 = Date.now();
-      const F = fieldStudy(p, r, cfg);
+      const F = p.motorType === "brake" ? fieldStudyBrake(p, r, cfg) : fieldStudy(p, r, cfg);
       setField(F && !F.err ? { ...F, ms: Date.now() - t0 } : F);
       setFieldOf(JSON.stringify(p));
       setFieldBusy(false);
@@ -10299,12 +11036,25 @@ export default function MotorDesigner() {
             </div>
           )}
 
-          {pm && !r.err.length && (
+          {(pm || latmM || stpM || brkM) && !r.err.length && (
             <div className="card paper" style={{ marginTop: 14 }}>
               <div className="cardhead">
-                <h2>Field solution (2-D magnetostatic)</h2>
-                {field && !field.err && <button className="btn mini ghost" onClick={() => exportPng("svg-field", "field-plot.png")}>PNG ⤓</button>}
+                <h2>{brkM ? "Field solution (axisymmetric r-z)" : "Field solution (2-D magnetostatic)"}</h2>
+                {field && !field.err && <button className="btn mini ghost" onClick={() => exportPng(brkM ? "svg-brkfield" : "svg-field", "field-plot.png")}>PNG ⤓</button>}
               </div>
+              {/* v61.4: the hybrid stepper is refused up front, not on click — its flux path is
+                  3-D and no 2-D section represents it (fieldStudy documents why) */}
+              {stpM && p.stpKind !== "pm" ? (
+                <div className="note">
+                  No field solve for the hybrid stepper — its flux path is three-dimensional: an
+                  axially magnetized PM disc between two toothed cups offset by half a tooth pitch,
+                  with the bias flux entering every cross-section from outside the plane. Any 2-D
+                  solve (this one, or a FEMM planar model) describes a different machine, so the
+                  tool refuses rather than reporting a confident wrong number. PM-type steppers
+                  solve. Hybrid flux paths need 3-D FEA.
+                </div>
+              ) : (
+              <>
               <div className="iobar">
                 <button className="btn" onClick={runField} disabled={fieldBusy}>
                   {fieldBusy ? "Solving…" : field ? "Re-solve" : "Solve field"}</button>
@@ -10312,12 +11062,30 @@ export default function MotorDesigner() {
                   opts={[{ v: "fast", t: "Fast" }, { v: "normal", t: "Normal" }, { v: "fine", t: "Fine" }]} />
               </div>
               <div className="note" style={{ marginTop: 2 }}>
-                Nonlinear vector-potential solve on a graded polar mesh, magnets as equivalent
-                magnetization currents, the same Froelich BH curve the analytical core uses. Runs
-                on demand — it is a real solve, not a formula.
+                {brkM
+                  ? `Nonlinear stream-function (ψ = r·Aθ) solve of the pot core in the r-z half-plane —
+                     coil ampere-turns as the source, the same Froelich BH curves the circuit uses, solved
+                     at the working gap and at the seated residual gap. Flux surfaces and pole-face fluxes
+                     are exact bookkeeping on ψ. Runs on demand — it is a real solve, not a formula.`
+                  : brM
+                  ? `Nonlinear vector-potential solve on the INVERTED polar mesh a brushed machine needs —
+                     magnet ring on the housing ID, slots on the rotating armature opening outward, shaft
+                     carrying its share of the 2-pole return flux. Same solver, same Froelich BH curves.
+                     Runs on demand — it is a real solve, not a formula.`
+                  : latmM
+                  ? `Nonlinear vector-potential solve on the slotless mesh: arc magnets, then one air band
+                     of airgap + winding (copper is magnetically air, matching the circuit's own gap
+                     convention), then the un-slotted ring core. Runs on demand — a real solve, not a formula.`
+                  : stpM
+                  ? `Nonlinear vector-potential solve of the PM stepper's ring-magnet rotor in the
+                     salient-pole stator, poles taken from the pole-pair count. Same solver and BH curves
+                     as the BLDC card. Runs on demand — a real solve, not a formula.`
+                  : `Nonlinear vector-potential solve on a graded polar mesh, magnets as equivalent
+                     magnetization currents, the same Froelich BH curve the analytical core uses. Runs
+                     on demand — it is a real solve, not a formula.`}
               </div>
               {field && field.err && <div className="warn errb">{field.err}</div>}
-              {field && !field.err && (
+              {field && !field.err && !brkM && field.gap && field.gap.Br && (
                 <>
                   {fieldStale && <div className="warn">The design has changed since this solve — re-solve to match the numbers above.</div>}
                   <FieldPlot F={field} p={p} us={us} />
@@ -10326,14 +11094,24 @@ export default function MotorDesigner() {
                   <div className="tbl" style={{ marginTop: 8 }}>
                     <div className="kv"><span>Peak / fundamental gap flux density</span>
                       <b>{field.gap.Bpk.toFixed(3)} / {field.B1.toFixed(3)} T</b></div>
-                    <div className="kv"><span>vs the magnetic-circuit model (fundamental)</span>
-                      <b style={{ color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" }}>
-                        {r.B1.toFixed(3)} T analytic · {(field.cmp.dB1 * 100).toFixed(1)}% difference</b></div>
+                    {/* the cross-check row targets what THIS branch's circuit quotes: a fundamental
+                        for PM/brushed (r.B1, saturation folded in), a plateau for LATM (latm.Bg)
+                        and the PM stepper (step.BtBias) */}
+                    {pm ? (
+                      <div className="kv"><span>vs the magnetic-circuit model (fundamental)</span>
+                        <b style={{ color: Math.abs(field.cmp.dB1) < 0.1 ? "#059669" : Math.abs(field.cmp.dB1) < 0.25 ? "#B45309" : "#DC2626" }}>
+                          {r.B1.toFixed(3)} T analytic · {(field.cmp.dB1 * 100).toFixed(1)}% difference</b></div>
+                    ) : (
+                      <div className="kv"><span>{latmM ? "vs the slotless circuit's plateau Bg (in-arc mean)" : "vs the circuit's aligned-pole bias (in-arc mean)"}</span>
+                        <b style={{ color: Math.abs(field.cmp.dBg) < 0.1 ? "#059669" : Math.abs(field.cmp.dBg) < 0.25 ? "#B45309" : "#DC2626" }}>
+                          {field.cmp.BgAnalytic.toFixed(3)} T analytic · field {field.BgBar.toFixed(3)} T · {(field.cmp.dBg * 100).toFixed(1)}% difference</b></div>
+                    )}
                     {/* v60.7: field-informed leakage — the kl that reconciles THIS design's circuit
                         to its own 2-D solve. Adoption is explicit and visible; preset loads clear it
                         (klOv lives in DEFAULT_P). A geometry closed form was tried and lost to the
-                        field referee across all PM presets — see the engine comment. */}
-                    {r.kl > 0 && field.B1 > 0 && r.B1 > 0 && (() => {
+                        field referee across all PM presets — see the engine comment. PM branch only:
+                        the brushed circuit keeps its fixed disclosed 0.9 (no klOv plumbing there). */}
+                    {p.motorType === "pm" && r.kl > 0 && field.B1 > 0 && r.B1 > 0 && (() => {
                       const klEst = Math.min(Math.max(r.kl * (field.B1 / r.B1), 0.5), 1.0);
                       const adopt = () => {
                         // iterate: the saturation loop is nonlinear in kl, so one-shot
@@ -10372,19 +11150,91 @@ export default function MotorDesigner() {
                     analytical model as the source for this geometry.
                   </div>}
                   <div className="note">
-                    The comparison row is the point of this card: where the field solve and the
-                    magnetic circuit agree, the fast model is trustworthy for sweeps; where they
-                    diverge, the circuit is missing something (thick magnets starving the back iron
-                    is the usual culprit — the circuit keeps predicting more flux, the field says
-                    the iron ran out). <b>Cogging torque is deliberately not reported here:</b> it
-                    failed its own mesh-convergence study on this structured mesh, so the analytical
-                    cogging model above remains the source. Magnetostatic and no-load: no eddy
-                    currents, no hysteresis, no stator current.
+                    {pm ? (
+                      <>
+                        The comparison row is the point of this card: where the field solve and the
+                        magnetic circuit agree, the fast model is trustworthy for sweeps; where they
+                        diverge, the circuit is missing something ({brM
+                          ? "the brushed circuit keeps its fixed 0.9 leakage factor and a lumped housing wall — the field typically reads it conservative"
+                          : "thick magnets starving the back iron is the usual culprit — the circuit keeps predicting more flux, the field says the iron ran out"}).{" "}
+                        <b>Cogging torque is deliberately not reported here:</b> it failed its own
+                        mesh-convergence study on this structured mesh, so the analytical cogging model
+                        above remains the source. Magnetostatic and no-load: no eddy currents, no
+                        hysteresis, no {brM ? "armature current (armature reaction is the circuit's satOfI job)" : "stator current"}.
+                      </>
+                    ) : latmM ? (
+                      <>
+                        The comparison row is the point of this card: the slotless circuit's Bg is a 1-D
+                        plateau with no fringing, while the solve shows the pole-edge fringing that the
+                        torque model handles separately (its tanh-smoothed edges) — expect the field's
+                        in-arc mean a little BELOW the circuit, more so on large-gap designs. Where they
+                        differ badly, the circuit's gap chain (airgap + winding + magnet/μr) is missing
+                        something real. Magnetostatic and unexcited: no coil current in this solve.
+                      </>
+                    ) : (
+                      <>
+                        The comparison row is the point of this card: the stepper circuit's aligned-pole
+                        bias is a 1-D estimate with Carter's coefficient at the pole pitch; the solve
+                        shows the real salient-pole field. Magnetostatic and unexcited — holding torque
+                        and detent stay with the analytical model above. The hybrid stepper does not
+                        solve here at all (3-D flux path); this card covers the PM type only.
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+              {/* v61.4: brake result — axisymmetric r-z. The shape guards (field.prof / field.gap
+                  above) keep a stale result from another machine type from rendering here. */}
+              {field && !field.err && brkM && field.prof && (
+                <>
+                  {fieldStale && <div className="warn">The design has changed since this solve — re-solve to match the numbers above.</div>}
+                  <BrakeFieldPlot F={field} p={p} us={us} />
+                  <h2 style={{ marginTop: 12 }}>Gap flux profile</h2>
+                  <BrakeGapProfile F={field} />
+                  <div className="tbl" style={{ marginTop: 8 }}>
+                    <div className="kv"><span>Pull at the working gap ({fmt(field.gapMM, 2)} mm)</span>
+                      <b style={{ color: Math.abs(field.cmp.dF) < 0.15 ? "#059669" : Math.abs(field.cmp.dF) < 0.35 ? "#B45309" : "#DC2626" }}>
+                        {fmt(field.F, 1)} N · circuit {fmt(field.cmp.Fcir, 1)} N · {(field.cmp.dF * 100).toFixed(1)}%</b></div>
+                    {r.brake && r.brake.Fcompr > 0 && <div className="kv"><span>Release margin vs springs compressed ({fmt(r.brake.Fcompr, 0)} N)</span>
+                      <b style={{ color: field.F / r.brake.Fcompr >= 1.3 ? "#059669" : field.F / r.brake.Fcompr >= 1 ? "#B45309" : "#DC2626" }}>
+                        ×{(field.F / r.brake.Fcompr).toFixed(2)} field · ×{r.brake.marginRel.toFixed(2)} circuit</b></div>}
+                    <div className="kv"><span>Pull seated (0.05 mm residual gap)</span>
+                      <b>{fmt(field.Fseat, 1)} N · circuit {fmt(field.cmp.FseatCir, 1)} N · {(field.cmp.dFseat * 100).toFixed(1)}%</b></div>
+                    <div className="kv"><span>Boss / rim face flux density (field vs circuit)</span>
+                      <b>{field.Bin.toFixed(2)} / {field.Bout.toFixed(2)} T vs {field.cmp.BinCir.toFixed(2)} / {field.cmp.BoutCir.toFixed(2)} T</b></div>
+                    <div className="kv"><span>Flux crossing the coil window past the gap (leakage the circuit ignores)</span>
+                      <b>{(field.leak * 100).toFixed(1)}%</b></div>
+                    <div className="kv"><span>Mesh · solve</span>
+                      <b>{field.nr}×{field.nz} cells × 3 states · {field.ms} ms · {field.conv ? "converged" : `residual ${field.resid.toExponential(1)}`}</b></div>
+                    {field.mesh && <div className="kv"><span>Mesh check (re-solved {field.mesh.nr2}×{field.mesh.nz2})</span>
+                      <b style={{ color: field.mesh.ok ? "#059669" : "#DC2626" }}>
+                        {field.mesh.ok ? "converged — " : "NOT converged — "}
+                        pull moves {(field.mesh.dF * 100).toFixed(1)}%, boss flux {(field.mesh.dBin * 100).toFixed(1)}%</b></div>}
+                  </div>
+                  {field.mesh && !field.mesh.ok && <div className="warn errb">
+                    This brake's field numbers are NOT mesh-independent — they moved when re-solved
+                    on a finer mesh, so do not quote them. Try Fine, or treat the reluctance circuit
+                    as the source for this geometry.
+                  </div>}
+                  <div className="note">
+                    The margin row is the point of this card. The reluctance circuit reaches the
+                    armature through three lumped reluctances and cannot see the flux that crosses
+                    the coil window without ever reaching the armature, nor the pole-edge fringing —
+                    across the shipped presets it reads pull 15–30% HIGHER than the field at the
+                    working gap, which is exactly the optimistic direction for a release-margin
+                    decision. Force is Maxwell stress on a closed box around the armature, averaged
+                    over every interior gap plane, and its integration is cross-checked against a
+                    virtual-work identity in the field gate. Static solve: no eddy-current delay
+                    (the L/R release transient on the electrical card), no lining wear, and the
+                    back-iron derate (μ-scale) is applied here exactly as in the circuit.
                   </div>
                 </>
               )}
 
-              {/* v61: LOADED solve — winding currents in, torque + demag map out. */}
+              {/* v61: LOADED solve — winding currents in, torque + demag map out. PM only:
+                  the loaded source model is the 3-phase star-of-slots winding. */}
+              {p.motorType === "pm" && (
+              <>
               <div className="cardhead" style={{ marginTop: 14 }}>
                 <h2>Loaded solve — torque & demag map</h2>
               </div>
@@ -10437,6 +11287,10 @@ export default function MotorDesigner() {
                     is a harder demag case than any angle of this rated-current sweep.
                   </div>
                 </>
+              )}
+              </>
+              )}
+              </>
               )}
             </div>
           )}

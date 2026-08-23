@@ -703,3 +703,82 @@ original trigger; six commits, each suite-green. Highlights, worst first:
 
 Calibration interplay: PM peakT and all ACIM predictions moved — re-derive any captured
 calibration factors against the current model before judging model error.
+
+---
+
+# v61.4 — a flux map for every machine that can honestly have one (2026-08-22)
+
+The 2-D field card was BLDC/PMSM-only. It now covers four of the six machine types, each
+on the mesh its topology actually requires, plus a new axisymmetric solver for the brake —
+and it still refuses the one machine no 2-D section can represent.
+
+**New solves, one solver.** `fieldStudy` dispatches by machine type onto three radial
+region maps sharing `solveField` unchanged:
+
+- **Brushed** — `fieldMeshBrushed`, the inverted map the v60.4 refusal was waiting for:
+  magnet ring on the housing ID, slots on the rotating armature opening outward, shaft
+  carrying its share of the 2-pole return flux (the analytic circuit already credited it).
+  Cross-checked against the brushed branch's own r.B1. The old refusal text promised
+  "needs an inverted mesh — not yet implemented"; implemented, the gate assertion flipped
+  from "refuses" to "solves and agrees".
+- **LATM** — `fieldMeshSlotless`: arc magnets, ONE air band of airgap + winding (copper is
+  magnetically air; the iron bore sits at statorID/2 + latmWind to match the circuit's own
+  gap convention in latm.Bg), un-slotted ring core. Cross-checked as an in-arc plateau
+  mean against latm.Bg.
+- **PM stepper** — the standard salient-pole map with poles taken from 2·stpPP (the shared
+  poles input is hidden for steppers and stale). Cross-checked against step.BtBias.
+- **Brake** — new `fieldStudyBrake`: nonlinear stream-function (ψ = r·Aθ) finite-volume
+  solve of the pot core in the r-z half-plane, ADI line relaxation, coil ampere-turns as
+  the source (ΣJ·dA = NI exactly), solved at the working gap, seated, and a 1.4× verify.
+  ψ makes pole-face fluxes exact bookkeeping (Φ = 2πψ) and iso-ψ contours are the plot's
+  flux surfaces. Force is Maxwell stress on a closed box around the armature, averaged
+  over every interior gap plane, and the gate verifies the integration against an
+  independent virtual-work identity on linear-iron solve pairs (agreement 0.8–1.8%).
+  The back-iron derate brkFeScale enters as ν/s — the field-level statement of the
+  circuit's μ_eff = 1 + (μr−1)·s.
+
+**Refused, with reasons on the card.** The hybrid stepper's flux path is 3-D (axial PM
+disc between two toothed cups offset half a tooth pitch; the bias flux enters every
+cross-section from outside the plane) — the Step card says so up front instead of
+offering a button. ACIM still refuses (no PM source at no-load; a magnetizing-current
+loaded solve is possible future work, not this change).
+
+**Numerics that had to be earned** (each found by a measurement, not a review):
+
+- *2-pole stall.* Line relaxation converges the pole-pair mode at ~(nth/poles)² sweeps; a
+  2-pole brushed solve was still drifting after 9000 sweeps and read B1 45% LOW at the
+  default budget — dangerously plausible. Fix: coarse-in-θ cascade (same radial grading,
+  ~nth/4 first, periodic-linear lift, fine solve finishes), applied at poles ≤ 4 to both
+  the main and verify solves. 2-pole LATM went from −57% vs circuit to −13%.
+- *Froelich cliff limit cycle.* Hof jumps ~2× at 0.98·bsat; brake iron runs hard into
+  saturation and cells straddling the cliff flipped ν by orders of magnitude per pass
+  (dmax bounced 20–50 on the seated solve). Fix: ν update stays on the smooth branch
+  (cap 0.975·bsat) with heavier damping (0.65/0.35), brake solver only.
+- *Corner drift.* Even linear-iron brake force drifted −8% per 1.4× refinement on
+  uniform-per-region meshes — re-entrant pole-corner fields strengthen under refinement
+  (the cogging lesson in a new suit). Fixes: corner-graded mesh (fine bands at every pole
+  edge radius and iron face), per-sweep exit tightened to 0.02·tol (0.05 let fine grids
+  exit 9% low on creeping slow modes), and gap-plane averaging for the stress integral.
+  Result: mesh self-checks at 0.2–1.8% across all five brake presets.
+
+**Where field and circuit land** (quick-budget, all presets, recorded so drift is visible):
+brushed field reads the fixed-0.9-leakage circuit conservative by +12…+27% on B1; LATM
+in-arc mean sits −4…−18% below the no-fringing plateau (worse with larger gap+winding
+band — the direction is asserted in the gate); PM stepper −6…−14% of BtBias; brake pull
+−13…−30% of the circuit at the working gap and −20…−47% seated — the reluctance chain
+cannot see coil-window leakage (0.6–14% of pole flux, now reported per design) or
+pole-edge fringing, and it reads HIGH, the optimistic direction for a release margin.
+The brake card pairs the field and circuit release margins side by side.
+
+**Gates.** field-gate grew from ~60 to 102 checks: per-topology flux conservation,
+dominant-harmonic, circuit bands, parametric response (gap/derate/non-magnetic member),
+two-mesh convergence, the virtual-work force identity, and refusal assertions (hybrid
+3-D, brake-polar redirect, ACIM). Full 24-test suite green. No golden anchor moved, no
+calibrated prediction changed — ENGINE_VER stays 61.3b (the field card is a referee, not
+a predictor). kl adoption remains PM-only; the brushed circuit keeps its disclosed 0.9.
+
+UI: one field card serves all five solving types (per-type comparison rows and notes);
+the brake card adds the r-z flux map, a gap Bz(r) profile against the circuit's uniform
+Bin/Bout, and the field-vs-circuit release margin row. A stale-result crash on machine
+type switches (brake result rendering into the radial card) was found by the live
+Playwright pass and fixed with shape guards.

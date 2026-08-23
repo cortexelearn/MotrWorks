@@ -2356,6 +2356,132 @@ function GapWaveform({ F, us }) {
   );
 }
 
+/* ---- v61.4 brake field plot: axisymmetric r-z half-section from fieldStudyBrake.
+   |B| shading over the solve grid; the flux lines are iso-ψ contours, which in an
+   axisymmetric solve ARE the flux surfaces (Φ through a disc of radius r = 2π·ψ), so
+   again no streamline integration. Geometry outlines come from the same mesh the
+   solver used — what you see is exactly what was solved. ---- */
+function BrakeFieldPlot({ F, p, us }) {
+  if (!F || F.err || !F.msh) return null;
+  const m = F.msh, { nr, nz, rfB, zfB, rCB, zCB } = m;
+  const W = 430, H = 320, mL = 30, mB = 12, mT = 16, mR = 10;
+  const k = Math.min((W - mL - mR) / m.rOut, (H - mT - mB) / (m.zTop - m.zBot));
+  const X = (r9) => mL + r9 * k;
+  const Y = (z9) => H - mB - (z9 - m.zBot) * k;
+  const bodyM = STEELS[p.statorMat] || STEELS["1018 steel (solid)"];
+  const bsat = bodyM.bsat || 2.05;
+  const els = [];
+  // |B| shading, downsampled to keep the SVG light
+  const si = Math.max(1, Math.ceil(nr / 60)), sj = Math.max(1, Math.ceil(nz / 60));
+  for (let i = 0; i < nr; i += si) {
+    const i2 = Math.min(i + si, nr);
+    for (let j = 0; j < nz; j += sj) {
+      const j2 = Math.min(j + sj, nz);
+      let acc = 0, n9 = 0;
+      for (let ii = i; ii < i2; ii++) for (let jj = j; jj < j2; jj++) { acc += F.B[ii * nz + jj]; n9++; }
+      const x0 = X(rfB[i]), x1 = X(rfB[i2]);
+      const y0 = Y(zfB[j2]), y1 = Y(zfB[j]);
+      els.push(<rect key={`b${i}-${j}`} x={x0.toFixed(1)} y={y0.toFixed(1)}
+        width={(x1 - x0).toFixed(1)} height={(y1 - y0).toFixed(1)}
+        fill={bCol(acc / Math.max(n9, 1), bsat)} stroke="none" shapeRendering="crispEdges" />);
+    }
+  }
+  // flux surfaces: iso-ψ by marching squares on the rectangular grid of cell centers
+  {
+    let pMin = Infinity, pMax = -Infinity;
+    for (let i = 0; i < nr; i++) for (let j = 0; j < nz; j++) {
+      const v = F.psi[i * nz + j];
+      if (v < pMin) pMin = v; if (v > pMax) pMax = v;
+    }
+    const NL = 18;
+    for (let L = 1; L < NL; L++) {
+      const lv = pMin + ((pMax - pMin) * L) / NL;
+      const segs = [];
+      for (let i = 0; i < nr - 1; i++) for (let j = 0; j < nz - 1; j++) {
+        const v = [F.psi[i * nz + j], F.psi[(i + 1) * nz + j], F.psi[(i + 1) * nz + j + 1], F.psi[i * nz + j + 1]];
+        const P = [[rCB[i], zCB[j]], [rCB[i + 1], zCB[j]], [rCB[i + 1], zCB[j + 1]], [rCB[i], zCB[j + 1]]];
+        const cr = [];
+        for (let e = 0; e < 4; e++) {
+          const a9 = v[e], b9 = v[(e + 1) % 4];
+          if ((a9 - lv) * (b9 - lv) < 0) {
+            const f9 = (lv - a9) / (b9 - a9);
+            const pa = P[e], pb = P[(e + 1) % 4];
+            cr.push([X(pa[0] + f9 * (pb[0] - pa[0])), Y(pa[1] + f9 * (pb[1] - pa[1]))]);
+          }
+        }
+        if (cr.length === 2)
+          segs.push(`M ${cr[0][0].toFixed(1)} ${cr[0][1].toFixed(1)} L ${cr[1][0].toFixed(1)} ${cr[1][1].toFixed(1)}`);
+      }
+      if (segs.length) els.push(<path key={`f${L}`} d={segs.join(" ")} fill="none" stroke="#0F172A" strokeWidth="0.7" opacity="0.6" />);
+    }
+  }
+  // geometry outlines from the solved mesh: backiron L-section with its pocket,
+  // armature plate, wound coil, axis
+  const pt = (r9, z9) => `${X(r9).toFixed(1)} ${Y(z9).toFixed(1)}`;
+  const body = `M ${pt(m.rThru, 0)} L ${pt(m.rOD, 0)} L ${pt(m.rOD, m.zFace)} L ${pt(m.rPkt, m.zFace)} L ${pt(m.rPkt, m.zPkt)} L ${pt(m.rBoss, m.zPkt)} L ${pt(m.rBoss, m.zFace)} L ${pt(m.rThru, m.zFace)} Z`;
+  els.push(<path key="body" d={body} fill="none" stroke="#334155" strokeWidth="1.1" />);
+  els.push(<rect key="arm" x={X(m.rThru).toFixed(1)} y={Y(m.zArm).toFixed(1)}
+    width={(X(m.rOD) - X(m.rThru)).toFixed(1)} height={(Y(m.zGap) - Y(m.zArm)).toFixed(1)}
+    fill="none" stroke="#334155" strokeWidth="1.1" />);
+  els.push(<rect key="coil" x={X(m.rBobIn).toFixed(1)} y={Y(m.zCoil1).toFixed(1)}
+    width={(X(m.rCoil) - X(m.rBobIn)).toFixed(1)} height={(Y(m.zCoil0) - Y(m.zCoil1)).toFixed(1)}
+    fill="none" stroke="#B87333" strokeWidth="1.2" strokeDasharray="4 2" />);
+  els.push(<line key="axis" x1={X(0)} y1={Y(m.zBot)} x2={X(0)} y2={Y(m.zTop)} stroke="#94A3B8" strokeWidth="0.8" strokeDasharray="6 3" />);
+  const dl = (mm9) => (us === "in" ? (mm9 / 25.4).toFixed(3) + "″" : mm9.toFixed(2) + " mm");
+  return (
+    <svg id="svg-brkfield" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      {els}
+      <text x={8} y={12} className="dim">{`|B| shading to ${bsat.toFixed(2)} T sat · ${F.nr}×${F.nz} cells · half-section, axis left`}</text>
+      <text x={W - 8} y={12} textAnchor="end" className="dim">{`working gap ${dl(F.gapMM)}`}</text>
+      <text x={W - 8} y={H - 4} textAnchor="end" className="dim">{F.conv ? "converged" : `residual ${F.resid.toExponential(1)}`}</text>
+      <text x={8} y={H - 4} className="dim">flux surfaces = iso-ψ contours (Φ = 2πψ)</text>
+      <text x={X((m.rBobIn + m.rCoil) / 2)} y={Y((m.zCoil0 + m.zCoil1) / 2) + 3} textAnchor="middle" className="dim" style={{ fill: "#B87333" }}>coil</text>
+      <text x={X((m.rThru + m.rOD) / 2)} y={Y(m.zArm) - 3} textAnchor="middle" className="dim">armature</text>
+      <text x={X((m.rThru + m.rOD) / 2)} y={Y(0) - 4} textAnchor="middle" className="dim">backiron</text>
+    </svg>
+  );
+}
+
+/* gap B_z(r) profile across the pole faces, with the reluctance circuit's uniform
+   Bin/Bout as dashed references — the visual of where the two models part ways */
+function BrakeGapProfile({ F }) {
+  if (!F || F.err || !F.prof || !F.prof.length) return null;
+  const m = F.msh;
+  const W = 430, H = 190, mL = 46, mB = 30, mT = 14, mR = 12;
+  const PW = W - mL - mR, PH = H - mB - mT;
+  const rMaxP = m.rOut * 1000;
+  const bMax = Math.max(...F.prof.map((q) => Math.abs(q.Bz)), F.cmp.BinCir || 0) * 1.12 || 1;
+  const X = (rmm) => mL + (PW * rmm) / rMaxP;
+  const Y = (b) => mT + PH / 2 - (PH / 2) * (b / bMax);
+  const path = F.prof.map((q, i) => `${i ? "L" : "M"} ${X(q.r).toFixed(1)} ${Y(q.Bz).toFixed(1)}`).join(" ");
+  // sign of the field under each face, so the circuit references land on the right side
+  const meanIn9 = (r0, r1) => {
+    let s9 = 0, n9 = 0;
+    for (const q of F.prof) if (q.r >= r0 * 1000 && q.r <= r1 * 1000) { s9 += q.Bz; n9++; }
+    return n9 ? Math.sign(s9 / n9) || 1 : 1;
+  };
+  const sIn = meanIn9(m.rThru, m.rBoss), sOut = meanIn9(m.rPkt, m.rOD);
+  return (
+    <svg id="svg-brkgap" xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${W} ${H}`} className="chart">
+      <style>{SVGCSS}</style>
+      <rect x={X(m.rThru * 1000)} y={mT} width={X(m.rBoss * 1000) - X(m.rThru * 1000)} height={PH} fill="#64748B" opacity="0.10" />
+      <rect x={X(m.rPkt * 1000)} y={mT} width={X(m.rOD * 1000) - X(m.rPkt * 1000)} height={PH} fill="#64748B" opacity="0.10" />
+      <line x1={mL} y1={mT + PH / 2} x2={W - mR} y2={mT + PH / 2} stroke={AXIS} strokeWidth="0.7" />
+      {F.cmp.BinCir > 0 && <line x1={X(m.rThru * 1000)} x2={X(m.rBoss * 1000)} y1={Y(sIn * F.cmp.BinCir)} y2={Y(sIn * F.cmp.BinCir)} stroke="#B45309" strokeWidth="1.1" strokeDasharray="5 3" />}
+      {F.cmp.BoutCir > 0 && <line x1={X(m.rPkt * 1000)} x2={X(m.rOD * 1000)} y1={Y(sOut * F.cmp.BoutCir)} y2={Y(sOut * F.cmp.BoutCir)} stroke="#B45309" strokeWidth="1.1" strokeDasharray="5 3" />}
+      <path d={path} fill="none" stroke="#2563EB" strokeWidth="1.4" />
+      <line x1={mL} y1={mT} x2={mL} y2={mT + PH} stroke={AXIS} />
+      <text x={mL - 5} y={mT + 6} textAnchor="end" className="tick">{bMax.toFixed(2)}</text>
+      <text x={mL - 5} y={mT + PH} textAnchor="end" className="tick">{(-bMax).toFixed(2)}</text>
+      <text x={mL + PW / 2} y={H - 4} textAnchor="middle" className="axis">radius (boss face and rim face shaded)</text>
+      <text x={13} y={mT + PH / 2} textAnchor="middle" transform={`rotate(-90 13 ${mT + PH / 2})`} className="axis">B axial (T)</text>
+      <text x={mL + 4} y={H - 18} className="dim" style={{ fill: "#2563EB" }}>solved, gap mid-plane</text>
+      <text x={mL + 140} y={H - 18} className="dim" style={{ fill: "#B45309" }}>dashed = circuit Bin / Bout (uniform)</text>
+    </svg>
+  );
+}
+
 /* ---- efficiency map: contoured, from the ENGINE's efficiencyMap() — the same loss
    chain the results column reports. Pre-v60 this view carried its own duplicate
    loss model (with a (n/n0)^1.5 iron-loss guess); it no longer computes physics. ---- */
